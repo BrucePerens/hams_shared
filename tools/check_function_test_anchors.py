@@ -63,7 +63,7 @@ EXCLUDE_DIRS = {
     # source (its own README says so directly: "This directory contains
     # the upstream `cloudflared` client source"), not code this project
     # authored -- same category as node_modules/hams_community above.
-    # Found live: check_function_test_anchors.py daemons flagged all 95
+    # Without this entry, check_function_test_anchors.py daemons flagged all 95
     # of daemons/'s own gaps inside this one vendored subtree, none of
     # them real first-party code needing Stage 1 coverage.
     "cloudflared",
@@ -82,8 +82,8 @@ def _is_base_anchor_declaration(line, match, prev_line=""):
     `prev_line` (optional, defaults to "" -- every existing caller that doesn't pass it keeps its
     prior behavior exactly) is the source line immediately before `line`, needed for one more
     reference shape: a multi-line comment that wraps the referencing word onto the PRECEDING line,
-    e.g. `# ...(see` / `# [@ANCHOR: name]) -- go through...`. Real bug found live, 2026-09-13: this
-    function used to look ONLY at same-line text before the match, so when that same-line prefix is
+    e.g. `# ...(see` / `# [@ANCHOR: name]) -- go through...`. A real case: a version of this
+    function looked ONLY at same-line text before the match, so when that same-line prefix is
     empty (the anchor is the first real content on its own comment line), the actual referencing
     word sitting on the line above was invisible -- `ham_shack/tests/test_station_timeshare_
     security.py`'s own `# A friendship can no longer be born already-accepted (see` / `#
@@ -101,22 +101,21 @@ def _is_base_anchor_declaration(line, match, prev_line=""):
     if verify_anchors.py's own classification rules change, this must change with them. The single
     source of truth for THIS project's own callers (this module; check_claims_freshness.py,
     check_js_function_test_anchors.py, check_rust_function_test_anchors.py, and
-    check_anchor_coverage.py, all of which import it from here) -- a real bug found live: a bare
-    `ANCHOR_PATTERN.search(span)`/`.finditer(line)` scan (in this file's own `scan_file` and, until
-    the same session's follow-on fix, its JS/Rust/Stage-3 siblings) counted a function's
+    check_anchor_coverage.py, all of which import it from here) -- a bare
+    `ANCHOR_PATTERN.search(span)`/`.finditer(line)` scan (as in this file's `scan_file` and its
+    JS/Rust/Stage-3 siblings) would count a function's
     "# Verified by [@ANCHOR: ...]" citation comment as if it were a real base anchor declaration,
     silently exempting the function from the ADR 0090 gap check it should have failed. A second,
-    narrower gap in the same family, found and closed the same session: the anchor-name-prefix
-    check below was originally missing from this reimplementation (verify_anchors.py's own
+    narrower gap in the same family: the anchor-name-prefix
+    check below would be missing from this reimplementation (verify_anchors.py's own
     `story_`/`journey_`/`doc_` documentation-only exclusion was never ported over), so a function
     whose only anchor comment was e.g. `# [@ANCHOR: doc_something]` -- never cited by a real test,
     the same way a genuine `verify_anchors.py`-recognized documentation anchor never is -- would
-    have passed this check and been wrongly counted as anchored. Confirmed zero real instances of
-    this shape exist in either hams_open or hams_com's function bodies as of the fix (the real
-    `doc_inject_*` anchors found live in `ham_satellite`/`ham_testing`'s `__manifest__.py` sit in a
-    plain module-level dict, outside any function span `_direct_functions` ever walks) -- fixed
-    anyway, to close the gap before a function like that is ever written, not because a real gap
-    was found and left."""
+    have passed this check and been wrongly counted as anchored. Zero real instances of
+    this shape exist in either hams_open or hams_com's function bodies (the real
+    `doc_inject_*` anchors in `ham_satellite`/`ham_testing`'s `__manifest__.py` sit in a
+    plain module-level dict, outside any function span `_direct_functions` ever walks) -- handled
+    anyway, to close the gap before a function like that is ever written."""
     first_prefix = line[: match.start()].strip()
     # A bare comment marker with nothing else before the anchor (e.g. just "#" or "//") carries no
     # same-line signal at all -- exactly the case a wrapped-from-the-previous-line reference needs

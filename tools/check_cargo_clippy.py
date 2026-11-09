@@ -6,7 +6,7 @@ cargo-clippy gate (see docs/proposals/CODE_REVIEW_PROCESS.md, "Formal verificati
 -------------------------------------------------------------------------------------------
 The Rust code-quality scan that is flake8/ESLint's direct parallel on the Rust side, but --
 like cargo-deny (check_cargo_deny.py) -- was never actually wired into run_linters.py at
-all, a real gap found 2026-08-26 running `cargo clippy` by hand for the first time in this
+all, a real gap: running `cargo clippy` by hand for the first time in this
 codebase's history: 3 real findings in hams_local_relay alone (a genuinely dead struct
 field, an unused-but-load-bearing match-arm variable that turned out to be an honestly
 documented MVP stub, and two more findings in each of the other 3 daemon crates). Runs
@@ -27,6 +27,8 @@ import sys
 
 import lint_cache
 import lint_exec
+import rust_impact
+from tree_files import tree_walk
 
 # "site-packages" matches any virtualenv by its structurally-guaranteed lib/pythonX.Y/
 # site-packages/ subdirectory regardless of the venv's own outer directory name (".venv"/"venv"
@@ -34,8 +36,7 @@ import lint_exec
 # for the full story).
 IGNORE_DIR_NAMES = {"__pycache__", "node_modules", ".venv", "venv", "target", ".git", "site-packages"}
 
-# Real gap found 2026-09-06 running this gate end to end via run_linters.py:
-# this standalone `#![no_std]` codegen-inspection crate (see its own README)
+# This standalone `#![no_std]` codegen-inspection crate (see its own README)
 # is deliberately never buildable for the host triple at all -- it only ever
 # builds cross-compiled for a real embedded target (`--target
 # xtensa-esp32-none-elf -Z build-std=core` or `--target thumbv7em-none-
@@ -47,7 +48,7 @@ IGNORE_DIR_NAMES = {"__pycache__", "node_modules", ".venv", "venv", "target", ".
 # relative path, not a blanket dirname, since nothing about "docs/
 # references" in general implies "not host-buildable" -- this one crate's
 # own README is what establishes that.
-# Real gap found 2026-09-07 running this gate after vendoring kchmck/imbe.rs as a read-only
+# kchmck/imbe.rs is vendored as a read-only
 # AMBE cross-check reference (see reference/ambe/imbe.rs's own commit message): it's a
 # third-party crate frozen at whatever Rust edition it was written for, and its
 # `#![feature(inclusive_range_syntax)]` (stable since 1.26.0, now a hard `E0554` error on
@@ -57,7 +58,7 @@ IGNORE_DIR_NAMES = {"__pycache__", "node_modules", ".venv", "venv", "target", ".
 # exact same reason -- so it's excluded from the build/lint gate rather than patched to track
 # a toolchain it was never written against.
 #
-# Found 2026-09-28 running this gate on a clean checkout: daemons/ham_digital_modes/tools/codec2_riscv32_bench
+# daemons/ham_digital_modes/tools/codec2_riscv32_bench
 # is a bare-metal harness (riscv32imc, run under QEMU) whose main.rs does
 # `include_bytes!("../speech.raw")`. That file is gitignored -- prep.sh cuts it out of a speech recording -- so
 # on any checkout without a local copy the crate cannot build at all, and the gate reported a "build error"
@@ -71,15 +72,15 @@ EXCLUDE_CRATE_RELPATHS = {
 
 
 # Cargo names a build script's run directory after the package and a hash that does not contain
-# the checkout's path, so every worktree that shares one CARGO_TARGET_DIR (this project's
-# agents do: one target directory, many `git worktree`s of the same repo) shares it too, and
+# the checkout's path, so every worktree that shares one CARGO_TARGET_DIR (agent sessions
+# do: one target directory, many `git worktree`s of the same repo) shares it too, and
 # cargo reuses the cached output while the `rerun-if-changed` paths look unchanged. A build
 # script that writes absolute paths into that output (bench_mcp's build.rs writes
 # `include_str!("<checkout>/manual/...")` into $OUT_DIR/manual_files.rs) then hands the next
 # worktree's build a file that names the FIRST worktree's files: when that worktree has been
 # removed the build fails ("couldn't read <old checkout>/manual/..."), and when it has not, the
-# build silently uses the other worktree's files. Found 2026-10-30, when check_cargo_clippy
-# failed twice in one night until the `debug/build/bench_mcp-*` directories were deleted by hand;
+# build silently uses the other worktree's files. This made check_cargo_clippy
+# fail repeatedly until the `debug/build/bench_mcp-*` directories were deleted by hand;
 # reproduced with a two-worktree crate that has the same build.rs.
 _MAX_SCANNED_BYTES = 2 * 1024 * 1024
 _PATH_CHARS = r"[^\s\"'<>;,=()\[\]{}`]"
@@ -91,7 +92,7 @@ def _cached_text(run_dir):
 
     A binary file is recognised by the NUL byte in its first 4 KiB, and only those 4 KiB are read to find out: a
     warm target directory holds gigabytes of object files under `build/*/out/`, and reading each of them whole,
-    for every crate, took 129 s of an otherwise 2 s warm run (measured 2026-11-03)."""
+    for every crate, took 129 s of an otherwise 2 s warm run (measured)."""
     names = [os.path.join(run_dir, "output")]
     for root, _dirs, files in os.walk(os.path.join(run_dir, "out")):
         names.extend(os.path.join(root, f) for f in files)
@@ -135,7 +136,7 @@ def _names_another_checkout(text, crate_relpath, current_roots):
 #
 # A match inside `output` (any `cargo:` line but rerun-if-changed) or inside a generated source is consumed by the
 # compiler or the linker of the crates that depend on it: that output is wrong in every other checkout, always
-# purged (the bench_mcp `include_str!` bug above). Two kinds of match are different (measured 2026-11-03: they were
+# purged (the bench_mcp `include_str!` bug above). Two kinds of match are different (measured: they were
 # 210-280 s per switch between checkouts, because they rebuilt `opusic-sys` and `hams_local_relay`, which compile C):
 #   * `cargo:rerun-if-changed=<absolute path>`: only says which files cargo should watch.
 #   * files under `out/build/`: the script's private build tree (CMake's cache, ninja files), whose only reader is
@@ -287,12 +288,12 @@ def _resolve_repo_root(given_path):
 
 
 def _resolve_repo_roots(given_path):
-    """The fix above only ever redirects to ONE repo (hams_open) -- but all four daemon crates
+    """The redirect above only ever lands on ONE repo (hams_open) -- but all four daemon crates
     this docstring's own findings came from (hams_local_relay, hams_relay_bridge,
     hams_data_relay, hams_simulated_band) live under hams_com/daemons/, not hams_open. Unlike
     check_cargo_deny.py this one isn't a vacuous pass (hams_open's own ham_digital_modes crate
-    is real and does get checked), but it was still silently never checking the four crates this
-    gate's own docstring cites findings from. Same sibling-repo shape as the other fixed
+    is real and does get checked), but without the sibling scan it would silently never check the four crates this
+    gate's own docstring cites findings from. Same sibling-repo shape as the other
     checkers."""
     repo_root = _resolve_repo_root(given_path)
     roots = [repo_root]
@@ -318,17 +319,14 @@ def find_cargo_crates(repo_root):
     their parent workspace's own `cargo clippy` run, so listing them separately would just
     duplicate work."""
     found = []
-    for root, dirs, filenames in os.walk(repo_root):
+    for root, _dirs, filenames in tree_walk(repo_root, "Cargo.toml", IGNORE_DIR_NAMES, skip_hidden=True, untracked=True):
         # Dot-directories (".claude", ".git", a stray ".venv" not already named above, etc.) are
-        # never real crate locations -- critically including ".claude/worktrees/<session>/", this
-        # project's own standing convention for running concurrent bug-hunt dispatches in
-        # isolated git worktrees INSIDE the repo root. Without this, a concurrently running
-        # session's own worktree gets walked as if it were part of the real repo: confirmed live
-        # while reviewing this exact file, finding the same daemon crates listed three times over
-        # (the real repo plus two other real, concurrently active sessions' worktrees) -- wasted
-        # work at best, a spurious finding against another session's unrelated in-progress,
-        # uncommitted code at worst.
-        dirs[:] = [d for d in dirs if d not in IGNORE_DIR_NAMES and not d.startswith(".")]
+        # never real crate locations -- critically including ".claude/worktrees/<session>/", where
+        # agent sessions run in isolated git worktrees INSIDE the repo root. Without this, a
+        # concurrently running session's own worktree gets walked as if it were part of the real
+        # repo: the same daemon crates were listed three times over (the real repo plus two other
+        # concurrently active sessions' worktrees) -- wasted work at best, a spurious finding
+        # against another session's unrelated in-progress, uncommitted code at worst.
         if "Cargo.toml" not in filenames:
             continue
         if os.path.relpath(root, repo_root) in EXCLUDE_CRATE_RELPATHS:
@@ -339,16 +337,30 @@ def find_cargo_crates(repo_root):
     return sorted(found)
 
 
+def narrow_to_changed(crate_dirs, changed, label):
+    """`crate_dirs` ((repo_root, crate_dir) pairs) without the crates `rust_impact.select_crates` skips for the changed paths; prints each skipped crate and how many were kept."""
+    if changed is None:
+        return crate_dirs
+    selected, skipped = rust_impact.select_crates([crate for _root, crate in crate_dirs], changed)
+    for crate, why in skipped:
+        print(f"{label}: skipped {os.path.relpath(crate, os.path.dirname(os.path.dirname(crate)))}: {why}")
+    print(f"{label}: {len(selected)} of {len(crate_dirs)} crates checked ({len(skipped)} skipped)")
+    keep = set(selected)
+    return [(root, crate) for root, crate in crate_dirs if crate in keep]
+
+
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: check_cargo_clippy.py <repo_root>")
+    positional, changed = rust_impact.split_argv(sys.argv[1:])
+    if not positional:
+        print("Usage: check_cargo_clippy.py <repo_root> [--changed-files PATH...]")
         sys.exit(1)
 
     crate_dirs = [
         (repo_root, crate_dir)
-        for repo_root in _resolve_repo_roots(sys.argv[1])
+        for repo_root in _resolve_repo_roots(positional[0])
         for crate_dir in find_cargo_crates(repo_root)
     ]
+    crate_dirs = narrow_to_changed(crate_dirs, changed, "clippy")
     if not crate_dirs:
         sys.exit(0)
 
@@ -365,12 +377,21 @@ def main():
     with lint_cache.cargo_session(log=print) as session_target:
         if session_target:
             os.environ["CARGO_TARGET_DIR"] = session_target
-        any_failed = _clippy_all(crate_dirs)
+        # Cargo hashes absolute paths into the fingerprints and build-script output of the workspace crates, so a different worktree
+        # every run recompiled them in a warm target. The crates are built in a copy of each checkout at a fixed path
+        # (lint_cache.work_checkout, under the session's lock); its text is the checkout's, byte for byte.
+        work_roots = {}
+        for repo_root in dict.fromkeys(root for root, _crate in crate_dirs):
+            work = lint_cache.work_checkout(repo_root, lint_exec.repo_name(repo_root) or os.path.basename(repo_root), session_target, log=print)
+            if work:
+                work_roots[repo_root] = work
+        crate_dirs, display = _in_work_checkouts(crate_dirs, work_roots)
+        any_failed = _clippy_all(crate_dirs, display)
     sys.exit(1 if any_failed else 0)
 
 
 # Crates whose own test code is also linted (`--all-targets`), and the features that put all of their code in
-# the build. hams_local_relay was fixed clean 2026-11-07 (to-do 9f24e10d); before that the gate never looked at
+# the build. hams_local_relay is clean under `--all-targets`; before it was listed here the gate never looked at
 # its `#[cfg(test)]` code or at the code behind `radioctl` / `shared_receiver`. Add a crate here once
 # `cargo clippy --all-targets` is clean for it.
 ALL_TARGETS_CRATES = {
@@ -398,7 +419,24 @@ def _run_clippy(crate_dir):
     )
 
 
-def _clippy_all(crate_dirs):
+def _in_work_checkouts(crate_dirs, work_roots):
+    """(the (repo root, crate directory) pairs with every repository that has a work checkout moved into it, a function that maps a text
+    naming the work checkouts back to the real ones). Pure."""
+    moved = [
+        (work_roots.get(root, root), os.path.join(work_roots[root], os.path.relpath(crate, root)) if root in work_roots else crate)
+        for root, crate in crate_dirs
+    ]
+    back = {work: root for root, work in work_roots.items()}
+
+    def display(text):
+        for work, root in back.items():
+            text = text.replace(work, root)
+        return text
+
+    return moved, display
+
+
+def _clippy_all(crate_dirs, display=lambda text: text):
     any_failed = False
     scanned = {}
     for repo_root, crate_dir in crate_dirs:
@@ -406,13 +444,13 @@ def _clippy_all(crate_dirs):
         kept = []
         for target_dir in target_dirs(crate_dir):
             for removed in purge_stale_build_script_output(target_dir, repo_root, crate_dir, scanned, kept):
-                print(f"note: removed build-script output cached from another checkout: {removed}")
+                print(f"note: removed build-script output cached from another checkout: {display(removed)}")
         res = _run_clippy(crate_dir)
         if res.returncode != 0 and kept:
             # A script's private build tree (CMake's cache) kept because it was built from identical sources can still
             # make a rerun of that script fail; the old behaviour (purge it, build again) is the fallback.
             for run_dir in kept:
-                print(f"note: build failed with build-script output kept from another checkout; removing it and building again: {run_dir}")
+                print(f"note: build failed with build-script output kept from another checkout; removing it and building again: {display(run_dir)}")
                 remove_run_dir(run_dir)
                 scanned.pop(run_dir, None)
             res = _run_clippy(crate_dir)
@@ -420,7 +458,7 @@ def _clippy_all(crate_dirs):
         # any "warning:" line in stderr as a real finding, matching how -W clippy::all is meant
         # to surface style/correctness issues without hard-denying the whole build on every one.
         #
-        # Real gap found 2026-09-06: a naive "warning:" substring match also catches Cargo's own
+        # A naive "warning:" substring match also catches Cargo's own
         # relay of a build script's `cargo:warning=...` output (printed as "warning: <pkg>@<ver>:
         # <message>", e.g. hams_local_relay's build.rs announcing how many Hamlib rig/rotator
         # models it baked in) -- a real, intentional, informational message, not a clippy
@@ -441,15 +479,15 @@ def _clippy_all(crate_dirs):
                 print("❌ cargo-clippy findings:")
             any_failed = True
             print(f"-- {rel_path} --")
-            print(res.stderr, end="")
+            print(display(res.stderr), end="")
         if res.returncode != 0:
             if not any_failed:
                 print("❌ cargo-clippy findings:")
             any_failed = True
             print(f"-- {rel_path} (build error) --")
             if res.stdout:
-                print(res.stdout, end="")
-            print(res.stderr, end="")
+                print(display(res.stdout), end="")
+            print(display(res.stderr), end="")
     return any_failed
 
 

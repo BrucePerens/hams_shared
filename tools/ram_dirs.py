@@ -14,7 +14,11 @@ Rules every caller gets from this module:
   * A machine with less than `MIN_RAM_GB` of memory is not a RAM-directory machine: it keeps its SSD paths without a
     warning (a laptop or a build VM is not expected to hold build output in RAM). `HAMS_RAM_DIRS=0` turns the feature off
     everywhere, `HAMS_RAM_DIRS=1` turns it on regardless of the memory size.
-  * Every per-job directory carries an owner marker (`.hams-ram-owner`: pid and process start time), so `sweep` can tell
+  * Garbage collection (`gc`, run by every `run` and `status`, or by hand, or by the user timer in tools/ram_dirs_units/): a
+    per-job directory whose owner is gone, in which nothing was written, changed or read for 3 hours (6 for a `--keep` job),
+    and which no live process refers to (CARGO_TARGET_DIR/TMPDIR, working directory, open files) is removed and logged in
+    /dev/shm/hams-ram-gc.log with name, size, idle time, owner and reason. The lint cache is exempt from age and keeps its budget.
+  * Every per-job directory carries an owner marker (`.hams-ram-owner`: pid, process start time and name, job, keep), so `sweep` can tell
     a crashed job's directory from a live one and remove it. A job that ends normally, or by a signal, removes its own.
   * `run_job` stops a job whose directory outgrows `job_max_gb` (default 30) or that drives the free space of `/dev/shm`
     below `hard_free_gb` (default 5), so one runaway build cannot take all of the RAM.
@@ -30,8 +34,12 @@ CLI (all output on standard error except `path`, which prints the directory):
                                                        parent process); remove it with `release JOB`
   ram_dirs.py release JOB                              remove the job's directory
   ram_dirs.py sweep                                    remove the directories of dead jobs
+  ram_dirs.py gc [--dry-run]                           remove job directories that are idle (3 h; 6 h for `--keep` jobs),
+                                                       ownerless and referred to by no process; trim the lint cache to
+                                                       its budget; every removal goes to /dev/shm/hams-ram-gc.log
   ram_dirs.py usage                                    print the usage JSON and write /dev/shm/hams-ram-usage.json
-  ram_dirs.py status                                   free space and every directory with its owner and size
+  ram_dirs.py status                                   free space and every directory with its size and owner (pid,
+                                                       program, age, idle time); runs `gc` first
 
 Full documentation of every function: tools/README.md "Build and test scratch directories in RAM".
 """
@@ -40,6 +48,7 @@ import argparse
 import dataclasses
 import ctypes
 import fcntl
+import itertools
 import json
 import math
 import os
@@ -47,6 +56,7 @@ import re
 import resource
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -63,6 +73,11 @@ DEFAULT_MIN_FREE_GB = 20.0
 DEFAULT_JOB_MAX_GB = 30.0
 DEFAULT_HARD_FREE_GB = 5.0
 DEFAULT_LINT_BUDGET_GB = 24.0
+DEFAULT_IDLE_HOURS = 3.0
+DEFAULT_KEEP_HOURS = 6.0
+GC_LOG_NAME = "hams-ram-gc.log"
+GC_LOG_MAX_LINES = 2000
+WARN_FRACTION = 0.8
 USAGE_FILE = "hams-ram-usage.json"
 MIN_RAM_GB = 64.0
 UNMARKED_HOURS = 24.0
@@ -89,12 +104,14 @@ class RamPolicy:
     min_ram_gb: float = MIN_RAM_GB
     lint_budget_gb: float = DEFAULT_LINT_BUDGET_GB
     require_tmpfs: bool = True
+    idle_hours: float = DEFAULT_IDLE_HOURS
+    keep_hours: float = DEFAULT_KEEP_HOURS
 
 
 # [@ANCHOR: ram_dirs:policy]
 def policy(environ=None):
     """The `RamPolicy` the environment asks for: HAMS_RAM_DIRS (0/off/no, 1/on/yes, else auto), HAMS_RAM_ROOT (another tmpfs or
-    directory; naming one turns the tmpfs check off), HAMS_RAM_MIN_FREE_GB, HAMS_RAM_JOB_MAX_GB, HAMS_RAM_HARD_FREE_GB, HAMS_RAM_LINT_GB. A number that is missing, not finite or negative
+    directory; naming one turns the tmpfs check off), HAMS_RAM_MIN_FREE_GB, HAMS_RAM_JOB_MAX_GB, HAMS_RAM_HARD_FREE_GB, HAMS_RAM_LINT_GB, HAMS_RAM_IDLE_HOURS, HAMS_RAM_KEEP_HOURS. A number that is missing, not finite or negative
     keeps its default."""
     environ = os.environ if environ is None else environ
     word = (environ.get("HAMS_RAM_DIRS") or "auto").strip().lower()
@@ -115,6 +132,8 @@ def policy(environ=None):
         hard_free_gb=number("HAMS_RAM_HARD_FREE_GB", DEFAULT_HARD_FREE_GB),
         lint_budget_gb=number("HAMS_RAM_LINT_GB", DEFAULT_LINT_BUDGET_GB),
         require_tmpfs=not environ.get("HAMS_RAM_ROOT"),
+        idle_hours=number("HAMS_RAM_IDLE_HOURS", DEFAULT_IDLE_HOURS),
+        keep_hours=number("HAMS_RAM_KEEP_HOURS", DEFAULT_KEEP_HOURS),
     )
 
 
@@ -301,19 +320,44 @@ def _start_ticks(pid):
 
 
 # [@ANCHOR: ram_dirs:claim]
-def claim(path, pid=None, now=time.time):
+def claim(path, pid=None, now=time.time, keep=False, job=None):
     """Mark directory `path` (created if missing, mode 0700) as owned by process `pid` (default: this one) by writing
     `.hams-ram-owner` in it: JSON with `pid`, `start` (the process start time in clock ticks, so a reused pid is not
-    mistaken for the owner) and `created` (seconds since the epoch). Returns `path`. Raises OSError when the marker
-    cannot be written."""
+    mistaken for the owner), `created` (seconds since the epoch), `name` (the owner's program name), `job` (the job name, when
+    given) and `keep` (the job asked to be kept after it ends; `gc` then waits `keep_hours` instead of `idle_hours`). Returns
+    `path`. Raises OSError when the marker cannot be written."""
     pid = os.getpid() if pid is None else int(pid)
     os.makedirs(path, mode=0o700, exist_ok=True)
-    record = {"pid": pid, "start": _start_ticks(pid), "created": int(now())}
+    record = {"pid": pid, "start": _start_ticks(pid), "created": int(now()), "name": process_name(pid), "job": job, "keep": bool(keep)}
     temporary = os.path.join(path, OWNER_FILE + ".tmp")
     with open(temporary, "w", encoding="utf-8") as handle:
         json.dump(record, handle)
     os.replace(temporary, os.path.join(path, OWNER_FILE))
     return path
+
+
+# [@ANCHOR: ram_dirs:process_name]
+def process_name(pid, proc_root="/proc"):
+    """The program name of process `pid` (`/proc/<pid>/comm`), or None when it is gone."""
+    try:
+        with open(os.path.join(proc_root, str(pid), "comm"), encoding="utf-8", errors="replace") as handle:
+            return handle.read().strip() or None
+    except OSError:
+        return None
+
+
+# [@ANCHOR: ram_dirs:owner_record]
+def owner_record(path):
+    """The marker of directory `path` as a dict (`pid`, `start`, `created`, `name`, `job`, `keep`; fields an older marker lacks are
+    None or False), or None when there is no readable marker."""
+    try:
+        with open(os.path.join(path, OWNER_FILE), encoding="utf-8") as handle:
+            record = json.load(handle)
+        int(record["pid"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return {"pid": int(record["pid"]), "start": record.get("start"), "created": record.get("created"),
+            "name": record.get("name"), "job": record.get("job"), "keep": bool(record.get("keep"))}
 
 
 # [@ANCHOR: ram_dirs:owner_state]
@@ -350,6 +394,172 @@ def newest_mtime(path, depth=2):
     except OSError:
         pass
     return newest
+
+
+# [@ANCHOR: ram_dirs:newest_activity]
+def newest_activity(path, depth=3, per_directory=2000):
+    """Latest activity in `path` and its entries down to `depth` levels: the modification time of every entry, and the access
+    time of regular files other than the owner marker. Cheap: it looks at three levels down (`debug/deps/<file>`) and at most
+    `per_directory` entries of each directory. Reading a build's files counts as activity, so a directory that something still
+    reads is not idle. A directory's own access time and the marker's do not count: this program's listing of a directory and its
+    reading of the marker (`owner_state`) move those times under the default `relatime` mount option (an access time at or
+    before the modification time is refreshed by the next read), so counting them made every `gc` or `status` pass restart the
+    idle clock of the directory it was examining."""
+    newest = 0.0
+    try:
+        newest = os.lstat(path).st_mtime
+        if depth > 0:
+            with os.scandir(path) as entries:
+                for entry in itertools.islice(entries, per_directory):
+                    if entry.is_dir(follow_symlinks=False):
+                        newest = max(newest, newest_activity(entry.path, depth - 1, per_directory))
+                    else:
+                        est = entry.stat(follow_symlinks=False)
+                        newest = max(newest, est.st_mtime)
+                        if entry.name != OWNER_FILE and stat.S_ISREG(est.st_mode):
+                            newest = max(newest, est.st_atime)
+    except OSError:
+        pass
+    return newest
+
+
+# [@ANCHOR: ram_dirs:references]
+def references(path, proc_root="/proc"):
+    """The pids of live processes that refer to directory `path`: their `CARGO_TARGET_DIR` or `TMPDIR` is `path` or below it, their
+    working directory is below it, or one of their open files is. Processes whose entries cannot be read (another user's) are
+    not examined, and this process is never listed. Returns a sorted list."""
+    prefix = os.path.abspath(path).rstrip(os.sep)
+
+    def below(candidate):
+        candidate = os.path.abspath(candidate)
+        return candidate == prefix or candidate.startswith(prefix + os.sep)
+
+    found = []
+    try:
+        pids = [name for name in os.listdir(proc_root) if name.isdigit()]
+    except OSError:
+        return found
+    me = str(os.getpid())
+    for pid in pids:
+        if pid == me:
+            continue
+        base = os.path.join(proc_root, pid)
+        hit = False
+        try:
+            with open(os.path.join(base, "environ"), "rb") as handle:
+                for item in handle.read(262144).split(b"\0"):
+                    key, _, value = item.partition(b"=")
+                    if key in (b"CARGO_TARGET_DIR", b"TMPDIR") and value and below(value.decode("utf-8", "replace")):
+                        hit = True
+                        break
+        except OSError:
+            pass
+        if not hit:
+            try:
+                hit = below(os.readlink(os.path.join(base, "cwd")))
+            except OSError:
+                pass
+        if not hit:
+            try:
+                for fd in os.listdir(os.path.join(base, "fd")):
+                    try:
+                        if below(os.readlink(os.path.join(base, "fd", fd))):
+                            hit = True
+                            break
+                    except OSError:
+                        continue
+            except OSError:
+                pass
+        if hit:
+            found.append(int(pid))
+    return sorted(found)
+
+
+# [@ANCHOR: ram_dirs:gc_log_path]
+def gc_log_path(pol=None, environ=None):
+    """The file every automatic removal is logged to: `hams-ram-gc.log` in the RAM root (small; it goes with the next reboot)."""
+    pol = pol or policy(environ)
+    return os.path.join(pol.root, GC_LOG_NAME)
+
+
+# [@ANCHOR: ram_dirs:log_removal]
+def log_removal(pol, name, size_bytes, idle_seconds, reason, now=time.time, owner=None):
+    """Append one line to the removal log: time, name, size, idle time, owner (pid and program) and reason; keep the last
+    `GC_LOG_MAX_LINES` lines. Never raises."""
+    who = f"owner pid {owner['pid']} ({owner.get('name') or 'unknown'})" if owner else "no owner marker"
+    idle = f"idle {idle_seconds / 3600:.1f} h" if idle_seconds is not None else "idle ?"
+    line = f"{time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(now()))} removed {name} {size_bytes / GB:.2f} GB {idle} {who}: {reason}\n"
+    path = gc_log_path(pol)
+    try:
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(line)
+        with open(path, encoding="utf-8") as handle:
+            lines = handle.readlines()
+        if len(lines) > GC_LOG_MAX_LINES:
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.writelines(lines[-GC_LOG_MAX_LINES // 2:])
+    except OSError:
+        pass
+    return line
+
+
+# [@ANCHOR: ram_dirs:gc]
+def gc(pol=None, environ=None, say=None, now=time.time, remove=None, proc_root="/proc", dry_run=False):
+    """Garbage-collect the RAM root. Returns a list of `(name, bytes, reason)` removed (or, with `dry_run`, that would be).
+
+    A per-job directory (`hams-cargo-target-*`) goes when ALL of these hold: its owner (the pid in its marker, with the same
+    start time) is not running; nothing in it was modified or read for `pol.idle_hours` (default 3; `pol.keep_hours`,
+    default 6, when its job ran with `--keep`) by `newest_activity`; and no live process refers to it (`references`: its
+    `CARGO_TARGET_DIR` or `TMPDIR`, working directory or open files). A directory whose job ended without `--keep` is removed at once,
+    still only when nothing refers to it. The lint Cargo cache (`hams-lint-cargo`) is exempt from age; when it is over its budget
+    `prune_lint_cache` trims it, least recently used first. Every removal is logged by `log_removal` and said on standard error,
+    with the name, size, idle time, owner and reason. A directory that cannot be removed is reported, not raised. Never raises."""
+    pol = pol or policy(environ)
+    say = say or (lambda text: print(f"ram_dirs: {text}", file=sys.stderr, flush=True))
+    remove = remove or remove_tree
+    done = []
+    try:
+        names = sorted(os.listdir(pol.root))
+    except OSError:
+        return done
+    current = now()
+    for name in names:
+        full = os.path.join(pol.root, name)
+        if not (name.startswith(CARGO_PREFIX) and os.path.isdir(full) and not os.path.islink(full)):
+            continue
+        state = owner_state(full)
+        if state == "alive":
+            continue
+        owner = owner_record(full)
+        keep = bool(owner and owner["keep"])
+        idle = current - newest_activity(full)
+        limit = (pol.keep_hours if keep else pol.idle_hours) * 3600
+        if state == "dead" and not keep:
+            reason = "its job ended"
+        elif idle >= limit:
+            reason = f"idle for {idle / 3600:.1f} h (limit {limit / 3600:g} h" + (", a kept job)" if keep else ")")
+        else:
+            continue
+        users = references(full, proc_root)
+        if users:
+            say(f"not removing {full}: process {', '.join(str(u) for u in users[:5])} still refers to it")
+            continue
+        size = tree_bytes(full)
+        if dry_run:
+            done.append((name, size, reason))
+            continue
+        if remove(full):
+            done.append((name, size, reason))
+            say(f"removed {full} ({size / GB:.2f} GB, {reason}); logged in {gc_log_path(pol)}")
+            log_removal(pol, name, size, idle, reason, now, owner)
+        else:
+            say(f"could not remove {full}; remove it with: sudo rm -rf {full}")
+    lint = os.path.join(pol.root, LINT_CARGO_NAME)
+    if not dry_run and os.path.isdir(lint) and not os.path.islink(lint):
+        for removed_name, size in prune_lint_cache(lint, pol=pol, say=say, remove=remove):
+            log_removal(pol, f"{LINT_CARGO_NAME}/{removed_name}", size, None, "over the lint cache budget, least recently used", now)
+            done.append((f"{LINT_CARGO_NAME}/{removed_name}", size, "over the lint cache budget"))
+    return done
 
 
 # [@ANCHOR: ram_dirs:leak_mode]
@@ -429,15 +639,26 @@ def sweep(pol=None, environ=None, say=None, now=time.time, remove=remove_tree):
             state = owner_state(full)
             if state == "alive":
                 continue
+            owner = owner_record(full)
+            if owner and owner["keep"]:
+                continue  # a kept job's directory stays for `pol.keep_hours` after its last use; `gc` decides
             if state == "unmarked" and current - newest_mtime(full) < UNMARKED_HOURS * 3600:
                 continue
+            size = tree_bytes(full)
             if remove(full):
                 removed.append(name)
-                say(f"removed {full} ({'its job is gone' if state == 'dead' else 'unmarked and idle'})")
+                reason = "its job is gone" if state == "dead" else "unmarked and idle"
+                say(f"removed {full} ({reason})")
+                log_removal(pol, name, size, current - newest_mtime(full) if os.path.exists(full) else None, reason, now, owner)
             else:
                 say(f"could not remove {full}; remove it with: sudo rm -rf {full}")
         elif name == TEST_TMP_NAME and os.path.isdir(full) and not os.path.islink(full):
-            for child in sorted(os.listdir(full)):
+            try:
+                children = sorted(os.listdir(full))
+            except OSError as error:
+                say(f"cannot list {full} ({error}); leaving it alone")
+                continue
+            for child in children:
                 path = os.path.join(full, child)
                 if re.match(r"^slot-[0-9]+\Z", child) or os.path.islink(path):
                     continue
@@ -622,16 +843,17 @@ def run_job(job, argv, keep=False, force_ssd=False, pol=None, environ=None, inte
     """Run `argv` with `CARGO_TARGET_DIR` set to the job's own fresh directory, guard it, and remove the directory
     afterwards. Returns a `JobResult`.
 
-    Steps: sweep dead jobs; place the directory (`cargo_target_dir`; `force_ssd` skips RAM); refuse (returncode
-    `EX_TEMPFAIL`) when a live job owns the same directory; empty and claim it; start the command in its own session
+    Steps: sweep dead jobs and `gc` idle ones; place the directory (`cargo_target_dir`; `force_ssd` skips RAM); refuse (returncode
+    `EX_TEMPFAIL`) when a live job owns the same directory; empty and claim it (the marker records this process, the job name and `keep`); start the command in its own session
     so the guard can stop the whole process group; every `interval` seconds measure the directory (peak is kept)
-    and apply `guard_verdict` (SIGTERM to the group, SIGKILL after `grace`); on SIGINT, SIGTERM or SIGHUP forward the
+    warn once at 80 % of the job limit, and apply `guard_verdict` (SIGTERM to the group, SIGKILL after `grace`); on SIGINT, SIGTERM or SIGHUP forward the
     signal to the group; when the command ends remove the directory (unless `keep`) and print one summary line.
     Blocks until the command ends. The remove step is in a `finally`, so an exception here does not leave the directory."""
     environ = dict(os.environ if environ is None else environ)
     say = say or (lambda text: print(f"ram_dirs: {text}", file=sys.stderr, flush=True))
     pol = pol or policy(environ)
     sweep(pol, say=say)
+    gc(pol, say=say)
     if force_ssd:
         base = environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
         placed = Placement(os.path.join(base, CARGO_PREFIX + _check_job_name(job)), False, "--ssd")
@@ -643,7 +865,7 @@ def run_job(job, argv, keep=False, force_ssd=False, pol=None, environ=None, inte
             say(f"the directory {target} belongs to a running job; use another job name (two jobs must not share one)")
             return JobResult(EX_TEMPFAIL, target, placed.in_ram)
         remove_tree(target)
-    claim(target)
+    claim(target, keep=keep, job=job)
     if placed.in_ram:
         write_usage(pol)
     environ["CARGO_TARGET_DIR"] = target
@@ -655,7 +877,7 @@ def run_job(job, argv, keep=False, force_ssd=False, pol=None, environ=None, inte
     say(f"job {job}: target {target} ({'RAM' if placed.in_ram else 'disk'}: {placed.reason})")
     started = time.monotonic()
     before = resource.getrusage(resource.RUSAGE_CHILDREN).ru_oublock
-    state = {"stopped": None, "peak": 0}
+    state = {"stopped": None, "peak": 0, "warned": False}
     child = None
     previous = {}
     try:
@@ -677,6 +899,10 @@ def run_job(job, argv, keep=False, force_ssd=False, pol=None, environ=None, inte
             except subprocess.TimeoutExpired:
                 size = tree_bytes(target)
                 state["peak"] = max(state["peak"], size)
+                if placed.in_ram and not state["warned"] and size >= WARN_FRACTION * pol.job_max_gb * GB:
+                    state["warned"] = True
+                    say(f"WARNING job {job} (pid {os.getpid()}, {process_name(os.getpid()) or 'ram_dirs'}) is at {size / GB:.1f} GB of its "
+                        f"{pol.job_max_gb:g} GB limit; it is stopped at the limit. Directory {target}")
                 reason = None if state["stopped"] else guard_verdict(size, free_gb(pol.root), pol, placed.in_ram)
                 if reason:
                     state["stopped"] = reason
@@ -736,18 +962,39 @@ def _stop_group(child, grace):
             continue
 
 
+# [@ANCHOR: ram_dirs:describe_owner]
+def describe_owner(path, now=time.time, proc_root="/proc"):
+    """One phrase on who owns directory `path`: `owner pid 123 (cargo) alive since 2.0 h ago, idle 5 min, job t1, kept`; for a
+    directory with no marker `unmarked, idle 4.0 h` and the pids that refer to it."""
+    current = now()
+    idle = max(0.0, current - newest_activity(path))
+    idle_text = f"{idle / 60:.0f} min" if idle < 3600 else f"{idle / 3600:.1f} h"
+    record = owner_record(path)
+    if record is None:
+        users = references(path, proc_root)
+        return f"unmarked, idle {idle_text}" + (f", in use by pid {', '.join(str(u) for u in users[:5])}" if users else "")
+    state = owner_state(path)
+    name = process_name(record["pid"], proc_root) or record["name"] or "unknown"
+    age = f"{max(0.0, current - record['created']) / 3600:.1f} h ago" if record["created"] else "at an unknown time"
+    return (f"owner pid {record['pid']} ({name}) {state}, started {age}, idle {idle_text}"
+            + (f", job {record['job']}" if record["job"] else "") + (", kept" if record["keep"] else ""))
+
+
 # [@ANCHOR: ram_dirs:status_lines]
 def status_lines(pol=None, environ=None):
-    """Lines describing the RAM root: free space, and each of our directories with its owner state and size."""
+    """Lines describing the RAM root: free space, and each of our directories with its size and who owns it (`describe_owner`)."""
     pol = pol or policy(environ)
-    lines = [f"{pol.root}: {free_gb(pol.root) or 0:.1f} GB free, minimum {pol.min_free_gb:g}, per-job limit {pol.job_max_gb:g}, hard floor {pol.hard_free_gb:g} (mode {pol.mode})"]
+    lines = [f"{pol.root}: {free_gb(pol.root) or 0:.1f} GB free, minimum {pol.min_free_gb:g}, per-job limit {pol.job_max_gb:g}, hard floor {pol.hard_free_gb:g} (mode {pol.mode}); "
+             f"idle limit {pol.idle_hours:g} h, kept jobs {pol.keep_hours:g} h"]
     try:
         names = sorted(os.listdir(pol.root))
     except OSError:
         return lines
     for name in names:
-        if name.startswith(CARGO_PREFIX) or name in (TEST_TMP_NAME, LINT_CARGO_NAME):
-            full = os.path.join(pol.root, name)
+        full = os.path.join(pol.root, name)
+        if name.startswith(CARGO_PREFIX):
+            lines.append(f"  {name}: {tree_bytes(full) / GB:.2f} GB, {describe_owner(full)}")
+        elif name in (TEST_TMP_NAME, LINT_CARGO_NAME):
             lines.append(f"  {name}: {tree_bytes(full) / GB:.2f} GB, {owner_state(full)}")
     return lines
 
@@ -767,6 +1014,8 @@ def main(argv=None):
     release = sub.add_parser("release")
     release.add_argument("job")
     sub.add_parser("sweep")
+    gc_parser = sub.add_parser("gc", help="remove idle, ownerless job directories and trim the lint cache; see gc()")
+    gc_parser.add_argument("--dry-run", action="store_true", help="say what would be removed, remove nothing")
     sub.add_parser("status")
     sub.add_parser("usage")
     args = parser.parse_args(argv)
@@ -783,7 +1032,7 @@ def main(argv=None):
                 return EX_TEMPFAIL
             sweep()
             remove_tree(placed.path)
-            claim(placed.path, args.owner_pid if args.owner_pid else os.getppid())
+            claim(placed.path, args.owner_pid if args.owner_pid else os.getppid(), job=args.job)
             print(placed.path)
             return 0
         if args.command == "release":
@@ -794,9 +1043,16 @@ def main(argv=None):
         if args.command == "sweep":
             sweep()
             return 0
+        if args.command == "gc":
+            sweep()
+            for name, size, reason in gc(dry_run=args.dry_run):
+                if args.dry_run:
+                    print(f"ram_dirs: would remove {name} ({size / GB:.2f} GB, {reason})", file=sys.stderr)
+            return 0
         if args.command == "usage":
             print(json.dumps(usage(), indent=1))
             return 0 if write_usage() else 1
+        gc()
         print("\n".join(status_lines()))
         return 0
     except ValueError as error:

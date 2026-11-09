@@ -22,6 +22,8 @@ import subprocess
 import sys
 import xml.parsers.expat
 
+from tree_files import tree_walk
+
 # Odoo's command-line loading flags. Odoo 19 sets these in `odoo/tools/config.py` and never
 # clears them: nothing in `odoo/modules/loading.py`, `odoo/orm/registry.py`,
 # `odoo/service/server.py` or `odoo/cli/server.py` resets them once `load_modules()` returns
@@ -5794,54 +5796,64 @@ def main():
         parts = os.path.normpath(path_str).split(os.sep)
         return any(os.sep.join(parts[:i]) in git_ignored for i in range(1, len(parts) + 1))
 
-    for root, dirs, files in os.walk(target_dir):
-        if "radae" in dirs:
-            dirs.remove("radae")
-        dirs[:] = [d for d in dirs if "env" not in d]
+    # The directories never entered (the hidden ones too, and any whose name holds "env"), the way the old walk pruned them.
+    always_pruned_dirs = [
+        "__pycache__",
+        "node_modules",
+        "hams_com",
+        # Genuinely vendored upstream Cloudflare client source
+        # (daemons/cloudflared/README.md says so directly) --
+        # found live: scanning `daemons` directly as this
+        # function's own target_dir doesn't trigger the
+        # sibling "daemons" exclusion above (that only prunes
+        # it as a *subdirectory* encountered during the walk,
+        # not when it's the root itself), so cloudflared's own
+        # component-tests/ tripped 36 errors against this
+        # project's conventions it was never written to follow.
+        "cloudflared",
+        # Cargo build output (rustdoc HTML/JS, compiled artifacts) --
+        # generated, gitignored, not source; scanning it produces
+        # bogus findings (e.g. rustdoc's own bundled JS tripping the
+        # DOM-XSS rule) that have nothing to do with this codebase.
+        "target",
+        # ODOO_AWARE_TYPE_CHECKING.md's own generated Odoo core type
+        # stubs (odoo_type_stubs/odoo/...), used only to give
+        # odoo_mypy_plugin.py's MRO-merging something to attach to --
+        # every stub method body is a bare `...`, its own file header
+        # says "AUTO-GENERATED -- do not hand-edit". Found live: with
+        # tools/ unpruned this one 725-file generated tree alone
+        # produced thousands of bogus "Elision (...) is strictly
+        # forbidden" findings, drowning any real finding elsewhere.
+        "odoo_type_stubs",
+    ]
+    non_odoo_source_dirs = (
+        []
+        if args.scan_daemons_and_tools
+        else ["tools", "daemons", "hams_local_relay", "hams_community"]
+    )
+    skip_dir_names = set(always_pruned_dirs) | set(non_odoo_source_dirs) | {"radae"}
+    ignored_dir_cache = {}
+
+    def dir_is_scanned(rel):
+        """False for a file under a directory named "env", or one the ignore file or git ignores (each directory on the way is asked)."""
+        parts = rel.split("/")[:-1]
+        if any("env" in part for part in parts):
+            return False
+        for depth in range(1, len(parts) + 1):
+            prefix = os.sep.join(parts[:depth])
+            if prefix not in ignored_dir_cache:
+                ignored_dir_cache[prefix] = is_ignored(prefix)
+            if ignored_dir_cache[prefix]:
+                return False
+        return True
+
+    # tree_walk: the files git tracks plus new ones not yet added, never another checkout nested under this one (another
+    # agent's worktree), which a raw os.walk read as part of this tree.
+    for root, dirs, files in tree_walk(
+        target_dir, (".py", ".xml", ".js", ".csv", ".html"), skip_dir_names, skip_hidden=True, accept=dir_is_scanned, untracked=True
+    ):
         if "venv" in root or "site-packages" in root:
             continue
-        always_pruned_dirs = [
-            "__pycache__",
-            "node_modules",
-            "hams_com",
-            # Genuinely vendored upstream Cloudflare client source
-            # (daemons/cloudflared/README.md says so directly) --
-            # found live: scanning `daemons` directly as this
-            # function's own target_dir doesn't trigger the
-            # sibling "daemons" exclusion above (that only prunes
-            # it as a *subdirectory* encountered during the walk,
-            # not when it's the root itself), so cloudflared's own
-            # component-tests/ tripped 36 errors against this
-            # project's conventions it was never written to follow.
-            "cloudflared",
-            # Cargo build output (rustdoc HTML/JS, compiled artifacts) --
-            # generated, gitignored, not source; scanning it produces
-            # bogus findings (e.g. rustdoc's own bundled JS tripping the
-            # DOM-XSS rule) that have nothing to do with this codebase.
-            "target",
-            # ODOO_AWARE_TYPE_CHECKING.md's own generated Odoo core type
-            # stubs (odoo_type_stubs/odoo/...), used only to give
-            # odoo_mypy_plugin.py's MRO-merging something to attach to --
-            # every stub method body is a bare `...`, its own file header
-            # says "AUTO-GENERATED -- do not hand-edit". Found live: with
-            # tools/ unpruned this one 725-file generated tree alone
-            # produced thousands of bogus "Elision (...) is strictly
-            # forbidden" findings, drowning any real finding elsewhere.
-            "odoo_type_stubs",
-        ]
-        non_odoo_source_dirs = (
-            []
-            if args.scan_daemons_and_tools
-            else ["tools", "daemons", "hams_local_relay", "hams_community"]
-        )
-        dirs[:] = [
-            d
-            for d in dirs
-            if not d.startswith(".")
-            and d not in always_pruned_dirs
-            and d not in non_odoo_source_dirs
-            and not is_ignored(os.path.relpath(os.path.join(root, d), target_dir))
-        ]
         for file in files:
             # test_check_burn_list.py for the same reason as the linter itself: its fixtures are
             # deliberate violations (made-up bypass tags, TODOs, `noqa`, requests.get calls,
@@ -6121,9 +6133,13 @@ def main():
     js_tour_targets = {}  # class name -> set of relative file paths where it appears
     xml_content_all = ""
     js_content_all = ""
-    for root, dirs, files in os.walk(target_dir):
-        if "radae" in dirs:
-            dirs.remove("radae")
+    def not_under_env_dir(rel):
+        return not any("env" in part for part in rel.split("/")[:-1])
+
+    # The same selection as the main scan above (tracked and new files, never a nested checkout), minus its ignore-file rules.
+    for root, dirs, files in tree_walk(
+        target_dir, (".xml", ".js"), ("radae",), skip_hidden=True, accept=not_under_env_dir, untracked=True
+    ):
         # Real bug found 2026-09-12: unlike the main scan loop above (which prunes any
         # dotfile-prefixed directory), this second, independent walk over the same target_dir
         # never excluded dotfile directories at all -- including this project's own standing
@@ -6134,7 +6150,6 @@ def main():
         # worktree would be scanned for o_tour_ classes, potentially producing a bogus
         # "orphaned"/"dangling" tour finding tied to content that isn't part of the real repo
         # state this invocation is actually scoped to check.
-        dirs[:] = [d for d in dirs if "env" not in d and not d.startswith(".")]
         if "venv" in root or "site-packages" in root:
             continue
         if "node_modules" in root:

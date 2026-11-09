@@ -83,34 +83,46 @@ def _matching_chromes(real_profile):
             print(f"[*] Skipping a process that vanished mid-scan: {e}", file=sys.stderr)
 
 
-# How long to wait for a killed Chrome to disappear. One second was enough on an idle box; with several lint slots and a load
-# of 50 to 100 a SIGKILLed Chrome with many children took longer, and the tests below failed in most full lint runs (2026-11-08).
-REAP_WAIT_SECONDS = 15.0
+# Upper bound (a safety net, not a delay) on how long to keep killing and waiting for the Chromes of one profile. The reaper
+# returns as soon as no process uses the profile; with several lint slots and a load of 50 to 100 a SIGKILLed Chrome with many
+# children took longer than the 1 s and 5 s this once was, and the tests below failed in most full lint runs (2026-11-08).
+REAP_WAIT_SECONDS = 60.0
+REAP_POLL_SECONDS = 0.05
 
 
 # [@ANCHOR: run_headless_chrome_reap]
-def reap_headless_chromes(user_data_dir):
-    """Kill the Chrome processes of this UID that use user_data_dir as profile.
+def reap_headless_chromes(user_data_dir, wait_seconds=None):
+    """Kill the Chrome processes of this UID that use user_data_dir as profile, until none is left.
 
-    Chromes using any other profile (other sessions' browsers) are left alone.
+    Chromes using any other profile (other sessions' browsers) are left alone. Each pass kills every matching process and polls
+    for them to leave the process table; a new pass then rescans, because a Chrome that was starting can have spawned a child
+    (zygote, renderer) after the previous scan. It returns when a scan finds nothing, with no fixed sleep, so it is as fast as the
+    machine allows and as patient as `wait_seconds` (default REAP_WAIT_SECONDS) when the machine is loaded. Returns the set of
+    pids it signalled. A process that outlives the deadline is reported on stderr and left to the caller.
     """
     real_profile = os.path.realpath(os.path.expanduser(user_data_dir))
-    for p in _matching_chromes(real_profile):
-        try:
-            print(f"[*] Killing headless chrome process {p.pid} (profile {real_profile})")
-            p.kill()
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess) as e:
-            print(f"[*] Skipping a process that vanished mid-scan: {e}", file=sys.stderr)
-
-    time.sleep(0.5)  # audit-ignore-sleep
-    for p in _matching_chromes(real_profile):
-        try:
-            p.kill()
-            p.wait(timeout=REAP_WAIT_SECONDS)
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, psutil.TimeoutExpired) as e:
-            # Same benign race as above -- the process can exit or fail to
-            # reap within the timeout between the scan and this inspection.
-            print(f"[*] Skipping a process that vanished or didn't reap in time: {e}", file=sys.stderr)
+    limit = REAP_WAIT_SECONDS if wait_seconds is None else wait_seconds
+    deadline = time.monotonic() + limit
+    killed = set()
+    while True:
+        batch = list(_matching_chromes(real_profile))
+        if not batch:
+            return killed
+        for p in batch:
+            try:
+                if p.pid not in killed:
+                    print(f"[*] Killing headless chrome process {p.pid} (profile {real_profile})")
+                p.kill()
+                killed.add(p.pid)
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess) as e:
+                print(f"[*] Skipping a process that vanished mid-scan: {e}", file=sys.stderr)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            print(f"[!] Chrome processes using {real_profile} are still present after {limit:.0f} s", file=sys.stderr)
+            return killed
+        # Poll the profile, not the pids: a killed Chrome whose parent has not reaped it is a zombie with an empty command line,
+        # which no longer uses the profile, while psutil's own wait would treat it as running until the parent collects it.
+        time.sleep(REAP_POLL_SECONDS)  # audit-ignore-sleep
 
 
 def main():

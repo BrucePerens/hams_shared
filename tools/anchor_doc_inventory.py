@@ -132,16 +132,18 @@ def importance(path):
 
 
 # [@ANCHOR: anchor_doc_inventory:find_data_structures]
-def find_data_structures(path):
+def find_data_structures(path, root=None):
     """Data-structure definitions in one source file that carry no anchor: a list of `(line, kind, name)`.
 
     A definition counts as anchored when an anchor tag is on the definition line or in the unbroken run of
     attribute, decorator and comment lines directly above it (a blank line or code ends the run). Rust code from a
     `#[cfg(test)]` line to the end of the file, and files in test paths, are skipped. Python classes nested in
-    functions are found as well. An unreadable file gives `[]`."""
+    functions are found as well. An unreadable file gives `[]`. With `root`, the test-path rule is applied to the path
+    below `root`, so a directory above the scanned tree that is named like a test directory does not hide the tree."""
     suffix = os.path.splitext(path)[1]
     pattern = STRUCT_PATTERNS.get(suffix)
-    if pattern is None or TEST_PATH.search(path.replace(os.sep, "/")):
+    judged = os.path.relpath(path, root) if root else path
+    if pattern is None or TEST_PATH.search(judged.replace(os.sep, "/")):
         return []
     try:
         with open(path, encoding="utf-8") as handle:
@@ -175,7 +177,7 @@ def scan_structures(root):
         for name in sorted(files):
             if name.endswith(SOURCE_SUFFIXES):
                 path = os.path.join(here, name)
-                missing = find_data_structures(path)
+                missing = find_data_structures(path, root)
                 if missing:
                     found[os.path.relpath(path, root)] = missing
     return found

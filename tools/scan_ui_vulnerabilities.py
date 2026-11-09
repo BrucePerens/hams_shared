@@ -5,24 +5,24 @@
 Scans the codebase for Python string literals containing raw XML/HTML tags
 or suspicious empty strings that may indicate tags stripped by LLM UIs.
 
-Real gap found 2026-09-12, same class already found and fixed in ~9 sibling checkers
+The same repo-root problem is handled in ~9 sibling checkers
 (check_pip_audit.py/check_cargo_deny.py/check_model_extension_collisions.py and others): with no
 CLI argument, main()'s `base_dir` is `os.path.dirname(__file__)/..`, which always resolves to the
 `hams_shared/` directory itself when this script is run from its real installed location --
 `hams_shared/` contains only `agents/`, `docs/`, `tools/`, `scripts/`, and config files, ZERO real
-Odoo application modules (confirmed directly: `ls hams_shared/`). This checker's entire purpose is
+Odoo application modules (see `ls hams_shared/`). This checker's entire purpose is
 catching raw XML/HTML leaking into Python string literals in USER-FACING code (portal controllers,
 QWeb-adjacent view-generation helpers) -- code that lives in ham_logbook/ham_satellite/
 user_websites/etc, never in hams_shared. Its real, no-argument invocation could therefore
-structurally never find what it exists to find; two prior bug-hunt review passes tested the
-os.walk exclusion logic correctly but never asked whether base_dir ever points at the actual risk
-surface. Fixed by adding an OPTIONAL positional CLI argument (mirroring check_pip_audit.py's own
+structurally never find what it exists to find: the os.walk exclusion logic is correct, but
+base_dir must also point at the actual risk surface. So there is an OPTIONAL positional CLI
+argument (mirroring check_pip_audit.py's own
 `_resolve_repo_root`/`_resolve_repo_roots` convention) so this script CAN be pointed at a real repo
 root and will auto-include its sibling repo the same way those checkers do. The no-argument
-default is left exactly as it was (still `os.path.dirname(__file__)/..`) so this fix doesn't
+default is left exactly as it was (still `os.path.dirname(__file__)/..`) so it doesn't
 silently change behavior for any existing caller relying on it -- wiring this into
 run_linters.py (so a real invocation always passes an explicit, correct root) is a deliberately
-separate follow-up, tracked in night_shift_todo.md, since it will surface real findings across the
+separate follow-up, since it will surface real findings across the
 whole real application tree for the first time ever and that's its own triage job.
 """
 import argparse

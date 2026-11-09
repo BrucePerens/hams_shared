@@ -628,8 +628,32 @@ class MlAssetsTests(unittest.TestCase):
                    manifest_exists=lambda path: exists)
         return tmp, run, report
 
-    def test_a_host_with_the_manifest_is_left_alone(self):
-        _tmp, run, report = self._run(exists=True)
+    def test_a_host_with_the_manifest_downloads_nothing_but_still_verifies_the_pins(self):
+        tmp, run, report = self._run(exists=True)
+        script = os.path.join(tmp, "ham_shack", "tools", "provision_ml_assets.py")
+        self.assertEqual(len(run.calls), 1)
+        self.assertEqual(run.calls[0][-3:], ["python3", script, "--verify-relay-pins"])
+        self.assertIn("runuser", run.calls[0])
+        self.assertEqual(report.changes, [])
+
+    def test_a_failed_verification_of_an_existing_manifest_stops_provisioning(self):
+        # The script writes the manifest before the verification: a run whose verification failed must fail again, never turn green.
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp)
+        os.makedirs(os.path.join(tmp, "ham_shack", "tools"))
+        open(os.path.join(tmp, "ham_shack", "tools", "provision_ml_assets.py"), "w").close()
+
+        def failing(command, **kwargs):
+            raise subprocess.CalledProcessError(1, command)
+        with patch.object(pte.os, "geteuid", return_value=0), self.assertRaises(subprocess.CalledProcessError):
+            _quiet(pte.provision_ml_assets, {"hams_com": tmp}, failing, pte.Report(False), False, manifest_exists=lambda path: True)
+
+    def test_a_host_with_the_manifest_and_no_script_has_nothing_to_verify_with(self):
+        _tmp, run, report = self._run(exists=True, script_exists=False)
+        self.assertEqual((run.calls, report.changes), ([], []))
+
+    def test_plan_with_the_manifest_changes_nothing(self):
+        _tmp, run, report = self._run(exists=True, plan=True)
         self.assertEqual((run.calls, report.changes), ([], []))
 
     def test_a_host_without_it_runs_productions_script_as_odoo_then_verifies_the_pins(self):

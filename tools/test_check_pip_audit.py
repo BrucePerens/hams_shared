@@ -89,11 +89,9 @@ class FindRequirementsFilesTests(unittest.TestCase):
         self.assertEqual(chk.find_requirements_files(self.tmp), [])
 
     def test_a_claude_worktree_directory_is_never_walked(self):
-        # Real bug found 2026-09-12, confirmed empirically against a real `git worktree add`:
-        # this project's own standing convention runs concurrent bug-hunt dispatches in
-        # isolated git worktrees under `.claude/worktrees/<session>/` INSIDE the repo root, and
-        # a worktree is a full checkout -- `requirements.txt` included, not an empty directory.
-        # A previous review pass wrongly assumed a worktree couldn't contain one; retracted.
+        # Agent sessions run in isolated git worktrees under `.claude/worktrees/<session>/`
+        # INSIDE the repo root, and a worktree is a full checkout (verified with a real
+        # `git worktree add`) -- `requirements.txt` included, not an empty directory.
         _write(
             os.path.join(self.tmp, ".claude", "worktrees", "sess1", "requirements.txt")
         )
@@ -184,10 +182,10 @@ class MainTests(unittest.TestCase):
 
 
 class TimeoutTests(unittest.TestCase):
-    """Regression tests for a real gap found 2026-09-12: neither subprocess.run() call in
-    main() passed a `timeout=`, despite this module's own docstring stating pip-audit "Requires
+    """Regression tests for the `timeout=` on both subprocess.run() calls in main():
+    this module's own docstring states pip-audit "Requires
     network access" -- a stalled network call (or a hung pip-audit subprocess for any other
-    reason) would block the whole run_linters.py run indefinitely. Confirmed each call site now
+    reason) would block the whole run_linters.py run indefinitely. Confirms each call site
     passes a real timeout, and that a subprocess.TimeoutExpired is caught cleanly (a readable
     failure message + exit 1), never an uncaught traceback."""
 
@@ -269,6 +267,7 @@ class CacheAndRetryTests(unittest.TestCase):
 
     Tests [@ANCHOR: check_pip_audit:cache_hours]
     Tests [@ANCHOR: check_pip_audit:cache_key]
+    Tests [@ANCHOR: check_pip_audit:included_requirement_files]
     Tests [@ANCHOR: check_pip_audit:cached_pass_age_hours]
     Tests [@ANCHOR: check_pip_audit:store_pass]
     """
@@ -301,6 +300,44 @@ class CacheAndRetryTests(unittest.TestCase):
         self.assertNotEqual(chk.cache_key(self.req, "pip-audit 2.7"), key)
         with self.assertRaises(OSError):
             chk.cache_key(os.path.join(self.tmp, "missing.txt"), "v")
+
+    def test_an_edit_to_an_included_file_changes_the_key(self):
+        constraints = os.path.join(self.tmp, "constraints.txt")
+        base = os.path.join(self.tmp, "base", "base.txt")
+        _write(constraints, "urllib3==1.0\n")
+        _write(base, "idna==2.0\n")
+        _write(self.req, "requests==2.0\n-r base/base.txt  # a comment\n--constraint=constraints.txt\n")
+        key = chk.cache_key(self.req, "v")
+        self.assertEqual(chk.cache_key(self.req, "v"), key)
+        _write(constraints, "urllib3==1.1\n")
+        changed = chk.cache_key(self.req, "v")
+        self.assertNotEqual(changed, key)
+        _write(base, "idna==2.1\n")
+        self.assertNotEqual(chk.cache_key(self.req, "v"), changed)
+
+    def test_included_files_are_found_through_every_spelling_nesting_and_cycles(self):
+        a, b, c, d = (os.path.join(self.tmp, name) for name in ("a.txt", "b.txt", "c.txt", "d.txt"))
+        _write(self.req, "-ra.txt\n--requirement b.txt\n-c  c.txt\n--requirements-not-an-include\nfoo==1\n")
+        _write(a, "-r d.txt\n")
+        _write(b, "-r requirements.txt\n")  # a cycle back to the including file
+        _write(c, "x==1\n")
+        _write(d, "-r a.txt\n")  # a cycle between two included files
+        found = chk.included_requirement_files(self.req)
+        self.assertEqual(found, [os.path.realpath(p) for p in (a, d, b, c)])
+
+    def test_an_unreadable_url_or_too_deeply_nested_include_leaves_no_key(self):
+        _write(self.req, "-r missing.txt\n")
+        with self.assertRaises(OSError):
+            chk.cache_key(self.req, "v")
+        _write(self.req, "-r https://example.test/r.txt\n")
+        with self.assertRaises(OSError):
+            chk.cache_key(self.req, "v")
+        for number in range(chk.MAX_INCLUDE_DEPTH + 3):
+            _write(os.path.join(self.tmp, "n%d.txt" % number), "-r n%d.txt\n" % (number + 1))
+        _write(os.path.join(self.tmp, "n%d.txt" % (chk.MAX_INCLUDE_DEPTH + 3)), "x==1\n")
+        _write(self.req, "-r n0.txt\n")
+        with self.assertRaises(OSError):
+            chk.cache_key(self.req, "v")
 
     def test_a_stored_pass_is_found_until_it_expires_and_never_from_the_future(self):
         self.assertTrue(chk.store_pass("k", now=1000.0, environ=self.env))
@@ -376,7 +413,7 @@ class ResolveRepoRootTests(unittest.TestCase):
 
 
 class ResolveRepoRootsTests(unittest.TestCase):
-    # Regression test for the second half of the same bug class, found 2026-08-27:
+    # Regression test for the second half of the same repo-root redirect problem:
     # _resolve_repo_root's redirect only ever lands on ONE repo (hams_shared's literal parent),
     # but real requirements.txt files exist in both hams_open's own root and hams_com/daemons/ --
     # confirmed directly, run_linters.py's own real invocation was catching hams_open's file but

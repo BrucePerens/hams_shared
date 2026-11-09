@@ -26,6 +26,7 @@ import json
 import os
 import re
 import sys
+from tree_files import tree_files
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RELAY_DIR = os.path.join("daemons", "hams_local_relay")
@@ -78,11 +79,15 @@ def code_mask(text):
                     j += 1
             blank(i, j)
             i = j
-        elif c == "r" and re.match(r'r#*"', text[i : i + 40]) and (i == 0 or not (text[i - 1].isalnum() or text[i - 1] == "_")):
-            hashes = len(re.match(r"r(#*)", text[i:]).group(1))
-            end = text.find('"' + "#" * hashes, i + 2 + hashes)
+        elif c in "rbc" and (i == 0 or not (text[i - 1].isalnum() or text[i - 1] == "_")) and re.match(r'(?:br|cr|r)#*"', text[i : i + 40]):
+            # A raw string, also the raw byte (br"...") and raw C (cr"...") forms: no escapes inside, so a backslash
+            # before the closing quote must not be read as an escape.
+            opening = re.match(r"(?:br|cr|r)(#*)", text[i:])
+            hashes = len(opening.group(1))
+            start = i + opening.end() + 1
+            end = text.find('"' + "#" * hashes, start)
             end = n if end < 0 else end + 1 + hashes
-            blank(i + 2 + hashes, end - 1 - hashes)
+            blank(start, end - 1 - hashes)
             i = end
         elif c == '"':
             j = i + 1
@@ -140,6 +145,13 @@ def test_spans(masked):
     return spans
 
 
+# [@ANCHOR: ext_programs:program_name]
+def program_name(literal):
+    """The program a `Command::new` literal names: the text after the last `/`, so `"/usr/sbin/ioreg"` is `ioreg` (a program started by absolute
+    path, which a PATH search cannot replace, is still the program the ADR must name). A bare name is returned unchanged. Pure."""
+    return literal.rsplit("/", 1)[-1]
+
+
 # [@ANCHOR: ext_programs:rust_launches]
 def rust_launches(text):
     """Returns `(literal_names, dynamic_count)` for the Rust source `text`: the set of program names started as
@@ -153,7 +165,7 @@ def rust_launches(text):
             continue
         lit = _LITERAL_LAUNCH.match(text, m.start())
         if lit:
-            names.add(lit.group(1))
+            names.add(program_name(lit.group(1)))
         else:
             dynamic += 1
     return names, dynamic
@@ -250,12 +262,10 @@ def _is_test_file(rel):
 # [@ANCHOR: ext_programs:relay_rust_files]
 def _relay_rust_files(relay):
     src = os.path.join(relay, "src")
-    for root, dirs, files in os.walk(src):
-        dirs[:] = [d for d in dirs if d not in ("vendor", "target")]
-        for f in sorted(files):
-            rel = os.path.relpath(os.path.join(root, f), relay)
-            if f.endswith(".rs") and not _is_test_file(rel):
-                yield os.path.join(relay, rel), rel
+    for path in tree_files(src, ".rs", ("vendor", "target"), untracked=True):
+        rel = os.path.relpath(path, relay)
+        if not _is_test_file(rel):
+            yield os.path.join(relay, rel), rel
 
 
 # [@ANCHOR: ext_programs:script_files]

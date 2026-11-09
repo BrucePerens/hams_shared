@@ -26,6 +26,7 @@ import lint_exec
 import subprocess
 import sys
 import time
+from tree_files import tree_files
 
 # "site-packages" matches any virtualenv by its structurally-guaranteed lib/pythonX.Y/
 # site-packages/ subdirectory regardless of the venv's own outer directory name (".venv"/"venv"
@@ -33,26 +34,21 @@ import time
 # for the full story).
 IGNORE_DIR_NAMES = {"__pycache__", "node_modules", ".venv", "venv", "target", ".git", ".claude", "site-packages"}
 
-# Real bug found 2026-09-12, confirmed empirically with a real `git worktree add`: this
-# project's own standing convention runs concurrent bug-hunt dispatches in isolated git
-# worktrees under `.claude/worktrees/<session>/` INSIDE the repo root -- and a git worktree
-# checks out a full copy of every tracked file at its own commit/branch, `requirements.txt`
-# included. Before `.claude` was added to IGNORE_DIR_NAMES above,
-# `find_requirements_files()` walked straight into a live worktree and found its own
-# `requirements.txt` as a second, real scan target -- confirmed directly against a real
-# worktree created from this exact repo (found 2 real requirements.txt files under it). A
-# previous review pass (see night_shift_todo.md) wrongly dismissed this checker as immune to
-# the ".claude worktree" bug class on the reasoning that "a worktree wouldn't contain a
-# requirements.txt to falsely match in the first place" -- that reasoning was never verified
-# against a real worktree and was wrong: a worktree is a full checkout, not an empty
-# directory. Running pip-audit a second time against another session's own in-progress,
-# uncommitted requirements.txt wastes real network calls and could report spurious findings
-# against dependency changes that were never actually merged.
+# `.claude` is in IGNORE_DIR_NAMES above because agent sessions run in isolated git worktrees
+# under `.claude/worktrees/<session>/` INSIDE the repo root, and a git worktree checks out a
+# full copy of every tracked file at its own commit/branch, `requirements.txt` included.
+# Without the exclusion, `find_requirements_files()` would walk straight into a live worktree
+# and find its own `requirements.txt` as a second, real scan target (verified against a real
+# worktree of this repo: 2 requirements.txt files under it). A worktree is a full checkout,
+# not an empty directory, so this checker is not immune just because a worktree might seem to
+# hold no requirements file. Running pip-audit a second time against another session's own
+# in-progress, uncommitted requirements.txt wastes real network calls and could report
+# spurious findings against dependency changes that were never actually merged.
 
-# Real gap found 2026-09-12: neither subprocess.run() call below passed a `timeout=`, despite
-# this module's own docstring stating pip-audit "Requires network access" (PyPI's JSON Advisory
-# Database) -- a stalled/hung network condition (or a hung pip-audit subprocess for any other
-# reason) would block this call, and everything downstream of it in a run_linters.py run,
+# Both subprocess.run() calls below pass a `timeout=`. This module's own docstring states
+# pip-audit "Requires network access" (PyPI's JSON Advisory Database), and a stalled/hung
+# network condition (or a hung pip-audit subprocess for any other reason) would otherwise
+# block the call, and everything downstream of it in a run_linters.py run,
 # indefinitely. check_dependency_releases.py (a sibling network-calling checker in this same
 # tree) already establishes a REQUEST_TIMEOUT_SECONDS convention for exactly this class of call;
 # mirrored here as two separate constants since the version-probe and the real per-file audit
@@ -106,15 +102,68 @@ def _cache_directory(environ):
     return os.path.join(base, "hams-lint", "pip-audit")
 
 
+MAX_INCLUDE_DEPTH = 8
+_INCLUDE_OPTIONS = ("--requirement", "--constraint", "-r", "-c")
+
+
+def _include_target(line):
+    """The file named by one `-r`/`--requirement`/`-c`/`--constraint` line of a requirements file (`-r x`, `-rx`, `--requirement=x`, `--requirement x`),
+    or None for any other line. A trailing ` #` comment is dropped."""
+    text = line.split(" #", 1)[0].strip()
+    for option in _INCLUDE_OPTIONS:
+        if not text.startswith(option):
+            continue
+        rest = text[len(option):]
+        if option.startswith("--"):
+            if not rest or rest[0] not in " \t=":
+                continue
+            rest = rest.lstrip(" \t=")
+        else:
+            rest = rest.strip()
+        return rest or None
+    return None
+
+
+# [@ANCHOR: check_pip_audit:included_requirement_files]
+def included_requirement_files(req_file, _seen=None, _depth=0, _root=None):
+    """Every file `req_file` pulls in through `-r`/`--requirement`/`-c`/`--constraint` lines, directly or through other included files, as real paths
+    in first-seen order (each once, a cycle ends where it closes). A relative path is taken from the including file's directory, as pip does.
+    Raises OSError when an included file cannot be read, names a URL, or the chain is deeper than `MAX_INCLUDE_DEPTH`: the caller must then not
+    trust a cached pass (an unreadable input cannot be part of the key)."""
+    seen = [] if _seen is None else _seen
+    root = os.path.realpath(req_file) if _root is None else _root
+    if _depth > MAX_INCLUDE_DEPTH:
+        raise OSError("requirements includes nested deeper than %d: %s" % (MAX_INCLUDE_DEPTH, req_file))
+    with open(req_file, encoding="utf-8", errors="replace") as handle:
+        lines = handle.read().splitlines()
+    for line in lines:
+        target = _include_target(line)
+        if target is None:
+            continue
+        if "://" in target:
+            raise OSError("requirements include a URL, which the cache key cannot cover: %s" % target)
+        path = os.path.realpath(os.path.join(os.path.dirname(os.path.realpath(req_file)), target))
+        if path in seen or path == root:
+            continue
+        seen.append(path)
+        included_requirement_files(path, seen, _depth + 1, root)
+    return seen
+
+
 # [@ANCHOR: check_pip_audit:cache_key]
 def cache_key(req_file, version_text):
-    """The cache key of one requirements file: the SHA-256 of its real path, its content and the pip-audit version text, as 64 hex
-    digits. Another path (another checkout), an edited file or another pip-audit version is another key. Raises OSError when the
-    file cannot be read."""
+    """The cache key of one requirements file: the SHA-256 of its real path, its content, the content of every file it includes (`-r`, `-c`, see
+    `included_requirement_files`) and the pip-audit version text, as 64 hex digits. Another path (another checkout), an edit to the file or to
+    anything it includes, or another pip-audit version is another key. Raises OSError when the file or an included file cannot be read."""
     with open(req_file, "rb") as handle:
         content = handle.read()
+    parts = [os.path.realpath(req_file).encode(), content]
+    for included in included_requirement_files(req_file):
+        with open(included, "rb") as handle:
+            parts += [included.encode(), handle.read()]
+    parts.append(str(version_text).strip().encode())
     digest = hashlib.sha256()
-    for part in (os.path.realpath(req_file).encode(), content, str(version_text).strip().encode()):
+    for part in parts:
         digest.update(len(part).to_bytes(8, "big") + part)
     return digest.hexdigest()
 
@@ -160,11 +209,11 @@ def store_pass(key, now=None, environ=None):
 
 def _resolve_repo_root(given_path):
     """run_linters.py's own `dir_path` resolves to the hams_shared directory itself, not a real
-    repo root (same bug found and fixed in check_model_extension_collisions.py and others) --
-    confirmed directly: this checker was silently finding 0 requirements.txt files via
-    run_linters.py's actual invocation, versus 2 at a real repo root -- this codebase's Python
-    supply-chain vulnerability gate (CODE_REVIEW_PROCESS.md) has never actually scanned anything
-    in CI. Detect the hams_shared case by name and redirect to its real parent repo."""
+    repo root (as in check_model_extension_collisions.py and other checkers) --
+    without the redirect this checker silently finds 0 requirements.txt files via
+    run_linters.py's actual invocation, versus 2 at a real repo root, so this codebase's Python
+    supply-chain vulnerability gate (CODE_REVIEW_PROCESS.md) would never scan anything in CI. Detect the hams_shared case by name and redirect to its real
+    parent repo."""
     given_path = os.path.abspath(given_path)
     if os.path.basename(given_path) == "hams_shared":
         return os.path.dirname(given_path)
@@ -172,11 +221,11 @@ def _resolve_repo_root(given_path):
 
 
 def _resolve_repo_roots(given_path):
-    """The fix above only ever redirects to ONE repo (hams_open) -- but real requirements.txt
+    """The redirect above only ever lands on ONE repo (hams_open) -- but real requirements.txt
     files exist in both: hams_open's own root, and two under hams_com/daemons/
-    (gdpr_csv_export, hams_simulated_bots). run_linters.py's own actual invocation was catching
-    hams_open's but silently missing both hams_com ones. Same sibling-repo shape as the other
-    fixed checkers."""
+    (gdpr_csv_export, hams_simulated_bots). Without the sibling scan, run_linters.py's own actual
+    invocation would catch hams_open's but silently miss both hams_com ones. Same sibling-repo
+    shape as the other checkers."""
     repo_root = _resolve_repo_root(given_path)
     roots = [repo_root]
     sibling = lint_exec.sibling_repo_root(repo_root, lint_exec.has_odoo_module)
@@ -186,13 +235,9 @@ def _resolve_repo_roots(given_path):
 
 
 def find_requirements_files(repo_root):
-    found = []
-    for root, dirs, filenames in os.walk(repo_root):
-        dirs[:] = [d for d in dirs if d not in IGNORE_DIR_NAMES]
-        for name in filenames:
-            if name.startswith("requirements") and name.endswith(".txt"):
-                found.append(os.path.join(root, name))
-    return sorted(found)
+    return tree_files(
+        repo_root, ".txt", IGNORE_DIR_NAMES, accept=lambda rel: rel.rsplit("/", 1)[-1].startswith("requirements"), untracked=True
+    )
 
 
 # [@ANCHOR: check_pip_audit:main]

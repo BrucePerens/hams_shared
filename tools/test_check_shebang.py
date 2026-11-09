@@ -109,10 +109,9 @@ class CheckShebangTests(unittest.TestCase):
         self.assertEqual(chk.check_shebang(self.tmp), [])
 
     def test_a_claude_worktree_directory_is_never_walked(self):
-        # Real bug found 2026-09-12: this project's own standing convention runs concurrent
-        # bug-hunt dispatches in isolated git worktrees under .claude/worktrees/<session>/
-        # inside the repo root -- a real git worktree checkout (confirmed with a real
-        # `git worktree add`), not an empty directory -- which this set never excluded.
+        # Agent sessions run in isolated git worktrees under .claude/worktrees/<session>/
+        # inside the repo root -- real git worktree checkouts (verified with a real
+        # `git worktree add`), not empty directories -- which this set must exclude.
         _write(
             os.path.join(self.tmp, ".claude", "worktrees", "sess1", "cli.py"), "x\n#!bad\n"
         )
@@ -125,10 +124,10 @@ class CheckShebangTests(unittest.TestCase):
         self.assertEqual(chk.check_shebang(self.tmp), [])
 
     def test_a_broken_symlink_is_skipped_without_crashing(self):
-        # Real bug found 2026-09-10: a broken symlink (target doesn't exist) with a checked
-        # extension makes open() raise FileNotFoundError, not caught before this fix (only
-        # UnicodeDecodeError was) -- crashing the entire scan. Real, reachable repo state, not
-        # contrived: see check_absolute_paths.py's identical fix for the concrete scenario
+        # A broken symlink (target doesn't exist) with a checked extension makes open() raise
+        # FileNotFoundError, which must be caught (not only UnicodeDecodeError) -- otherwise the
+        # entire scan crashes. Real, reachable repo state, not
+        # contrived: see check_absolute_paths.py's identical handling for the concrete scenario
         # (a checked-in symlink broken inside a freshly created worktree).
         os.symlink(
             os.path.join(self.tmp, "does_not_exist.py"),

@@ -34,7 +34,7 @@ in this exact file and was never actually scanned because of it.
 Deliberately excluded even though it doesn't touch Odoo models:
 `daemons/hams_local_relay/radae/` (vendored ML/DSP research code with
 extensive real mypy findings -- untangling third-party research code's
-typing is its own project, not Phase 1 scope), and, as of this session,
+typing is its own project, not Phase 1 scope), and
 `daemons/cloudflared/` (the entire directory is vendored, upstream
 `cloudflared` client source -- see its own README -- not code owned by
 this repo). Confirmed real findings there, not assumed: 6 dataclass
@@ -47,21 +47,19 @@ tests using it actually ran. None of this was patched here -- editing
 vendored upstream code creates a merge conflict on the next re-vendor,
 and CfdModes.CLASSIC specifically would mean guessing at Cloudflare's own
 classic-tunnel config semantics inside code this repo doesn't own.
-Flagged in night_shift_todo.md as an upstream defect instead.
+Recorded as an upstream defect instead.
 
-**This also means the claim below (dated 2026-08-20, before this
-exclusion existed) needs a caveat**: at the time this session checked it,
-the "hard, unconditional gate" was NOT actually green -- these vendored
+**This also means the claim below (written before this
+exclusion existed) needs a caveat**: before the exclusion, the
+"hard, unconditional gate" was NOT actually green -- these vendored
 cloudflared findings made `run_linters.py` step 23 exit 1 on unmodified
-code (confirmed directly, not assumed, by running this exact checker
-before making any change). Whether that's dependency drift since the
-2026-08-18 `pytest`/`pytest-asyncio` bump or the claim never having
-covered this vendored subtree isn't something this session could
-determine -- not guessed at. The exclusion above is what makes the gate
-green again, verified by rerunning after adding it.
+code (confirmed by running this exact checker). Whether that was dependency
+drift after the `pytest`/`pytest-asyncio` bump or the claim never having
+covered this vendored subtree was not determined. The exclusion above is
+what makes the gate green again, verified by rerunning.
 
 EXCLUDED_FILES started as 33 files with real, not-yet-reviewed mypy
-findings on this check's introduction. As of 2026-08-20 that backlog has
+findings on this check's introduction. That backlog has
 been fully worked through -- every file now passes cleanly, with real
 bugs fixed (e.g. a NoneType slice crash on a malformed NOAA payload, a
 websockets 15.x API mismatch that would TypeError the instant a test
@@ -90,6 +88,7 @@ import lint_exec
 import queue
 import subprocess
 import sys
+from tree_files import tree_files
 
 
 def _resolve_repo_root(given_path):
@@ -164,7 +163,7 @@ EXCLUDED_DIR_PREFIXES = [
     "daemons/hams_local_relay/vendor/opusic-sys",
 ]
 
-# As of 2026-08-20, every file this check can reach passes
+# Every file this check can reach passes
 # mypy --check-untyped-defs cleanly -- the backlog that used to live
 # here (33 files) has been fully worked through, fixing real bugs and
 # false positives along the way (see git history for the individual
@@ -210,12 +209,7 @@ def collect_candidates(repo_root):
         if os.path.isfile(abs_root):
             files = [abs_root]
         elif os.path.isdir(abs_root):
-            files = []
-            for root, dirs, filenames in os.walk(abs_root):
-                dirs[:] = [d for d in dirs if d not in IGNORE_DIR_NAMES]
-                for name in filenames:
-                    if name.endswith(".py"):
-                        files.append(os.path.join(root, name))
+            files = tree_files(abs_root, ".py", IGNORE_DIR_NAMES, untracked=True)
         else:
             continue
 
@@ -252,7 +246,7 @@ class cache_slots:
     mypy's cache is not safe for concurrent runs: with one shared directory and a cold or stale cache, parallel runs
     read each other's half-written files and crash with `AssertionError: Cannot find module for csv`. It never
     showed on the dev box, whose cache was already warm; a lint runner with a fresh mirror failed every time
-    (2026-11-03). A worker keeps its directory between runs, so each directory warms up once."""
+    (measured). A worker keeps its directory between runs, so each directory warms up once."""
 
     def __init__(self, workers):
         self._free = queue.Queue()

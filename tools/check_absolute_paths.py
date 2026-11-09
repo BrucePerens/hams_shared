@@ -53,6 +53,7 @@ ham_training/ is a real module and its other files must stay checked.
 
 import os
 import sys
+from tree_files import tree_walk
 
 
 # [@ANCHOR: tools:check_absolute_paths]
@@ -114,15 +115,12 @@ def check_absolute_paths(repo_dir):
         ".css",
     }
 
-    for root, dirs, files in os.walk(repo_dir):
-        # Modify dirs in-place to ignore specified directories
-        dirs[:] = [
-            d
-            for d in dirs
-            if d not in ignore_dirs
-            and os.path.relpath(os.path.join(root, d), repo_dir) not in ignore_rel_dirs
-        ]
+    def not_in_ignored_rel_dir(rel):
+        return not any(rel.startswith(d + "/") for d in ignore_rel_dirs)
 
+    for root, _dirs, files in tree_walk(
+        repo_dir, tuple(sorted(valid_exts)) + ("Makefile",), ignore_dirs, accept=not_in_ignored_rel_dir, untracked=True
+    ):
         for file in files:
             ext = os.path.splitext(file)[1]
             if ext not in valid_exts and file != "Makefile":

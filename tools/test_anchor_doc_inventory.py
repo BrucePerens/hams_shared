@@ -128,6 +128,14 @@ class DataStructureTests(unittest.TestCase):
             write(tmp, "ok/c.py", "# %s\nclass Fine:\n    pass\n" % tag("m:Fine"))
             self.assertEqual(inv.scan_structures(tmp), {os.path.join("src", "a.rs"): [(1, "struct", "Bare")]})
 
+    def test_a_test_named_directory_above_the_root_does_not_hide_the_tree(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            write(tmp, "tests/repo/src/a.rs", "struct Bare;\n")
+            write(tmp, "tests/repo/tests/b.rs", "struct InTests;\n")
+            self.assertEqual(
+                inv.scan_structures(os.path.join(tmp, "tests", "repo")), {os.path.join("src", "a.rs"): [(1, "struct", "Bare")]}
+            )
+
 
 class MainTests(unittest.TestCase):
     def run_main(self, *argv):

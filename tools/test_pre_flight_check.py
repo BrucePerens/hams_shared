@@ -230,9 +230,9 @@ class TierViolationTests(unittest.TestCase):
         self.assertNotIn("ARCHITECTURE VIOLATION", out)
 
     def test_no_tier_config_file_present_prints_an_explicit_skip_notice(self):
-        # Bug-hunt regression test (2026-09-10, bug class 5: silent-failure
-        # gate): before the fix, the case above ("skips tier checking
-        # entirely") produced NO signal at all that the check never ran --
+        # The case above ("skips tier checking
+        # entirely") must not be silent: it would otherwise give NO signal that the check never
+        # ran --
         # a human/log reader could not tell "tiers are not configured"
         # apart from "tiers are configured and nothing violated them".
         self._addon("dep_high")
@@ -243,16 +243,15 @@ class TierViolationTests(unittest.TestCase):
         self.assertIn("tier_config.json", out)
 
     def test_a_tiered_module_depending_on_a_core_odoo_module_is_never_a_tier_violation(self):
-        # Bug-hunt regression test (2026-09-10, latent false-positive):
-        # before the fix, get_tier("base") fell back to 99 (base is never
+        # get_tier("base") falls back to 99 (base is never
         # itself listed in tier_config.json, since it isn't one of this
         # project's own tiered modules) -- `99 > module_tier` is true for
-        # ANY real tiered module, so the single most common dependency in
+        # ANY real tiered module, so without a guard the single most common
+        # dependency in
         # the whole codebase would be flagged as an architecture violation
         # the moment tier_config.json is actually populated with real
-        # tiers. Confirmed this reproduces against the pre-fix code (the
-        # only change needed to make this test fail is removing the
-        # `if dep in CORE_MODULES: continue` guard from the tier-violation
+        # tiers. This test fails if the
+        # `if dep in CORE_MODULES: continue` guard is removed from the tier-violation
         # loop): with a real, non-99 tier assigned to "mod_tiered" and
         # "base" left unlisted in tier_config.json (its real-world state),
         # this must NOT be flagged.
