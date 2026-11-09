@@ -2661,6 +2661,30 @@ class CheckLintersBurnListScopeTests(unittest.TestCase):
             scanned = [call[2] for call in burn_calls]
             self.assertEqual(scanned, [os.path.join(base, "ham_events"), os.path.join(sibling, "cloudflare")])
 
+    def test_the_javascript_lint_also_scans_a_sibling_checkout_module_where_it_lives(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = os.path.join(tmp, "hams_com")
+            sibling = os.path.join(tmp, "hams_open")
+            os.makedirs(base)
+            os.makedirs(os.path.join(sibling, "cloudflare"))
+            cmds = []
+
+            def side_effect(cmd, *args, **kwargs):
+                cmds.append(cmd)
+                result = MagicMock()
+                result.returncode = 0
+                result.stdout = ""
+                result.stderr = ""
+                return result
+
+            with patch.object(_test_runner, "anchor_scan_sibling_dir", return_value=sibling), patch.object(
+                _test_runner.subprocess, "run", side_effect=side_effect
+            ):
+                _test_runner.check_linters("python3", base, base + "/.ignore", target_modules=["cloudflare"])
+            js = [c for c in cmds if any("check_js_syntax.py" in str(part) for part in c)]
+            self.assertEqual(len(js), 1)
+            self.assertIn(os.path.join(sibling, "cloudflare"), js[0])
+
     def test_a_module_found_nowhere_keeps_its_base_path_so_the_scan_reports_it_missing(self):
         self.assertEqual(_test_runner.burn_list_target("/repo", "nowhere"), os.path.join("/repo", "nowhere"))
 
