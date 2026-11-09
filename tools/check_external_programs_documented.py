@@ -141,6 +141,13 @@ def test_spans(masked):
     return spans
 
 
+# [@ANCHOR: ext_programs:program_name]
+def program_name(literal):
+    """The program a `Command::new` literal names: the text after the last `/`, so `"/usr/sbin/ioreg"` is `ioreg` (a program started by absolute
+    path, which a PATH search cannot replace, is still the program the ADR must name). A bare name is returned unchanged. Pure."""
+    return literal.rsplit("/", 1)[-1]
+
+
 # [@ANCHOR: ext_programs:rust_launches]
 def rust_launches(text):
     """Returns `(literal_names, dynamic_count)` for the Rust source `text`: the set of program names started as
@@ -154,7 +161,7 @@ def rust_launches(text):
             continue
         lit = _LITERAL_LAUNCH.match(text, m.start())
         if lit:
-            names.add(lit.group(1))
+            names.add(program_name(lit.group(1)))
         else:
             dynamic += 1
     return names, dynamic
