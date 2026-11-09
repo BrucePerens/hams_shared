@@ -3692,8 +3692,17 @@ Daemon thread; read-only on `/proc`.
 
 ### `[@ANCHOR: tools:template_db_as_odoo]` `as_odoo(argv, env=None)`
 
-Returns `argv` prefixed with `sudo -n -u odoo` (and `env K=V ...` when `env` is a dict, since sudo resets the rest). The measured runs execute as `odoo`, like the dev box's documented
+Returns `argv` prefixed with `sudo -n -u odoo` (and `--preserve-env=NAME,...` when `env` is a non-empty dict, since sudo resets the rest). Only the NAMES are on the command
+line: the values (`HAMS_CRYPTO_KEY`, `PGPASSWORD`) must be in the environment of the process that starts the command (`run_arm` passes them so), so they never show in `ps` or sudo's log; a name that is not a plain identifier raises ValueError. The measured runs execute as `odoo`, like the dev box's documented
 `sudo -n -u odoo env HAMS_ISOLATED_NS=1 ...` invocation: `daemon_key_manager` chmods `/opt/hams/etc/keys`, which only its owner may do, and as another user the registry fails to load. Never prompts. Pure.
+
+### `[@ANCHOR: tools:template_db_refuse_on_production_host]` `refuse_on_production_host(runner)`
+
+Calls the runner's `refuse_to_run_on_production_host` with the database names the server holds (`list_database_names`); raises when the host looks like production. `run_command` calls it before it mounts, creates or drops anything, and `clone_for_run` calls it as the runner's own `rebuild_db` does.
+
+### `[@ANCHOR: tools:template_db_existing_databases]` `existing_databases(bench, names)`
+
+The members of `names` that exist as databases on the server (one read-only `pg_database` query each, names checked by `check_identifier`), in the order given. `run_command` uses it to refuse a template another run owns.
 
 ### `[@ANCHOR: tools:template_db_filestore_bytes]` `filestore_bytes(name)`
 
@@ -3802,9 +3811,9 @@ combination, the filestore copy, the re-key). `args` is the `run` command line. 
 
 ### `[@ANCHOR: tools:template_db_run_command]` `run_command(args)`
 
-`run`: builds the key, takes one test slot through the runner's own queue (`_acquire_lock_via_queue`, so it waits its turn behind other sessions), mounts the RAM tablespace if an arm needs it, builds the template
-`--build-reps` times, verifies its comment, copies it into RAM, runs the clone micro-benchmark, then `--reps` rounds of the `--arms` interleaved (so box-load drift hits all arms alike). Always drops the templates, their filestores
-and the tablespace, and unmounts. Returns 0; raises on a failed build.
+`run`: builds the key, refuses a production host, refuses to start when the template database or its RAM copy already exists (another run of the same module set owns it, or it was kept; `--replace-template` accepts that), takes one test slot through the runner's own queue (`_acquire_lock_via_queue`, so it waits its turn behind other sessions), mounts the RAM tablespace if an arm needs it, builds the template
+`--build-reps` times, verifies its comment, copies it into RAM, runs the clone micro-benchmark, then `--reps` rounds of the `--arms` interleaved (so box-load drift hits all arms alike). Always drops the templates THIS run created (never one it found), their filestores
+and the tablespace, and unmounts. The clone micro-benchmark's scratch databases carry the process id, so two runs never drop each other's. Returns 0; raises on a failed build.
 
 ### `[@ANCHOR: tools:template_db_key_command]` `key_command(args)`
 

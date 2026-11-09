@@ -787,15 +787,35 @@ def _odoo_filestore_root():
 
 # [@ANCHOR: tools:template_db_as_odoo]
 def as_odoo(argv, env=None):
-    """`argv` (a list) prefixed to run as the `odoo` account: `sudo -n -u odoo [env K=V ...] argv`.
+    """`argv` (a list) prefixed to run as the `odoo` account: `sudo -n -u odoo [--preserve-env=NAME,...] argv`.
 
     The measured runs must execute as `odoo` (the `daemon_key_manager` module chmods `/opt/hams/etc/keys`, which only its owner may do;
-    run as another user the registry fails to load), exactly as the dev box's documented `sudo -n -u odoo env ...` invocation does. `env`: a
-    dict of variables to set (sudo resets the rest). Never prompts (`-n`)."""
+    run as another user the registry fails to load), exactly as the dev box's documented `sudo -n -u odoo env ...` invocation does. `env`: the
+    variables the child needs (sudo resets the rest). Only their NAMES go on the command line, through `--preserve-env`; the VALUES (the
+    test key `HAMS_CRYPTO_KEY`, `PGPASSWORD`) must be in the environment of the process that runs this command, so neither shows in `ps`
+    or in sudo's log. A name that is not a plain identifier raises ValueError. Never prompts (`-n`)."""
     prefix = ["sudo", "-n", "-u", "odoo"]
-    if env is not None:
-        prefix += ["env"] + [f"{k}={v}" for k, v in sorted(env.items())]
+    if env:
+        names = sorted(env)
+        for name in names:
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+                raise ValueError(f"not an environment variable name: {name!r}")
+        prefix.append("--preserve-env=" + ",".join(names))
     return prefix + list(argv)
+
+
+# [@ANCHOR: tools:template_db_refuse_on_production_host]
+def refuse_on_production_host(runner):
+    """Raises (through the runner's `refuse_to_run_on_production_host`) when this host or its PostgreSQL looks like production, judged
+    on the database names the server holds. Every command that mounts, creates or drops anything calls it first; `clone_for_run`
+    calls it too, as the runner's own `rebuild_db` does."""
+    runner.refuse_to_run_on_production_host(database_names=runner.list_database_names(runner.infrastructure.get_pg_bin("psql"), dict(os.environ)))
+
+
+# [@ANCHOR: tools:template_db_existing_databases]
+def existing_databases(bench, names):
+    """The members of `names` that exist as databases on the server (read-only), in the order given."""
+    return [name for name in names if bench.sql(f"SELECT 1 FROM pg_database WHERE datname = '{check_identifier(name)}';").strip() == "1"]
 
 
 # [@ANCHOR: tools:template_db_filestore_bytes]
@@ -861,7 +881,7 @@ def clone_for_run(runner, db_name, template, plan, redis_flush_db):
     check_identifier(db_name)
     check_identifier(template)
     env = dict(os.environ)
-    runner.refuse_to_run_on_production_host(database_names=runner.list_database_names(runner.infrastructure.get_pg_bin("psql"), env))
+    refuse_on_production_host(runner)
     redis_db = os.environ.get("REDIS_DB", "0") if redis_flush_db is None else str(redis_flush_db)
     subprocess.run(["redis-cli", "-n", redis_db, "flushdb"], check=False, env=env)
     if _psql(runner, f"SELECT 1 FROM pg_database WHERE datname = '{template}';").strip() != "1":
@@ -1095,7 +1115,9 @@ class Bench:
         os.chmod(events_path, 0o666)
         cmd = as_odoo([sys.executable, os.path.abspath(__file__), "_stub", arm, self.repo_root, template] + test_args, env=keep)
         load_before = read_loadscreen()
-        lines, returncode, cpu_runner, cpu_postgres = run_measured(cmd, env, self.repo_root, log_path, database)
+        child_env = dict(env)
+        child_env.update(keep)  # the values travel in the environment of the sudo process; only their names are on its command line
+        lines, returncode, cpu_runner, cpu_postgres = run_measured(cmd, child_env, self.repo_root, log_path, database)
         events = {}
         if os.path.exists(events_path):
             with open(events_path, encoding="utf-8") as handle:
@@ -1149,7 +1171,7 @@ class Bench:
                 ("ram->ssd file_copy", ram_template, "pg_default", "file_copy", "copy"),
                 ("ssd->ram file_copy", template, BENCH_TABLESPACE, "file_copy", "copy"),
             ]
-        scratch = "hams_bench_clone_probe"
+        scratch = f"hams_bench_clone_probe_{os.getpid()}"  # per run: two runs must not drop each other's probe
         for label, source, tablespace, strategy, method in combos:
             for rep in range(1, reps + 1):
                 statement = clone_database_sql(scratch, source, tablespace=tablespace, strategy=strategy)
@@ -1164,14 +1186,14 @@ class Bench:
                 self.meta["clone"].append(result)
                 print(f"[bench] clone {label} #{rep}: {result['wall']:.2f}s cpu {result['cpu']}", flush=True)
         # filestore copy and re-key, timed on a real clone of the template
-        name = "hams_bench_rekey_probe"
+        name = f"hams_bench_rekey_probe_{os.getpid()}"
         self.sql(clone_database_sql(name, template))
         t0 = time.perf_counter()
         self.sql_in(name, rekey_sql())
         self.meta["rekey_wall"] = round(time.perf_counter() - t0, 3)
         self.sql(f'DROP DATABASE "{name}" WITH (FORCE);')
         source = os.path.join(_odoo_filestore_root(), template)
-        destination = source + "_probe"
+        destination = f"{source}_probe_{os.getpid()}"
         for rep in range(1, reps + 1):
             t0 = time.perf_counter()
             subprocess.run(as_odoo(["cp", "-a", "--reflink=auto", source, destination]), check=True)
@@ -1185,10 +1207,21 @@ class Bench:
 
 # [@ANCHOR: tools:template_db_run_command]
 def run_command(args):
-    """`run`: one module set, every arm, `--reps` repetitions interleaved, results written to `--out-dir`."""
+    """`run`: one module set, every arm, `--reps` repetitions interleaved, results written to `--out-dir`.
+
+    Before anything is mounted, created or dropped it refuses a production host (`refuse_on_production_host`) and refuses to start when the
+    template database or its RAM copy already exists (another run of the same module set, or a kept template; `--replace-template` accepts
+    that). At the end it drops only what THIS run created, so a refused run never removes another run's template or filestore."""
     bench = Bench(args)
     runner = bench.runner
     key = bench.build_key()
+    refuse_on_production_host(runner)
+    template_names = [key.database_name(), key.database_name() + "_ram"]
+    present = existing_databases(bench, template_names)
+    if present and not getattr(args, "replace_template", False):
+        raise RuntimeError(f"database(s) {', '.join(present)} already exist (another run of this tool for the same modules, or a kept template); "
+                           "refusing to replace them: drop them or pass --replace-template")
+    created = []  # the template databases (and filestores) this run made: the only ones its cleanup removes
     print(f"[bench] set {args.set_name}: {len(key.modules)} modules in the install list, template {key.database_name()}, key hashed in {bench.meta['key_seconds']}s", flush=True)
     if bench.meta["tests_define_models"]:
         print(f"[bench] WARNING: tests define models in {bench.meta['tests_define_models']}", flush=True)
@@ -1205,6 +1238,7 @@ def run_command(args):
         if ram:
             ram.__enter__()
         template = key.database_name()
+        created.append(template)
         for rep in range(1, args.build_reps + 1):
             bench.build_template(key, slot, slots, rep)
         verdict, why = verify_template(bench.sql("SELECT shobj_description(oid, 'pg_database') FROM pg_database WHERE datname = '%s';" % template).strip(), key)
@@ -1212,6 +1246,7 @@ def run_command(args):
         ram_template = None
         if ram:
             ram_template = template + "_ram"
+            created.append(ram_template)
             t0 = time.perf_counter()
             bench.sql(clone_database_sql(ram_template, template, tablespace=BENCH_TABLESPACE))
             bench.meta["template_to_ram_wall"] = round(time.perf_counter() - t0, 3)
@@ -1228,14 +1263,12 @@ def run_command(args):
         bench.meta["finished"] = time.strftime("%Y-%m-%d %H:%M:%S")
         bench.save()
     finally:
-        for name in (key.database_name() + "_ram", key.database_name()):
-            try:
-                if not args.keep_template:
-                    bench.sql(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE);')
-            except subprocess.CalledProcessError:
-                pass
         if not args.keep_template:
-            for name in (key.database_name(), key.database_name() + "_ram"):
+            for name in reversed(created):
+                try:
+                    bench.sql(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE);')
+                except subprocess.CalledProcessError:
+                    pass
                 remove_filestore(name)
         if ram:
             ram.__exit__(None, None, None)
@@ -1304,6 +1337,7 @@ def build_parser():
     run.add_argument("--no-clone-micro", dest="clone_micro", action="store_false")
     run.add_argument("--key-includes-tests", dest="key_includes_tests", action="store_true", default=True)
     run.add_argument("--keep-template", action="store_true")
+    run.add_argument("--replace-template", action="store_true", help="start although the template database already exists (it is rebuilt and, unless --keep-template, dropped at the end)")
     key = sub.add_parser("key", help="print the template key for a module list")
     key.add_argument("--repo-root", required=True)
     key.add_argument("--modules", required=True)
