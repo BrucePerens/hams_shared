@@ -62,6 +62,11 @@ class GateTests(unittest.TestCase):
         self.assertTrue(lint_stamp_gate.refusal(old, ["daemons/x/src/a.rs"]))
         self.assertIsNone(lint_stamp_gate.refusal(old, ["tools/a.py"]))
 
+    def test_an_empty_or_unreadable_stamp_is_refused_for_a_code_change_but_not_for_markdown(self):
+        for text in ("", "\n", "garbage 2026-10-30T10:00:00 steps=3 names=flake8\n"):
+            self.assertIn("empty or unreadable", lint_stamp_gate.refusal(text, ["tools/a.py"]), repr(text))
+            self.assertIsNone(lint_stamp_gate.refusal(text, ["docs/a.md"]), repr(text))
+
     def test_the_command_line_refuses_with_exit_status_one(self):
         with tempfile.TemporaryDirectory() as directory:
             path = os.path.join(directory, "stamp")

@@ -27,6 +27,8 @@ JS_SUFFIXES = (".js", ".mjs", ".cjs")
 RUST_STEPS = ("check_cargo_clippy", "check_cargo_fmt", "check_rust_function_test_anchors", "verify_anchors")
 JS_STEPS = ("check_js_syntax",)
 DOC_SUFFIXES = (".md",)
+# The first word of a stamp `run_linters.py` wrote; an empty file (a write that failed after the file was created) is none of them.
+KNOWN_MODES = ("full", "changed")
 
 
 def parse_stamp(text):
@@ -49,7 +51,11 @@ def refusal(stamp_text, changed_paths):
     mode, count, names = parse_stamp(stamp_text)
     paths = [path for path in changed_paths if path]
     code = [path for path in paths if not path.endswith(DOC_SUFFIXES)]
-    if not code or mode == "full":
+    if not code:
+        return None
+    if mode not in KNOWN_MODES:
+        return "the stamp is empty or unreadable (its first word is %r, not one of %s)" % (mode, "/".join(KNOWN_MODES))
+    if mode == "full":
         return None
     if count == 0:
         return "the stamp selected zero steps for a branch that changed code"
