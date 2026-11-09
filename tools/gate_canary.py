@@ -323,6 +323,8 @@ def run_canary(workspace=gate_snapshot.DEFAULT_WORKSPACE, parent=None, state_dir
                                                  cargo_target_dir=manifest["cargo_target_dir"])
         if problems:
             return {"number": index + 1, "modules": shard_modules[index], "exit_status": 2, "results": None, "problems": problems}
+        for stale in glob.glob(os.path.join(directory, "test_results*.json")):
+            os.unlink(stale)  # a rerun on the same commits must not read the verdict file of an earlier run
         status = runner(commands[index], os.path.join(trees["parent"], "logs", "shard%d.log" % (index + 1)))
         return {"number": index + 1, "modules": shard_modules[index], "exit_status": status, "results": read_shard_results(directory)}
 

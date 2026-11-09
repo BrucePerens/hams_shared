@@ -176,7 +176,8 @@ class RunTests(unittest.TestCase):
                 directory = os.path.join(self.gate, "logs", "shard%d" % number)
                 results[number](directory)
                 # test.py exits 0 for a run whose only failures are tolerated or flaky, and 1 when it has a new failure
-                return 1 if gc.read_shard_results(directory)["new_failures"] else 0
+                verdict = gc.read_shard_results(directory)  # None when the shard wrote no verdict file (it died)
+                return 1 if verdict is None or verdict["new_failures"] else 0
             return 0
         return runner
 
@@ -219,6 +220,14 @@ class RunTests(unittest.TestCase):
         code, status = self.run_canary({1: lambda d: write_results(d, new=["mod_a:N.n"])}, bisect=False)
         self.assertEqual(code, 1)
         self.assertFalse([c for c in self.commands if "--bisect-modules" in c])
+
+    # Tests [@ANCHOR: gate_canary:run_canary]
+    def test_a_shard_that_dies_on_a_rerun_does_not_inherit_the_results_of_the_earlier_run(self):
+        write_results(os.path.join(self.gate, "logs", "shard1"), known={"mod_a:K.k": {}})
+        code, status = self.run_canary({1: lambda directory: None})
+        self.assertEqual((code, status["status"]), (1, "red"))
+        self.assertIn("no verdict", status["shard_errors"][0])
+        self.assertEqual(status["tolerated"], [])
 
     # Tests [@ANCHOR: gate_canary:run_canary]
     def test_a_shard_killed_by_a_signal_after_tolerated_failures_makes_the_night_red(self):
