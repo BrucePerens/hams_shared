@@ -257,14 +257,17 @@ When debugging tests, especially UI tours, you can use the MCP test server inste
   (`infrastructure.RUST_DAEMON_CRATES`) skips the `cargo build`. The namespace mounts tmpfs over
   `/home`, so a build in the repository is written to RAM and discarded: it cannot be cached there, and
   every run that builds starts cold. `--build-daemons` forces the build; a run with no `-u` always builds.
-* **Worktrees:** put them NEXT TO the main checkouts, directly under `~/workspace/` (for example
-  `~/workspace/wt-topic`), not under the repository or in `~/workspace/tmp`. A hams_open worktree has an
-  empty `hams_shared` submodule directory: run `python3 fix_worktree_symlinks.py` in it once (it links
-  the main checkout's `hams_shared`; to test a `hams_shared` change, relink it to your own
-  `hams_shared` worktree). The anchor scan and the addon path need the OTHER repo: it is found as
-  `../hams_com` or `../hams_open`; a worktree anywhere else sets `HAMS_COM_TREE=<hams_com checkout>`
-  or `HAMS_OPEN_TREE=<hams_open checkout>`. Without it the anchor scan prints dozens of false
-  findings and ends with `NOTE: hams_com was NOT scanned ... FIX: HAMS_COM_TREE=...`.
+* **Worktrees (rule of 2026-11-09; replaces "directly under `~/workspace/`"):** make every one with
+  `python3 devbox_tools/new_agent_worktree.py <hams_com|hams_open|hams_shared> <branch> [--base origin/main]` (hams_com checkout;
+  `eval "$(... | tail -n +2)"` applies the environment it prints). It builds `~/workspace/tmp/<job>/`, a job directory that holds only
+  that repository's tree and the sibling links the tooling needs (`hams_com` + `hams_open`; for hams_shared both, and its tree is named `hams_shared_wt`, because `run_linters.py` takes a directory named `hams_shared` for a submodule and uses its parent as the repository root), never inside a repository and
+  never beside another agent's tree, runs `fix_worktree_symlinks.py` (it links the `hams_shared` of a hams_com or hams_open worktree;
+  to test a `hams_shared` change, make a hams_shared job instead) and registers the job for `worktree_hygiene.py`. Worktrees nested in
+  a checkout (`hams_open/tmp/...`, `.claude/worktrees/...`) or crowded together made anchor scans, ESLint and other checks scan other
+  agents' trees, and lint needed hand-built layouts; `worktree_hygiene.py` flags them as `NESTED` (`--move-nested --apply` moves the
+  clean, unheld ones). The anchor scan and the addon path need the OTHER repo: the tool's links give `../hams_com` or `../hams_open`,
+  and `HAMS_COM_TREE=` / `HAMS_OPEN_TREE=` (printed by the tool) name them for a worktree anywhere else. Without them the anchor scan
+  prints dozens of false findings and ends with `NOTE: hams_com was NOT scanned ... FIX: HAMS_COM_TREE=...`.
 
 ## Worktrees and branches: merge early, remove at once (rule of 2026-10-26)
 
