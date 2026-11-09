@@ -375,7 +375,7 @@ in a fixed order, and ends with a per-step timing table.
   and the report per module are unchanged; the pass cache is unaffected). `HAMS_LINT_XDIST=0` turns it off, `=N`
   forces N workers. Groups that are not xdist-safe are listed in `lint_exec.XDIST_SERIAL`: `pytest tools/[host-bound]`
   (copies the tree, drives the real checkout), `pytest daemons/hams_simulated_bots` (idle-CPU and timing tests),
-  and `pytest ingest/` and `pytest scripts/` (not validated yet). All 46 other daemon steps and the four
+  and `pytest ingest/` and `pytest scripts/` (not validated yet). `pytest devbox_tools/` runs under `-n` since 2026-11-08 (294 s serial at load 150, 51 s with four workers). All 46 other daemon steps and the four
   `tools` chunks passed under `-n` on mac1-vm with the same results as serial.
 
 * `--list` names the steps; `--only a,b` / `--skip a,b` select steps (a selected run never stamps);

@@ -527,6 +527,10 @@ class XdistTests(unittest.TestCase):
             self.assertEqual(lint_exec.with_xdist(step, 3), step.argv, name)
         self.assertNotEqual(lint_exec.with_xdist(self.step, 3), self.step.argv)
 
+    def test_the_devbox_tools_suite_runs_under_workers(self):
+        step = lint_exec.Step(name="pytest devbox_tools/", argv=[PY, "-m", "pytest", "-q", "-rs", "a.py"])
+        self.assertEqual(lint_exec.with_xdist(step, 4), [PY, "-m", "pytest", "-n", "4", "--dist", "loadfile", "-q", "-rs", "a.py"])
+
     def test_an_interpreter_without_xdist_runs_serially(self):
         lint_exec._xdist_ok[PY] = False
         self.assertEqual(lint_exec.with_xdist(self.step, 3), self.step.argv)
