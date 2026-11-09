@@ -3302,7 +3302,7 @@ Purpose: lets `format_start` turn clock ticks into a date. Returns the epoch sec
 
 ### `[@ANCHOR: agent_procs:format_start]` `format_start(start_ticks)`
 
-Purpose: the human start time printed by `find`, `jobs` and the ps line. Argument `start_ticks` int from `ProcInfo`. Returns `YYYY-MM-DDTHH:MM:SS` in local time. The ticks, not this text, are what is compared.
+Purpose: the human start time printed by `find`, `jobs` and the ps line. Argument `start_ticks` int from `ProcInfo`. Returns `YYYY-MM-DDTHH:MM:SS` in local time, or `unknown` when the number is outside what `datetime` can print (a corrupt record file; `OverflowError`, `OSError` and `ValueError` are caught here, never raised). The ticks, not this text, are what is compared.
 
 ### `[@ANCHOR: agent_procs:read_proc]` `read_proc(pid)`
 

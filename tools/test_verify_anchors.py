@@ -1128,6 +1128,77 @@ class SiblingRepoScanningIntegrationTests(unittest.TestCase):
         self.assertNotIn("Missing Cross-Reference Target", out, out)
 
 
+class ForeignWorktreesAreNeverScannedTests(unittest.TestCase):
+    """2026-11-09: lint runs failed `verify_anchors` with duplicate-anchor findings whose paths were another agent's
+    worktree (`tmp/bh-rv-open/...`), none from the branch's own files, and a rerun passed once that worktree was
+    gone. The scan walked the checkout with `os.walk`, which also enters a worktree that sits under it
+    (`git worktree add tmp/<name>`, untracked, not ignored) or beside it. Only the tree's own git-tracked (and new,
+    unignored) files may be scanned."""
+
+    ANCHOR = "# [@ANCHOR: mod_a:COMM_x]\n"
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.tree = os.path.join(self.tmp, "hams_open")
+        os.makedirs(self.tree)
+        self._git(self.tree, "init", "-q", "-b", "main")
+        _write(os.path.join(self.tree, "mod_a", "models", "foo.py"), self.ANCHOR)
+        self._git(self.tree, "add", "mod_a/models/foo.py")
+        self._git(self.tree, "commit", "-q", "-m", "init")
+
+    @staticmethod
+    def _git(cwd, *args):
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-C", cwd, *args],
+            check=True, capture_output=True,
+        )
+
+    def _scan(self):
+        return va.find_anchors_in_code(self.tree, self.tree)
+
+    def test_a_worktree_nested_under_the_tree_is_not_scanned(self):
+        self._git(self.tree, "worktree", "add", "-q", "--detach", os.path.join(self.tree, "tmp", "bh-rv-open"))
+        self.assertTrue(os.path.exists(os.path.join(self.tree, "tmp", "bh-rv-open", "mod_a", "models", "foo.py")))
+        _ca, locations, _tl, _tls, _vbl, _aig, _crefs, duplicates, _lines = self._scan()
+        self.assertEqual(duplicates, [])
+        self.assertEqual(locations["mod_a:COMM_x"], ["./mod_a/models/foo.py:1"])
+
+    def test_a_new_file_not_yet_added_is_still_scanned(self):
+        _write(os.path.join(self.tree, "mod_b", "models", "bar.py"), "# [@ANCHOR: mod_b:COMM_y]\n")
+        _ca, locations, *_rest = self._scan()
+        self.assertIn("mod_b:COMM_y", locations)
+
+    def test_a_worktree_beside_the_tree_in_the_shared_parent_gives_no_error(self):
+        """A foreign worktree with the same anchor sits next to the tree (and under it): the whole script, started the
+        way run_linters.py starts it, reports no duplicate and succeeds."""
+        self._git(self.tree, "worktree", "add", "-q", "--detach", os.path.join(self.tmp, "bh-rv-open"))
+        self._git(self.tree, "worktree", "add", "-q", "--detach", os.path.join(self.tree, "tmp", "bh-hw-open"))
+        script_dir = os.path.join(self.tree, "hams_shared", "tools")
+        os.makedirs(script_dir)
+        for name in os.listdir(os.path.dirname(_SCRIPT)):
+            if name.endswith(".py") and not name.startswith("test_"):
+                shutil.copy(os.path.join(os.path.dirname(_SCRIPT), name), script_dir)
+        result = subprocess.run(
+            [sys.executable, os.path.join(script_dir, "verify_anchors.py"), self.tree],
+            capture_output=True, text=True, timeout=_timeout(60),
+            env={**os.environ, "HAMS_ANCHOR_REPO": "hams_open"},
+        )
+        out = result.stdout + result.stderr
+        self.assertNotIn("Duplicate Anchor", out, out)
+        self.assertNotIn("bh-rv-open", out, out)
+        self.assertNotIn("bh-hw-open", out, out)
+
+    def test_outside_git_a_directory_with_its_own_git_marker_is_not_entered(self):
+        bare = os.path.join(self.tmp, "bare")
+        _write(os.path.join(bare, "mod_a", "models", "foo.py"), self.ANCHOR)
+        _write(os.path.join(bare, "other", "mod_a", "models", "foo.py"), self.ANCHOR)
+        _write(os.path.join(bare, "other", ".git"), "gitdir: /elsewhere\n")
+        _ca, locations, _tl, _tls, _vbl, _aig, _crefs, duplicates, _lines = va.find_anchors_in_code(bare, bare)
+        self.assertEqual(len(locations["mod_a:COMM_x"]), 1)
+        self.assertEqual(duplicates, [])
+
+
 class SubprocessTimeoutFollowsLoadTests(unittest.TestCase):
     """The time limit of the tests that run verify_anchors.py as a subprocess grows with the load (it failed at load 20)."""
 

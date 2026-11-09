@@ -45,6 +45,7 @@ import re
 import subprocess
 import sys
 
+import tree_files
 from lint_exec import main_worktree_of
 
 # Recognizes the plain `[@ANCHOR: name]` form and both halves of the
@@ -410,18 +411,53 @@ def _ends_with_marker(prefix, marker):
     return not (prev_char.isalnum() or prev_char == "_")
 
 
+def _walk_tree_files(top):
+    """`os.walk(top)` over the files that belong to `top`'s own tree, honouring in-place pruning of `dirs`.
+
+    In a git work tree the files are the ones git tracks (plus new, unignored ones), so nothing else that sits in the
+    directory is visited: another agent's worktree made with a relative path under the checkout
+    (`hams_open/tmp/<name>`), an untracked scratch copy, a build output. Their files carry the same anchors as the
+    real ones and failed every lint run with duplicate-anchor findings that were not in the branch (2026-11-09). Outside
+    git (a bare directory, as in unit tests) the directory is walked, but a directory with its own `.git` is another
+    checkout and is not entered."""
+    tracked = tree_files.git_tracked(top, ("",), untracked=True)
+    if tracked is None:
+        for here, dirs, files in os.walk(top):
+            dirs[:] = [d for d in dirs if not os.path.exists(os.path.join(here, d, ".git"))]
+            yield here, dirs, files
+        return
+    top = os.path.normpath(top)
+    files_in, dirs_in = {}, {}
+    for path in tracked:
+        here = os.path.dirname(path)
+        files_in.setdefault(here, []).append(os.path.basename(path))
+        while here != top and here.startswith(top + os.sep):
+            parent = os.path.dirname(here)
+            dirs_in.setdefault(parent, set()).add(os.path.basename(here))
+            here = parent
+
+    def walk(base):
+        subdirs = sorted(dirs_in.get(base, ()))
+        yield base, subdirs, sorted(files_in.get(base, ()))
+        for name in list(subdirs):  # the caller may have pruned `subdirs` in place
+            yield from walk(os.path.join(base, name))
+
+    yield from walk(top)
+
+
 def _walk_with_shared(root_dir):
-    """os.walk(root_dir), plus a symlinked top-level `hams_shared` walked as if it were a directory.
+    """The files of `root_dir`'s own tree (see `_walk_tree_files`), plus a symlinked top-level `hams_shared` walked
+    as if it were a directory.
 
     A git worktree of hams_open has `hams_shared` as a symlink to the main checkout's copy
     (fix_worktree_symlinks.py): os.walk never descends symlinks, so the scan silently lost every
     doc and test under hams_shared and reported dozens of false "missing" findings. The walk keeps
     the lexical path (<worktree>/hams_shared/...), so locations match a real checkout's. The
     caller's in-place pruning of `dirs` applies to both walks."""
-    yield from os.walk(root_dir)
+    yield from _walk_tree_files(root_dir)
     shared = os.path.join(root_dir, "hams_shared")
     if os.path.islink(shared) and os.path.isdir(shared):
-        yield from os.walk(shared)
+        yield from _walk_tree_files(shared)
 
 
 def get_module(path):

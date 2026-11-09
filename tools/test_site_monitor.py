@@ -574,7 +574,9 @@ class MaintenanceTests(MainTests):
     def test_malformed_unreadable_or_future_flags_are_not_maintenance(self):
         bad = os.path.join(self.tmp.name, "bad")
         for content in ("not json", "[]", '{"until": 5}', '{"set_at": "x", "until": 9}', '{"set_at": 1e999, "until": 2e999}',
-                        '{"set_at": NaN, "until": 9}', '{"set_at": 1, "until": NaN}', '{"set_at": 1, "until": Infinity}'):
+                        '{"set_at": NaN, "until": 9}', '{"set_at": 1, "until": NaN}', '{"set_at": 1, "until": Infinity}',
+                        '{"set_at": -1e18, "until": -1e18}', '{"set_at": 1, "until": 1e18}', '{"set_at": 1, "until": -1e300}',
+                        '{"set_at": 4611686018427387904, "until": 4611686018427387904}'):
             with open(bad, "w") as handle:
                 handle.write(content)
             self.assertEqual(sm.read_maintenance(bad, self.NOW)["state"], "malformed", content)
