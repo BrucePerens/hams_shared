@@ -2153,6 +2153,28 @@ def core_daemons_to_start(isolated):
     return list(_HOST_CORE_DAEMONS)
 
 
+# [@ANCHOR: test:run_psql_script]
+def run_psql_script(psql_cmd, args, sql, what, env=None, preexec_fn=None):
+    """Feed the SQL script `sql` to `psql_cmd` (plus `args`) on standard input and exit 1, printing psql's own output, when it fails.
+
+    `-v ON_ERROR_STOP=1` makes psql stop at the first failing statement and exit 3: without it psql runs the rest of the script
+    and exits 0 (only a connection failure gave a nonzero status), so a failed `CREATE DATABASE` left the old database in place
+    and the run went on against stale state. `-X` keeps a user's psqlrc out of it. `what` names the step in the message."""
+    result = subprocess.run(
+        [psql_cmd, "-X", "-v", "ON_ERROR_STOP=1", *args],
+        input=sql.encode("utf-8"),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        env=env,
+        preexec_fn=preexec_fn,
+        check=False,
+    )
+    if result.returncode != 0:
+        output = result.stdout.decode("utf-8", "replace") if isinstance(result.stdout, bytes) else str(result.stdout or "")
+        print(f"❌ ERROR: psql failed (exit status {result.returncode}) while {what}:\n{output.rstrip()}", file=sys.stderr, flush=True)
+        sys.exit(1)
+
+
 # [@ANCHOR: test:rebuild_db]
 def rebuild_db(db_name, redis_flush_db=None):
     # SQL here is built by string interpolation with no parameterization: `db_name` below is
@@ -2218,12 +2240,7 @@ CREATE DATABASE "{db_name}";
 \\c "{db_name}"
 CREATE EXTENSION IF NOT EXISTS vector;
 """
-    subprocess.run(
-        [psql_cmd, "postgres", "-v", f"dbname={db_name}"],
-        input=sql_input.encode("utf-8"),
-        check=True,
-        env=env,
-    )
+    run_psql_script(psql_cmd, ["postgres", "-v", f"dbname={db_name}"], sql_input, f"rebuilding database {db_name}", env=env)
 
     # See remove_stale_filestore()'s own docstring for the full reasoning -- DROP DATABASE never
     # touches Odoo's on-disk filestore, so without this every test run against the same db_name
@@ -2824,12 +2841,6 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
 
     wait_for_socket(f"{pg_sock}/.s.PGSQL.5432", "PostgreSQL")
 
-    p = subprocess.Popen(
-        [psql_cmd, "-h", pg_sock, "-d", "postgres"],
-        stdin=subprocess.PIPE,
-        preexec_fn=preexec_pg,
-        text=True,
-    )
     sql_create_roles = f"""
     DO $$
     BEGIN
@@ -2841,8 +2852,7 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
         END IF;
     END $$;
     """
-    p.communicate(sql_create_roles)
-    p.wait()
+    run_psql_script(psql_cmd, ["-h", pg_sock, "-d", "postgres"], sql_create_roles, "creating the odoo and test-user roles", preexec_fn=preexec_pg)
 
     # 4. Redis Sandboxing
     # No pkill required: network namespace isolation prevents port collision with host
