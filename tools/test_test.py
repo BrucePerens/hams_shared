@@ -705,6 +705,20 @@ class SlotWiringMainTests(unittest.TestCase):
             self.assertIn("mode 0755, not 0777", out.getvalue())
             self.assertIn(f"sudo chmod 0777 {directory}", out.getvalue())
 
+    def test_a_slot_directory_that_is_a_symbolic_link_is_refused_and_its_target_left_alone(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = os.path.join(tmp, "elsewhere")
+            os.makedirs(target)
+            os.chmod(target, 0o700)
+            os.symlink(target, os.path.join(tmp, "slot-2"))
+            resources = _test_runner.runner_slots.slot_resources(2, 2, False, tmp)
+            with patch.dict(os.environ, {}), contextlib.redirect_stdout(io.StringIO()) as out:
+                with self.assertRaises(SystemExit) as caught:
+                    _test_runner.apply_slot_resources(resources)
+            self.assertEqual(caught.exception.code, 1)
+            self.assertIn("symbolic link", out.getvalue())
+            self.assertEqual(os.stat(target).st_mode & 0o777, 0o700)
+
     def test_a_slot_directory_with_another_mode_is_changed_to_0777(self):
         with tempfile.TemporaryDirectory() as tmp:
             directory = os.path.join(tmp, "slot-2")
@@ -2757,6 +2771,19 @@ class RunnerCommandLineTests(unittest.TestCase):
             _test_runner.parse_runner_args(argv)
         self.assertEqual(caught.exception.code, 2)
         return err.getvalue()
+
+    def test_an_unsafe_database_name_is_refused_at_parse_time(self):
+        text = self._parse_error(["-u", "pager_duty", "-d", 'x"; DROP DATABASE y; --'])
+        self.assertIn("is not a safe database name", text)
+
+    # Tests [@ANCHOR: test:role_sql_for_test_user]
+    def test_the_role_script_quotes_the_user_and_refuses_an_odd_name(self):
+        sql = _test_runner.role_sql_for_test_user("Bruce-1")
+        self.assertIn("rolname = 'Bruce-1'", sql)
+        self.assertIn('CREATE ROLE "Bruce-1" WITH SUPERUSER LOGIN;', sql)
+        for bad in ("a'; DROP ROLE odoo; --", "", "1abc", 'x"y', "a b"):
+            with self.subTest(user=bad), self.assertRaises(ValueError):
+                _test_runner.role_sql_for_test_user(bad)
 
     def test_an_unknown_option_is_refused_with_the_next_action_as_the_last_line(self):
         text = self._parse_error(["-u", "pager_duty", "--bogus"])
