@@ -79,6 +79,8 @@ DENIED = [
     "ps -o ppid= -p 5 | xargs kill -TERM", "kill $(pidof sshd)", "kill -HUP $(pidof postgres)", "kill -TERM sshd", "kill postgres",
     "sudo kill -HUP systemd", "pkill systemd", "pkill -HUP sshd", "killall postgres", "sudo systemctl kill sshd",
     "bash -c 'kill $PPID'", "ssh host 'kill $PPID'",
+    # find -exec
+    "find . -exec true {} \\; -exec pkill x \\;", "find . -exec sh -c 'kill -9 $0' {} \\;", "find . -ok kill -9 {} +",
     # nesting
     "echo $(echo $(echo $(pkill foo)))", 'echo "a $(kill -9 5) b"',
 ]
@@ -107,6 +109,7 @@ ALLOWED = [
     "ssh host 'systemctl status foo'", "python3 -c 'print(1)'", "python3 -c 'import os; os.kill(5, 0)'",
     "docker ps", "tail -f log | grep -m1 DONE", "pgrep", "echo kill -9 > notes.txt", "sed -i 's/pkill/stop/' file",
     "# pkill foo in a comment", "echo done # kill -9 5", "",
+    "find . -exec echo {} \\; -exec ls {} +", "find . -exec sh -c 'echo $0' {} \\;",
 ]
 
 
