@@ -4396,3 +4396,50 @@ the Odoo known-red baseline and are not bisected) and a relay `error` as a shard
 ## Claim hashes (`claim_normalizers.py`, `check_claims_freshness.py`)
 
 A bug-hunt claim's `code_hash` is stale only when the anchored code changed, never for a comment or a formatter. The claim records `hash_algorithm: v2` next to `code_hash`: the sha256 of the item's token stream (Python `tokenize`, a Rust lexer, a JavaScript lexer that tells a regex from a division, canonical XML for XML/QWeb, a shell lexer and an SQL lexer), so formatting, comments, quote style and trailing commas do not reach it and every code token and string value does. `v1` (raw text) and `v1b` (comment-insensitive text, Python only) are the older algorithms. A claim with no `hash_algorithm` is legacy; the date table `ALGORITHM_BY_DATE` maps the date of the commit that last wrote the claim file (or a front matter `date:`, never the mtime) to its algorithm. When a legacy claim's exact hash no longer matches, `check_claims_freshness.py` and `check_claims.py` load the function as of the claim's commit, compute v2 over that text and over the current text, and treat the claim as fresh when they are equal; the verdict is cached in `~/.cache/hams_claims/` (`HAMS_CLAIM_CACHE_DIR`). There is no repo-wide re-hash: old claims are never rewritten to survive a tool change. `bug-hunt/normalized_view.py <file> [--function NAME]` (hams_com) prints the normalized text.
+
+## Moving instruction text without losing a rule (`check_no_rule_lost.py`, 2026-11-09)
+
+Every agent re-reads `AGENTS.md` / `CLAUDE.md` from the prompt cache on every turn (measured 2026-11-09: over 96 % of agent input tokens are cache reads,
+so the cost is context size x turns). Sections needed only for one kind of task are therefore MOVED, word for word, into on-demand documents
+(`docs/LINT_RUNNER_DETAILS.md` here; `docs/agent_ondemand/` in hams_com) with a one-to-six line pointer left in place that keeps the key imperative. The
+meta-editing rule of AGENTS.md forbids deleting or condensing a rule, so the move must be provable:
+
+    python3 tools/check_no_rule_lost.py --before origin/main:AGENTS.md --after AGENTS.md docs/LINT_RUNNER_DETAILS.md
+    python3 tools/check_no_rule_lost.py --measure AGENTS.md        # characters and ~tokens (characters / 4; no tokenizer on the box)
+
+Exit 0 and `OK, all N units ... are present verbatim` when every unit of the old text is in one of the new files; exit 1 and every missing unit with its
+missing sentences otherwise. `check_summation_bias.py` (the pre-commit hook and the lint step) uses the same proof: a Markdown file that shrinks by more
+than 5 % is accepted only when its whole HEAD text is present verbatim in the Markdown files of the same change (staged ones for `--staged`; a new file
+must be added to the index, an untracked one does not count). Tests: `test_check_no_rule_lost.py`, `MovedNotLostTests` in `test_check_summation_bias.py`.
+
+### `[@ANCHOR: check_no_rule_lost:normalize]` `normalize(text)`
+
+Purpose: the comparison form. Argument `text` (str). Returns the text with every run of whitespace (newlines, indentation, tabs) collapsed to one space and
+stripped, so re-wrapping or re-indenting a moved paragraph does not count as a change. Pure.
+
+### `[@ANCHOR: check_no_rule_lost:units]` `units(text)`
+
+Purpose: what "a rule" is for the check. Argument `text` (str, Markdown). Returns a list of normalized strings in document order: each heading line (`#`..`######`)
+and each lone tag line (`<site_rules>`) on its own; each paragraph (lines up to a blank line); each list item (`-`, `*`, `+`, `1.`, `1)`) with its continuation
+lines, a nested item being a unit of its own; each fenced code block with its fence lines. Units shorter than 3 characters are left out. Pure.
+
+### `[@ANCHOR: check_no_rule_lost:missing_units]` `missing_units(before_texts, after_texts)`
+
+Purpose: the check. Arguments: `before_texts`, `after_texts` (lists of str). Returns the units of the before texts, each once and in order, that are not a
+substring of the normalized form of any one after text. A unit split across two files is missing (it must survive whole in one place). Pure.
+
+### `[@ANCHOR: check_no_rule_lost:moved_verbatim]` `moved_verbatim(old_text, new_texts)`
+
+Purpose: the yes/no form for `check_summation_bias.py`. Arguments: `old_text` (str), `new_texts` (list of str: the file's new content and the other files of
+the change). Returns True when `missing_units([old_text], new_texts)` is empty. Pure.
+
+### `[@ANCHOR: check_no_rule_lost:read_source]` `read_source(spec)`
+
+Purpose: read one argument. `spec` is a path, or `REV:PATH`, which is read with `git show` in the current directory first; if git cannot read it, it is opened as
+a path, so a missing file raises `FileNotFoundError` (no silent empty text). Returns str.
+
+### `[@ANCHOR: check_no_rule_lost:main]` `main(argv=None)`
+
+Purpose: the command line. `--before SPEC...` and `--after SPEC...` run the check (exit 0 all present, 1 something missing, with each missing unit and its
+missing sentences; units longer than 200 characters are cut in the report); `--measure SPEC...` prints characters and `~tokens (chars/4)` per file and exits 0
+unless a check also runs. Neither given: usage error (exit 2). Read only.
