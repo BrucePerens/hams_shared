@@ -202,17 +202,27 @@ def default_command(tree, results_json, passthrough, base):
 # [@ANCHOR: lint_batch:read_results]
 def read_results(path):
     """(selected step names, {failed step: output}) from the combined run's `--results-json` file, or
-    ([], {}) when it is missing or unreadable."""
+    ([], {}) when it is missing or unreadable. A step is failed unless its result says returncode 0: a
+    result with no returncode (null, missing, not a number) and a selected step with no result at all are
+    failures, never passes (a green that nobody earned). A readable file that is not a JSON object is
+    unreadable."""
     import json
     try:
         with open(path, encoding="utf-8") as handle:
             data = json.load(handle)
     except (OSError, ValueError):
         return [], {}
-    selected = data.get("selected") or [s.get("name") for s in data.get("steps", [])]
-    failed = {s["name"]: (data.get("outputs") or {}).get(s["name"], "")
-              for s in data.get("steps", []) if s.get("returncode") not in (0, None)}
-    return [n for n in selected if n], failed
+    if not isinstance(data, dict):
+        return [], {}
+    entries = [s for s in data.get("steps") or [] if isinstance(s, dict) and s.get("name")]
+    selected = [n for n in (data.get("selected") or [s["name"] for s in entries]) if n]
+    outputs = data.get("outputs") or {}
+    failed = {s["name"]: outputs.get(s["name"], "") for s in entries if s.get("returncode") != 0 or isinstance(s.get("returncode"), bool)}
+    ran = {s["name"] for s in entries}
+    for name in selected:
+        if name not in ran:
+            failed.setdefault(name, "the combined run selected this step but reported no result for it")
+    return selected, failed
 
 
 # [@ANCHOR: lint_batch:read_known_red]
@@ -317,13 +327,21 @@ class LintBatch:
                         "detail": "the combined run gave up waiting for the lint lock or the load gate (exit 75)"}
             if code != 0 and not failed:
                 failed = {"run_linters": "".join(captured)[-MAX_OUTPUT_PER_STEP:]}
+            if code == 0 and "run_linters" in failed and not selected:
+                code = 1  # an exit 0 that checked nothing (`collect`)
             return {"exit_code": code, "failures": failed, "conflicted": built["conflicted"], "selected": selected}
         finally:
             batch_queue.remove_tree(self.repo, dest)
 
     def collect(self, tree, results, output, code):
-        """(selected step names, {failed step: output}) of the run that just ended. Lint: the results file."""
-        return read_results(results)
+        """(selected step names, {failed step: output}) of the run that just ended. Lint: the results file. An exit 0 with no step
+        results (no file, an unreadable or empty one) is not a pass: it fails under the name `run_linters`, and the stamp would
+        otherwise carry the step names of an EARLIER run (`last_selected`)."""
+        selected, failed = read_results(results)
+        if code == 0 and not selected and not failed:
+            failed = {"run_linters": "the combined run exited 0 but wrote no step results (%s): nothing was checked\n%s" % (
+                results, output[-2000:])}
+        return selected, failed
 
     # [@ANCHOR: lint_batch:LintBatch_tokens]
     def tokens(self, members):
