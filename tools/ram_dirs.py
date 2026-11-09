@@ -56,6 +56,7 @@ import re
 import resource
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -397,13 +398,16 @@ def newest_mtime(path, depth=2):
 
 # [@ANCHOR: ram_dirs:newest_activity]
 def newest_activity(path, depth=3, per_directory=2000):
-    """Latest modification or access time of `path` and of its entries down to `depth` levels. Cheap: it looks at
-    three levels down (`debug/deps/<file>`) and at most `per_directory` entries of each directory, not every file. Reading a build's files counts as activity, so a
-    directory that something still reads is not idle."""
+    """Latest activity in `path` and its entries down to `depth` levels: the modification time of every entry, and the access
+    time of regular files other than the owner marker. Cheap: it looks at three levels down (`debug/deps/<file>`) and at most
+    `per_directory` entries of each directory. Reading a build's files counts as activity, so a directory that something still
+    reads is not idle. A directory's own access time and the marker's do not count: this program's listing of a directory and its
+    reading of the marker (`owner_state`) move those times under the default `relatime` mount option (an access time at or
+    before the modification time is refreshed by the next read), so counting them made every `gc` or `status` pass restart the
+    idle clock of the directory it was examining."""
     newest = 0.0
     try:
-        st = os.lstat(path)
-        newest = max(st.st_mtime, st.st_atime)
+        newest = os.lstat(path).st_mtime
         if depth > 0:
             with os.scandir(path) as entries:
                 for entry in itertools.islice(entries, per_directory):
@@ -411,7 +415,9 @@ def newest_activity(path, depth=3, per_directory=2000):
                         newest = max(newest, newest_activity(entry.path, depth - 1, per_directory))
                     else:
                         est = entry.stat(follow_symlinks=False)
-                        newest = max(newest, est.st_mtime, est.st_atime)
+                        newest = max(newest, est.st_mtime)
+                        if entry.name != OWNER_FILE and stat.S_ISREG(est.st_mode):
+                            newest = max(newest, est.st_atime)
     except OSError:
         pass
     return newest
