@@ -489,13 +489,14 @@ def stamp_repos(repo_root, tools_dir, dir_path, layout=None):
     return repos
 
 
-def stamp_text(mode, step_names, hosts=(), known_red=""):
+def stamp_text(mode, step_names, hosts=(), known_red="", siblings=()):
     """One line: mode, time, how many steps were selected and their names (the part of a name
     before `[`). prmerge.sh reads it to refuse a stamp that selected nothing for a code change."""
     bases = sorted({name.split("[")[0].split(" ")[0] for name in step_names})
     stamp_time = time.strftime("%Y-%m-%dT%H:%M:%S")
     host_field = f" hosts={','.join(sorted(set(hosts)))}" if hosts else ""
-    return f"{mode} {stamp_time} steps={len(step_names)} names={','.join(bases)}{host_field}{known_red}\n"
+    sibling_field = f" siblings={','.join(sorted(set(siblings)))}" if siblings else ""  # the commits a remote machine's mirrors held
+    return f"{mode} {stamp_time} steps={len(step_names)} names={','.join(bases)}{host_field}{sibling_field}{known_red}\n"
 
 
 def write_batch_stamp(tip, step_names, batch_id, with_tips=(), known_red=""):
@@ -515,7 +516,7 @@ def write_batch_stamp(tip, step_names, batch_id, with_tips=(), known_red=""):
         print(f"(pass stamp not written: {error})", file=sys.stderr)
 
 
-def _write_pass_stamps(repos, mode, step_names=(), hosts=(), known_red=""):
+def _write_pass_stamps(repos, mode, step_names=(), hosts=(), known_red="", siblings=()):
     """Record "run_linters.py passed (mode) with a clean tree at commit <sha>" for each repo
     involved. devbox_tools/prmerge.sh refuses to merge a branch whose tip has no stamp, so a
     PR cannot land without the full or `--changed` run having passed on exactly that code.
@@ -529,7 +530,7 @@ def _write_pass_stamps(repos, mode, step_names=(), hosts=(), known_red=""):
         try:
             os.makedirs(pass_stamp_dir(), exist_ok=True)
             with open(os.path.join(pass_stamp_dir(), head[0]), "w", encoding="utf-8") as handle:
-                handle.write(stamp_text(mode, step_names, hosts, known_red))
+                handle.write(stamp_text(mode, step_names, hosts, known_red, siblings))
         except OSError as error:
             print(f"(pass stamp not written: {error})", file=sys.stderr)
 
@@ -2678,8 +2679,9 @@ def main():
                 fallback_lock[0] = taken
         return lint_exec.execute(wanted, options.jobs)
 
+    remote_siblings = []
     extra_results, remote_hosts = lint_remote.collect(
-        remote_jobs, all_steps, execute_here, lint_exec.Result, on_unfit=lint_remote.record_unfit
+        remote_jobs, all_steps, execute_here, lint_exec.Result, on_unfit=lint_remote.record_unfit, siblings_out=remote_siblings
     )
     results += extra_results
     results, timeout_retried = retry_timed_out_steps(results, all_steps)
@@ -2732,6 +2734,7 @@ def main():
                 [step.name for step in all_steps],
                 remote_hosts,
                 known_red,
+                remote_siblings,
             )
 
     if linters_failed:
