@@ -401,7 +401,7 @@ class SlotTests(Base):
     def test_jobs_are_shared_out_so_all_slots_together_stay_at_half_the_cpus(self):
         """Tests [@ANCHOR: lint_lock:jobs_per_slot]"""
         self.assertEqual(lint_lock.jobs_per_slot(32, 1), 16)
-        self.assertEqual(lint_lock.jobs_per_slot(32, 4), 4)
+        self.assertEqual(lint_lock.jobs_per_slot(32, 4), 6)
         self.assertEqual(lint_lock.jobs_per_slot(8, 4), 2, "never below 2 with several slots")
         self.assertEqual(lint_lock.jobs_per_slot(1, 1), 1)
 

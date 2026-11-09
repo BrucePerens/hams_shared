@@ -102,11 +102,14 @@ def slots_files(environ=None):
 
 # [@ANCHOR: lint_lock:jobs_per_slot]
 def jobs_per_slot(cpu_count, slots):
-    """Parallel steps (`-j`) one run starts on a machine with `slots` lint slots: half the CPUs (the default of a lone run) divided by the
-    slots, at least 2 when there are several slots, so that all slots together do not run more workers than half the CPUs. 32 CPUs
-    (16 cores) over 4 slots is 4 each. Full entry: tools/README.md."""
-    half = max(1, int(cpu_count) // 2)
-    return half if slots <= 1 else max(2, half // slots)
+    """Parallel steps (`-j`) one run starts on a machine with `slots` lint slots: half the CPUs for a lone run; with several slots three quarters of the
+    CPUs divided by the slots, at least 2. 32 CPUs over 4 slots is 6 each (it was 4: the longest steps of a run are single processes or four-worker
+    pytest runs, so a run keeps about two cores busy, and the fifth heavy step of a hams_shared run waited for a free job while the machine idled: 445 s
+    wall against a 225 s longest step, 2026-11-08). The runs are niced and a run starts only when the processors are not saturated, so more jobs
+    per run do not take the machine from the others. Full entry: tools/README.md."""
+    cpus = int(cpu_count)
+    half = max(1, cpus // 2)
+    return half if slots <= 1 else max(2, (cpus * 3 // 4) // slots)
 
 
 # [@ANCHOR: lint_lock:slot_count]
