@@ -25,10 +25,14 @@ fails, and each run takes 20-40 minutes instead of 5. So heavy runs queue:
     bounds the wait; HAMS_LINT_LOAD_LIMIT / HAMS_LINT_LOAD_TIMEOUT (or --load-limit /
     --load-timeout) override those for lint only. The runner-process check of test.py's gate is not
     used here: a lint run does not need the box free of CI, only not overloaded.
-  * NO OVERFLOW (2026-11-08; before that, a run that had to queue was shipped whole to an idle machine). A run that finds every slot
-    taken waits here; it is never sent to another machine because this one is busy. Another machine takes a step only by explicit
-    `--remote HOST`, or with `--remote auto` for a step this machine lacks the tools for. `claim` keeps two runs on this machine from picking
-    the same machine at the same moment (an flock per machine, held while the run's share is executing).
+  * DISTRIBUTION (2026-11-03, narrowed 2026-11-08: overflow only). A run that would have to queue here, because every slot is
+    taken or a run waits for one (on a single-slot machine also: the load is above the limit), does not wait while another machine is idle: run_linters.py
+    --remote auto ships the whole run (every step the machine can run) to the least-loaded capable
+    machine, which has its own lock and gate, and takes this lock only for the steps that must stay
+    here. That remainder (git history, network, this checkout: about 75 s in all) does not queue behind
+    other runs either when its known durations total at most HAMS_LINT_RESIDUE_SECONDS (default 240): it
+    waits only for the load gate. `local_busy` is that decision; `claim` keeps two runs on this machine from picking the same
+    idle machine at the same moment (an flock per machine, held while the run's share is executing).
   * SLOTS (2026-11-08). The dev box has 32 cores and 125 GB: it is the primary lint runner and lets several heavy runs go at
     once, side by side. `slot_count` is the number of runs (HAMS_LINT_SLOTS, else the machine's `lint_slots` in
     lint_machines.json, else 1: the small remote machines keep one). Slot 1 is the lock file above; slot K is
@@ -54,6 +58,7 @@ import lock_queue
 import runner_slots
 
 DEFAULT_CHEAP_SECONDS = 60.0
+DEFAULT_RESIDUE_SECONDS = 240.0
 DEFAULT_LOAD_TIMEOUT_SECONDS = 900.0
 EXIT_TEMPFAIL = lock_queue.EXIT_WAIT_TIMEOUT  # 75, same as test.py's wait timeout
 POLL_SECONDS = 15.0
@@ -205,6 +210,11 @@ def lock_decision(environ, pending_names, durations):
     return True, "heavy run"
 
 
+def residue_seconds(environ=None):
+    environ = os.environ if environ is None else environ
+    return _finite(environ.get("HAMS_LINT_RESIDUE_SECONDS"), DEFAULT_RESIDUE_SECONDS)
+
+
 def describe_info(worktree, command):
     return "%s\t%s" % (worktree, command)
 
@@ -336,6 +346,43 @@ def enter_slot(lock, environ=None, base_tmp=None):
 def running_count(qdir):
     """How many runs hold a slot right now (live holder records, one per slot)."""
     return len(lock_queue.read_holders(qdir))
+
+
+def local_busy(environ=None, loadavg=None, cpu_count=None, qdir=None, slots=None):
+    """(busy, reason): True when a heavy run started now would wait here for a slot: every slot is taken or a run waits for one.
+    With a single slot that is "a lint run holds or waits for the lock", as before, and also a 1-minute load average above the
+    limit; with several slots the load does not count (the run waits at the load gate instead, which `load_limit` sizes for the
+    machine). Takes no lock; reads the queue only."""
+    environ = os.environ if environ is None else environ
+    qdir = qdir or queue_dir(environ)
+    slots = slot_count(environ) if slots is None else slots
+    tickets = lock_queue.live_tickets(qdir, clean=False)
+    holders = lock_queue.read_holders(qdir)
+    if slots <= 1:
+        if tickets or lock_queue.read_holder(qdir):
+            return True, "%d lint run(s) hold or wait for the lock here" % max(len(tickets), 1)
+    else:
+        running = {h.get("ticket") for h in holders if h.get("ticket")}
+        running_pids = {h.get("pid") for h in holders}  # a holder written by an older checkout names no ticket
+        waiting = [t for t in tickets if t["name"] not in running and t["pid"] not in running_pids]
+        if len(holders) >= slots:
+            return True, "all %d lint slots are busy here (%d waiting)" % (slots, len(waiting))
+        if waiting:
+            return True, "%d lint run(s) wait for a slot here (%d of %d slots running)" % (len(waiting), len(holders), slots)
+    if slots > 1:
+        # A machine with several slots (the dev box) is not "busy" because its load is high: that is its other work, mostly niced
+        # (cargo tests, the other lint runs), and a smaller machine would finish later than this run waiting at the load gate.
+        return False, "a lint slot is free (%d of %d running)" % (len(holders), slots)
+    if environ.get("HAMS_SKIP_CI_LOAD_GATE") == "1":
+        return False, "the lock is free"
+    try:
+        current = (loadavg or (lambda: os.getloadavg()[0]))()
+    except OSError:
+        return False, "the lock is free"
+    limit = load_limit(environ, cpu_count=cpu_count)
+    if current > limit:
+        return True, "load %.1f is above the lint limit %.1f" % (current, limit)
+    return False, "the lock is free and the load is %.1f" % current
 
 
 def claim_dir(environ=None):
@@ -601,10 +648,19 @@ def gate(environ, load_limit_override=None, load_timeout_override=None, out=prin
 
 
 def begin_heavy_run(environ, pending_names, durations, worktree, command, lock_timeout=None,
-                    load_limit_override=None, load_timeout_override=None, out=print):
+                    load_limit_override=None, load_timeout_override=None, out=print, residue=False):
     """Everything run_linters.py does before it starts steps. Returns (ok, RunLock or None); on
-    not ok the caller exits with EXIT_TEMPFAIL after printing what `out` received."""
+    not ok the caller exits with EXIT_TEMPFAIL after printing what `out` received.
+
+    `residue`: the rest of this run went to other machines, so these are the few steps that had to stay
+    (or came back): when they are short they take no place in the queue, only the load gate."""
     take, reason = lock_decision(environ, pending_names, durations)
+    if take and residue and is_cheap(pending_names, durations, residue_seconds(environ)):
+        out("[*] lint lock not needed: the steps left here total at most %g s (the rest of the run is on other machines)"
+            % residue_seconds(environ))
+        if not gate(environ, load_limit_override, load_timeout_override, out=out):
+            return False, None
+        return True, None
     if not take:
         if reason.startswith(("cheap", "no step")):
             out("[*] lint lock not needed: " + reason)
