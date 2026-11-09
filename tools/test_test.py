@@ -551,6 +551,8 @@ class SlotWiringMainTests(unittest.TestCase):
             try:
                 with contextlib.ExitStack() as stack:
                     stack.enter_context(patch.dict(os.environ, env))
+                    if "TMPDIR" not in env_overrides:
+                        os.environ.pop("TMPDIR", None)  # the caller's own (a lint slot sets one) is not what the run under test chooses
                     stack.enter_context(patch.object(_test_runner, "_CHROME_KILL_PATTERN", _test_runner._CHROME_KILL_PATTERN))
                     stack.enter_context(patch.object(_test_runner, "_CHROME_PROFILE_GLOBS", _test_runner._CHROME_PROFILE_GLOBS))
                     stack.enter_context(patch.object(sys, "argv", ["test.py", "-u", "dummy_mod", *argv]))
