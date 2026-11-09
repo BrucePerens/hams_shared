@@ -2250,6 +2250,17 @@ MANIFEST = {
     ],
     "directories": [
         {
+            # Odoo's log directory, group adm, mode 750: pager-log-analyzer.service reads /var/log/odoo/odoo-server.log as nobody:adm
+            # after its chroot, so adm must be able to enter the directory (hams1 had odoo:odoo 750 and the log was unreachable until
+            # the coordinator ran `chgrp adm /var/log/odoo` by hand, 2026-11-07). The files inside are 0644 and logrotate's
+            # copytruncate keeps their owner. production_readiness_check.py's check_pager_log_readable reads the file as nobody:adm.
+            # [@ANCHOR: infrastructure:var_log_odoo_directory]
+            "path": "/var/log/odoo",
+            "owner": "odoo:adm",
+            "provision_mode": "750",
+            "environments": ["prod", "test"],
+        },
+        {
             # The pagerduty maintenance flag lives here (/etc/pagerduty/maintenance, written by root only, mode 0644).
             # 0755 so the monitors, which run as other users with a read-only /etc, can read it. See hams_open's
             # pager_duty/daemon/pagerduty_maintenance.py.

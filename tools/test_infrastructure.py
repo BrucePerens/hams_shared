@@ -7465,6 +7465,13 @@ class PagerLogAnalyzerUnitTests(_SafePatchTestCase):
         self.assertNotIn("/opt/odoo/addons", text)
         self.assertNotIn("/etc/pager_daemons.env", text)
 
+    def test_the_odoo_log_directory_is_group_adm_so_the_analyzer_can_enter_it(self):
+        # Tests [@ANCHOR: infrastructure:var_log_odoo_directory]
+        entries = [d for d in infra.MANIFEST["directories"] if d["path"] == "/var/log/odoo"]
+        self.assertEqual(len(entries), 1)
+        self.assertEqual((entries[0]["owner"], entries[0]["provision_mode"]), ("odoo:adm", "750"))
+        self.assertIn("prod", entries[0]["environments"])
+
     def test_unit_loads_the_redis_login_only_and_names_the_monitors_config_file(self):
         files = re.findall(r"^EnvironmentFile=(\S+)$", self._text(), re.M)
         self.assertEqual(files, ["/opt/hams/etc/redis.env"])
