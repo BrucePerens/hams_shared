@@ -2175,6 +2175,26 @@ def run_psql_script(psql_cmd, args, sql, what, env=None, preexec_fn=None):
         sys.exit(1)
 
 
+# [@ANCHOR: test:role_sql_for_test_user]
+def role_sql_for_test_user(user):
+    """The psql script that creates the `odoo` role and a superuser role for `user` (the invoking account, `SUDO_USER`) when missing.
+    `user` is checked against `^[A-Za-z_][A-Za-z0-9_-]*$` (ValueError otherwise) and written as a quoted identifier, so an odd
+    name can never become SQL. Full entry: tools/README.md."""
+    if not re.match(r"^[A-Za-z_][A-Za-z0-9_-]*\Z", user):
+        raise ValueError(f"the invoking user name {user!r} (SUDO_USER) is not usable as a database role name; refusing to build SQL from it.")
+    return f"""
+    DO $$
+    BEGIN
+        IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'odoo') THEN
+            CREATE ROLE odoo WITH SUPERUSER LOGIN PASSWORD 'odoo';
+        END IF;
+        IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '{user}') THEN
+            CREATE ROLE "{user}" WITH SUPERUSER LOGIN;
+        END IF;
+    END $$;
+    """
+
+
 # [@ANCHOR: test:rebuild_db]
 def rebuild_db(db_name, redis_flush_db=None):
     # SQL here is built by string interpolation with no parameterization: `db_name` below is
@@ -2841,17 +2861,11 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
 
     wait_for_socket(f"{pg_sock}/.s.PGSQL.5432", "PostgreSQL")
 
-    sql_create_roles = f"""
-    DO $$
-    BEGIN
-        IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'odoo') THEN
-            CREATE ROLE odoo WITH SUPERUSER LOGIN PASSWORD 'odoo';
-        END IF;
-        IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '{orig_user}') THEN
-            CREATE ROLE {orig_user} WITH SUPERUSER LOGIN;
-        END IF;
-    END $$;
-    """
+    try:
+        sql_create_roles = role_sql_for_test_user(orig_user)
+    except ValueError as e:
+        print(f"❌ ERROR: {e}")
+        sys.exit(1)
     run_psql_script(psql_cmd, ["-h", pg_sock, "-d", "postgres"], sql_create_roles, "creating the odoo and test-user roles", preexec_fn=preexec_pg)
 
     # 4. Redis Sandboxing
@@ -4270,6 +4284,8 @@ def parse_runner_args(argv=None):
             args.slots = runner_slots.parse_slot_count(args.slots, "--slots")
         except runner_slots.SlotConfigError as e:
             parser.error(str(e))
+    if not _SAFE_DB_NAME_RE.match(args.db):  # also checked in rebuild_db; failing here costs nothing instead of a minute of set-up
+        parser.error(f"--db {args.db!r} is not a safe database name (must match ^[A-Za-z_][A-Za-z0-9_]*$).")
     if args.slot_held is not None and not 1 <= args.slot_held <= (args.slots or 1):
         parser.error(f"--slot-held {args.slot_held} is outside the --slots range 1..{args.slots or 1}")
     if args.bisect_modules and not (args.module and args.test_tags):
@@ -4366,6 +4382,11 @@ def apply_slot_resources(resources):
     global _CHROME_KILL_PATTERN, _CHROME_PROFILE_GLOBS
     if not resources.scoped:
         return
+    if os.path.islink(resources.tmpdir):
+        # makedirs/chmod/stat would follow it: whoever planted the link would get a 0777 directory of their choosing.
+        print(f"❌ ERROR: the slot directory {resources.tmpdir} is a symbolic link; refusing to use it. "
+              f"Inspect it and remove the link: rm {resources.tmpdir}")
+        sys.exit(1)
     os.makedirs(resources.tmpdir, exist_ok=True)
     # chmod only when the mode differs: a directory another account created (the odoo account's earlier run) that is
     # already 0777 is exactly what is wanted, and chmod on it fails with EPERM for everyone but its owner.

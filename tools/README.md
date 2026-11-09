@@ -1613,9 +1613,15 @@ line` and returns 1. `results_before` is the number of verdict lines held before
 `run_cmd` records its status in `FailureExtractor.child_exit_status`; `finish_and_write()` then prints `TEST RUN FAILED: no tests ran` when no
 verdict exists (it used to print "No test failures or system crashes detected") and `Odoo exited with status N` for any non-zero status.
 
+### `[@ANCHOR: test:role_sql_for_test_user]` `role_sql_for_test_user(user)`
+
+Purpose: the psql script of the isolated run's role set-up: creates the `odoo` role and a superuser role named `user` (the invoking account, `SUDO_USER`,
+default `odoo`) when missing. `user` must match `^[A-Za-z_][A-Za-z0-9_-]*$` (anything else raises `ValueError`, and the caller prints it and exits 1), and the
+role is written as a quoted identifier, so a name from the environment can never become SQL. Pure: returns the script text.
+
 ### `[@ANCHOR: test:apply_slot_resources]` `apply_slot_resources(resources)`
 
-Purpose: makes the process-wide choices a scoped slot needs; does nothing for a run that is not scoped. Creates `resources.tmpdir` (changing its
+Purpose: makes the process-wide choices a scoped slot needs; does nothing for a run that is not scoped. Refuses (prints the path, exits 1) a slot directory that is a symbolic link. Creates `resources.tmpdir` (changing its
 mode to 0777 only when the mode is not already 0777: a directory another account created, such as the `odoo` account's earlier
 `/var/lib/odoo/tmp/slot-K`, cannot be `chmod`ed by anyone else, and needs no change; when the mode differs and `chmod` fails, the run prints the
 directory, its mode, the owner's uid and `sudo chmod 0777 <dir>` and exits 1) and sets `TMPDIR` to it, so Odoo's Chrome profiles (`tempfile` under `TMPDIR`, suffix `_chrome_odoo`) are the only
