@@ -4409,6 +4409,7 @@ class HostClassTests(unittest.TestCase):
         b2_units = {
             "hams-b2-backup.service", "hams-b2-backup.timer", "hams-b2-restore-test.service",
             "hams-b2-restore-test.timer", "hams-b2-backup-check.service", "hams-b2-backup-check.timer",
+            "hams-backup-selftest.service", "hams-backup-selftest.timer",
         }
         self.assertEqual(
             infra.host_class_unit_names(),
@@ -4567,6 +4568,8 @@ class ExternalFetchUnitClassificationTests(unittest.TestCase):
         "hams-b2-backup.timer": "activates hams-b2-backup.service (own bucket)",
         "hams-b2-restore-test.service": "reads back our own B2 bucket into a scratch location and database",
         "hams-b2-restore-test.timer": "activates hams-b2-restore-test.service (own bucket)",
+        "hams-backup-selftest.service": "restores our own pgBackRest repository and kopia bucket into a scratch cluster on this host; fetches nothing from a third party",
+        "hams-backup-selftest.timer": "activates hams-backup-selftest.service (own repositories)",
         "hams-b2-backup-check.service": "reads two local status files",
         "hams-b2-backup-check.timer": "activates hams-b2-backup-check.service (local)",
         "hams-tenant-restore-test.timer": "activates hams-tenant-restore-test.service (local)",
