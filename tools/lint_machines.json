@@ -78,16 +78,14 @@
       }
     },
     "bruce16": {
-      "pending_address": true,
-      "host": "bruce16.lan",
-      "user": "ai",
-      "provisioned": false,
+      "ssh": {"target": "ai@bruce16.lan", "args": ["-i", "~/.secrets/hams.com/ai_ed25519", "-o", "IdentitiesOnly=yes"]},
+      "jobs": 8,
       "os": "linux",
       "nice": 19,
       "max_concurrent": 1,
       "max_load_ratio": 0.25,
       "reserve": {"skip_when_user_session": true, "max_core_fraction": 0.5, "never_caps": ["chrome"]},
-      "note": "Optional OVERFLOW machine, used only when the primary runner is saturated and never for the browser: it is somebody's interactive workstation, so it has the lowest priority (nice 19), at most half its cores, no step that needs a browser (Chrome), a low load limit, and it is skipped while a login session is open. Not provisioned yet: it stays without an `ssh` entry (so `run_linters.py --where` lists it as not a runner) until `ssh ai@bruce16.lan` works from the server and `lint_remote.py provision bruce16 --apply` has run; then add the `ssh` entry and drop `pending_address`."
+      "note": "Optional OVERFLOW machine (the reserve policy: `apply_reserve` in lint_remote.py), used only when the primary runner is saturated and never for the browser: it is somebody's interactive workstation, so it has the lowest priority (nice 19), at most half its cores, no step that needs a browser (Chrome), a low load limit, and it is skipped while a login session is open. Provisioned and verified 2026-11-08 with tools/provision_build_host.sh (Debian 13 x86-64, 16 cores, 15 GB); reached as ai@bruce16.lan with the project ai key, named by path and never read."
     },
     "bruce-yoga": {
       "ssh": {

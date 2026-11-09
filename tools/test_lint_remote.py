@@ -869,11 +869,45 @@ class ReserveTests(unittest.TestCase):
         self.assertEqual(plan.remote, {})
         self.assertIn("user session", " ".join(plan.notes))
 
-    def test_the_probe_reads_sessions_and_the_real_inventory_entry_is_not_a_runner_until_it_has_an_address(self):
+    def test_the_probe_reads_sessions_and_the_real_inventory_entry_is_a_reserved_runner(self):
         self.assertEqual(lr.parse_probe("m", "os=Linux\ncores=4\nsessions=3\n").sessions, 3)
         self.assertEqual(lr.parse_probe("m", "os=Linux\nsessions=x\n").sessions, 0)
         real = lr.load_inventory()
-        self.assertEqual((real["bruce16"]["host"], real["bruce16"]["user"], real["bruce16"]["provisioned"]), ("bruce16.lan", "ai", False))
-        self.assertNotIn("bruce16", lr.runners(real))
+        self.assertIn("bruce16", lr.runners(real))
+        self.assertEqual(real["bruce16"]["ssh"]["target"], "ai@bruce16.lan")
+        self.assertIn("IdentitiesOnly=yes", real["bruce16"]["ssh"]["args"])
         self.assertEqual(real["bruce16"]["nice"], 19)
         self.assertTrue(real["bruce16"]["reserve"]["skip_when_user_session"])
+        self.assertIn("chrome", real["bruce16"]["reserve"]["never_caps"])
+
+
+class PipPinsOnDirtyHostTests(unittest.TestCase):
+    """provision_build_host.sh: a host with overlapping copies of a pinned package (bruce16, 2026-11-08) is repaired, not hand-fixed."""
+
+    SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "provision_build_host.sh")
+
+    def missing(self, site_versions, pin):
+        text = open(self.SCRIPT, encoding="utf-8").read()
+        code = text.split("python3 - \"$REQS\" <<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            for version in site_versions:
+                info = os.path.join(tmp, "zzfakepkg-%s.dist-info" % version)
+                os.makedirs(info)
+                write(os.path.join(info, "METADATA"), "Metadata-Version: 2.1\nName: zzfakepkg\nVersion: %s\n" % version)
+            reqs = os.path.join(tmp, "reqs.txt")
+            write(reqs, "zzfakepkg==%s \\\n    --hash=sha256:00\n" % pin)
+            out = subprocess.run([sys.executable, "-c", code, reqs], capture_output=True, text=True,
+                                 env=dict(os.environ, PYTHONPATH=tmp), check=True).stdout
+        return out.split()
+
+    def test_one_matching_copy_is_satisfied_and_overlapping_or_wrong_copies_are_reinstalled(self):
+        self.assertEqual(self.missing(["2.0"], "2.0"), [])
+        self.assertEqual(self.missing(["2.0", "1.0"], "2.0"), ["zzfakepkg==2.0"])
+        self.assertEqual(self.missing(["1.0"], "2.0"), ["zzfakepkg==2.0"])
+        self.assertEqual(self.missing([], "2.0"), ["zzfakepkg==2.0"])
+
+    def test_the_install_ignores_what_is_installed_and_adds_no_dependencies(self):
+        text = open(self.SCRIPT, encoding="utf-8").read()
+        line = [ln for ln in text.splitlines() if "pip install --user" in ln][0]
+        for flag in ("--ignore-installed", "--no-deps", "--require-hashes"):
+            self.assertIn(flag, line)
