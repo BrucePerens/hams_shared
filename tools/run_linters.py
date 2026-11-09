@@ -529,6 +529,21 @@ def stamped_head_repo(repo_root, dir_path, layout=None):
     return dir_path if layout is not None else repo_root
 
 
+# [@ANCHOR: run_linters:tree_status_lines]
+def tree_status_lines(repo):
+    """`git status --porcelain` of `repo`, WITHOUT the working-tree (unstaged) state of its `hams_shared` submodule path.
+
+    A hams_open worktree never has that path in the state its commit records: `fix_worktree_symlinks.py` replaces the
+    submodule directory with a symlink to the main checkout's `hams_shared`, and a worktree that ran
+    `git submodule update` and then moved the checkout to origin/main (the preflight demands current tools) shows
+    ` M hams_shared`. Neither is part of the commit a pass stamp vouches for, yet either made the tree "dirty" and the
+    stamp was silently not written (a symlink the skip-worktree bit no longer covers makes `git status` itself fail,
+    which reads as dirty too). The setting is applied to this one call only (`-c`, never written to a config file), so
+    plain `git status` keeps showing the pointer. A STAGED pointer change (`M  hams_shared`) is still reported, and so
+    is every other path: only the unstaged column of the submodule path is dropped. None when git fails."""
+    return _git_lines(repo, "-c", "submodule.hams_shared.ignore=all", "status", "--porcelain")
+
+
 def _write_pass_stamps(repos, mode, step_names=(), hosts=(), known_red="", siblings=(), impact=()):
     """Record "run_linters.py passed (mode) with a clean tree at commit <sha>" for each repo
     involved. devbox_tools/prmerge.sh refuses to merge a branch whose tip has no stamp, so a
@@ -537,7 +552,7 @@ def _write_pass_stamps(repos, mode, step_names=(), hosts=(), known_red="", sibli
     was linted) or when the run was scoped by --only/--skip/module names."""
     for repo in repos:
         head = _git_lines(repo, "rev-parse", "HEAD")
-        dirty = _git_lines(repo, "status", "--porcelain")
+        dirty = tree_status_lines(repo)
         if not head or dirty is None or dirty:
             continue
         try:
@@ -2617,7 +2632,7 @@ def main():
     member_repo = dir_path if layout is not None else repo_root
     member_name = lint_batch.SHARED_TREE_NAME if layout is not None else os.path.basename(main_checkout_root.rstrip(os.sep))
     member_head = _git_lines(member_repo, "rev-parse", "HEAD") if layout is not None else head_before
-    status_lines = _git_lines(member_repo, "status", "--porcelain")
+    status_lines = tree_status_lines(member_repo)
     batch_reason = lint_batch.ineligible_reason(
         changed=options.changed, only=options.only, skip=options.skip, modules=target_modules_str,
         solo=options.solo, bundle=options.run_bundle, environ=os.environ,
