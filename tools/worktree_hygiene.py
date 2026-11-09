@@ -211,6 +211,12 @@ def holding_processes(path, exempt=None):
     return sorted(set(h for h in holders if h[0] not in exempt))
 
 
+def _idle(now, touched, stale_seconds):
+    """True when something last touched at `touched` has been idle for `stale_seconds`. A limit of 0 (the post-merge `--branch` mode) is
+    always met: file times can be a moment ahead of time.time(), so a change made just now would otherwise read as not yet idle."""
+    return stale_seconds <= 0 or now - touched >= stale_seconds
+
+
 def run(repo, apply, stale_seconds, merged_heads, now=None, only_branch=None, holders_of=holding_processes):
     now = now or time.time()
     report = {"removed": [], "deleted": [], "stale": [], "kept": [], "held": []}
@@ -224,7 +230,7 @@ def run(repo, apply, stale_seconds, merged_heads, now=None, only_branch=None, ho
             report["held"].append((path, branch, [("locked", "git worktree lock")]))
             continue
         dirty = bool(git(path, "status", "--porcelain", check=False))
-        if branch and not dirty and is_merged(repo, branch, merged_heads) and now - worktree_activity(path) >= stale_seconds:
+        if branch and not dirty and is_merged(repo, branch, merged_heads) and _idle(now, worktree_activity(path), stale_seconds):
             holders = holders_of(path)
             if holders:
                 report["held"].append((path, branch, holders))
@@ -235,7 +241,7 @@ def run(repo, apply, stale_seconds, merged_heads, now=None, only_branch=None, ho
             report["removed"].append((path, branch))
             continue
         ahead = branch and not is_merged(repo, branch, merged_heads)
-        if (dirty or ahead) and now - last_touched(path) >= stale_seconds:
+        if (dirty or ahead) and _idle(now, last_touched(path), stale_seconds):
             report["stale"].append((path, branch, "uncommitted changes" if dirty else "commits not in main"))
         else:
             report["kept"].append((path, branch))
@@ -243,7 +249,7 @@ def run(repo, apply, stale_seconds, merged_heads, now=None, only_branch=None, ho
     for branch in git(repo, "for-each-ref", "--format=%(refname:short)", "refs/heads").splitlines():
         if branch == default or branch in checked_out or (only_branch and branch != only_branch):
             continue
-        if is_merged(repo, branch, merged_heads) and now - branch_activity(repo, branch) >= stale_seconds:
+        if is_merged(repo, branch, merged_heads) and _idle(now, branch_activity(repo, branch), stale_seconds):
             if apply:
                 git(repo, "branch", "-D", branch)
             report["deleted"].append(branch)
