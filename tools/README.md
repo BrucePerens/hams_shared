@@ -1094,7 +1094,7 @@ back for nothing. The gate holds the run only while
   figure `some avg10` in `/proc/pressure/cpu` is at or above `HAMS_CI_LOAD_GATE_PSI_PERCENT` (default 25). With one of the two unavailable the other decides
   alone; with neither the box is not busy. Pressure is read first: below its limit no sampling window is needed and the gate costs one file read.
 
-`HAMS_CI_LOAD_GATE_RATIO` keeps working: when it is set, the old load-average rule (load average above cores x ratio) applies as well. `HAMS_CI_LOAD_GATE_TIMEOUT`
+`HAMS_CI_LOAD_GATE_RATIO` alone is IGNORED, with a loud warning (`legacy_load_gate_ratio`): it switched the gate to the legacy load-average rule (load average above cores x ratio) that Bruce rejected (a load average in the thirties is normal on the dev box) and overrode the CPU and pressure rule, so runs started from an old command line stalled. With `HAMS_CI_LOAD_GATE_LEGACY=1` as well the old rule applies in addition. `HAMS_CI_LOAD_GATE_TIMEOUT`
 (default 900 s) and `HAMS_SKIP_CI_LOAD_GATE=1` are unchanged. The gate runs per run, when the run reaches the head of the wait queue, not under a lock: with
 several free slots the oldest waiters (as many as there are free slots) are all heads and gate at the same time, so one run's gate never holds the other slots
 behind it. The lint run lock (`lint_lock.py`) has its own load gate and is not changed.
@@ -2052,7 +2052,7 @@ Purpose: the shard split. Returns a list of lists of module names, each module i
 
 ### `[@ANCHOR: gate_snapshot:shard_command]` `shard_command(trees, shard, log_directory, relay_binary, extra_env=None)`
 
-Purpose: the exact command line of one shard: `cd <gate hams_com> && source /etc/profile.d/hams_test_environment.sh && nice -n 10 sudo -n -u odoo env HAMS_ISOLATED_NS=1 HAMS_CI_LOAD_GATE_RATIO=3 HAMS_CRYPTO_KEY="$HAMS_CRYPTO_KEY" GIT_DISCOVERY_ACROSS_FILESYSTEM=1 HAMS_OPEN_TREE=<gate hams_open> HAMS_CONSOLE_TEST_RELAY_BIN=<binary> python3 hams_shared/tools/test.py --wait --solo -l <log directory> -u <modules>`. Queued (`--wait`) behind other runs and slots, never batched (`--solo`). Pure; the string is run by a shell.
+Purpose: the exact command line of one shard: `cd <gate hams_com> && source /etc/profile.d/hams_test_environment.sh && HAMS_OPEN_TREE=<gate hams_open> HAMS_CONSOLE_TEST_RELAY_BIN=<binary> HAMS_TEST_BATCH=off nice -n 10 python3 hams_shared/tools/test.py --wait -l <log directory> -u <modules>`. The full pipeline as the invoking user (a slot, a private network namespace, its own databases), queued (`--wait`) behind other runs; `HAMS_TEST_BATCH=off` because a snapshot run must test exactly the snapshot's commits and not join a batch of other branches. No `sudo -u odoo`, `HAMS_ISOLATED_NS` or `HAMS_CI_LOAD_GATE_RATIO`: those stalled runs. Pure; the string is run by a shell.
 
 ### `[@ANCHOR: gate_snapshot:verify_snapshot]` `verify_snapshot(gate_dir, fetch=True, environ=None, cargo_target_dir=None)`
 
@@ -2080,7 +2080,7 @@ python3 hams_shared/tools/gate_canary.py status
 ```
 
 `run` takes `<state-dir>/canary.lock` (a second run exits 3 at once), then: builds the gate tree with `gate_snapshot.py` (a stale or missing input is a refusal, exit 2), runs each shard's command line
-(`gate_snapshot.shard_command`, so through the ordinary `test.py` slot queue, `nice -n 10`, as the `odoo` account) one shard at a time (`--jobs`; `--max-jobs-when-idle` raises it when the one-minute load
+(`gate_snapshot.shard_command`, so through the ordinary `test.py` slot queue, `nice -n 10`, as the invoking user) one shard at a time (`--jobs`; `--max-jobs-when-idle` raises it when the one-minute load
 average is below 4, never above the machine's slot count), re-verifies the snapshot (no fetch) before each shard, reads each shard's `test_results.json` (written by `test.py` when a run fails; known-red and flaky
 tests are already separated, ADR 0118) and writes, atomically:
 
@@ -2093,8 +2093,8 @@ tests are already separated, ADR 0118) and writes, atomically:
 When a NEW failure appears, each shard that has one is bisected: the shard's own command with `--bisect-modules --test-tags /module:Class,... --bisect-max-runs 30 --bisect-report <shard log directory>/bisect_report.json`
 appended (see "Minimal module sets"). Exit status: 0 green, 1 red, 2 refused, 3 already running. `--only-if-new-commit` does nothing when `origin/main` of hams_com and hams_open is what the last run tested.
 
-It runs on this machine only: no remote host, no `kill`, refuses on the production host. With several slots, shards that run at once use `HAMS_ISOLATED_NS=1` on the host, where a module that mentions RabbitMQ is refused above slot 1
-while a RabbitMQ listens (ADR 0116): keep `--jobs 1` unless that is understood.
+It runs on this machine only: no remote host, no `kill`, refuses on the production host. Each shard is the full pipeline (a private network namespace per run), so shards that run at once work in any slot, RabbitMQ modules included; `--jobs` and `--max-jobs-when-idle` bound how many.
+
 
 **systemd.** `tools/hams-gate-canary.service` (oneshot, `Nice=10`, idle I/O, `--only-if-new-commit`) and `tools/hams-gate-canary.timer` (01:30 nightly, `Persistent=true`) are user units. They are provided and not enabled; the install and
 enable commands are in the service file's header comment. On demand: `systemctl --user start hams-gate-canary.service` or run the script.
@@ -2138,6 +2138,25 @@ Long: the shards take as long as the whole-system run (about 75 minutes of tests
 ### `[@ANCHOR: gate_canary:main]` `main(argv=None, out=print)`
 
 Purpose: the command line. `run` returns `run_canary`'s status (1 also for unreadable results); `status` prints `status.json` and returns 0, or 1 when there is none.
+
+### `[@ANCHOR: test:legacy_load_gate_ratio]` `legacy_load_gate_ratio(environ, ratio, say=print)`
+
+Purpose: stops the old `HAMS_CI_LOAD_GATE_RATIO=3` command line from stalling runs. Called by `wait_for_ci_load_to_subside`.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `environ` | mapping | Where `HAMS_CI_LOAD_GATE_RATIO` and `HAMS_CI_LOAD_GATE_LEGACY` are read. |
+| `ratio` | float | The parsed ratio (`_ci_load_gate_settings`). |
+| `say` | callable | Prints the warning. |
+
+Returns None when the ratio variable is unset or set without `HAMS_CI_LOAD_GATE_LEGACY=1` (and then calls `say` with a loud warning that the variable is ignored: it would apply the load-average rule Bruce rejected and override the CPU/pressure rule),
+and `ratio` when `HAMS_CI_LOAD_GATE_LEGACY=1` is also set. Pure apart from `say`.
+
+### `[@ANCHOR: test:warn_isolated_ns_with_slots]` `warn_isolated_ns_with_slots(environ, slots, say=print)`
+
+Purpose: warns about `HAMS_ISOLATED_NS=1` on a machine with several slots, called from `main()` right after the slot count is known. Returns True when it warned: `HAMS_ISOLATED_NS` is `1`, this is not the re-exec'd final phase
+(`HAMS_TEST_LOCK_HELD` is not `1`) and `slots` is above 1. The message says the run is pinned to the host network namespace (RabbitMQ modules refused above slot 1, ADR 0116) and gives the normal command, `python3 hams_shared/tools/test.py --wait -u <modules>`.
+Never changes behaviour. Pure apart from `say`.
 
 ## Staged-file size check
 

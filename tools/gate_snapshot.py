@@ -306,17 +306,16 @@ def make_shards(modules, count, previous=None):
 
 # [@ANCHOR: gate_snapshot:shard_command]
 def shard_command(trees, shard, log_directory, relay_binary, extra_env=None):
-    """The exact shell command line that runs one shard: from the gate's hams_com tree, the test environment sourced, as
-    the `odoo` account, at `nice -n 10`, with `HAMS_OPEN_TREE` and the relay binary set, queued (`--wait`), alone (`--solo`),
-    with its own log directory. Returns the string. Pure."""
-    env = {
-        "HAMS_ISOLATED_NS": "1", "HAMS_CI_LOAD_GATE_RATIO": "3", "HAMS_CRYPTO_KEY": '"$HAMS_CRYPTO_KEY"',
-        "GIT_DISCOVERY_ACROSS_FILESYSTEM": "1", OPEN_TREE_ENV: shlex.quote(trees.open), RELAY_BIN_ENV: shlex.quote(relay_binary),
-    }
+    """The exact shell command line that runs one shard: from the gate's hams_com tree, the test environment sourced, as the
+    invoking user (the full pipeline: `test.py` takes a slot, a private network namespace and its own databases), at `nice -n 10`,
+    with `HAMS_OPEN_TREE` and the relay binary set, queued (`--wait`), and with `HAMS_TEST_BATCH=off`: a snapshot run tests exactly
+    the snapshot's commits, so it must not join a combined batch of other branches. No `sudo -u odoo`, no `HAMS_ISOLATED_NS`, no
+    `HAMS_CI_LOAD_GATE_RATIO` (those stall runs). Returns the string. Pure."""
+    env = {OPEN_TREE_ENV: shlex.quote(trees.open), RELAY_BIN_ENV: shlex.quote(relay_binary), "HAMS_TEST_BATCH": "off"}
     env.update(extra_env or {})
     assignments = " ".join("%s=%s" % (k, v) for k, v in env.items())
     return (
-        "cd %s && source %s && nice -n 10 sudo -n -u odoo env %s python3 hams_shared/tools/test.py --wait --solo -l %s -u %s"
+        "cd %s && source %s && %s nice -n 10 python3 hams_shared/tools/test.py --wait -l %s -u %s"
         % (shlex.quote(trees.com), ENV_FILE, assignments, shlex.quote(log_directory), ",".join(shard))
     )
 

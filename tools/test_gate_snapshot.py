@@ -181,8 +181,10 @@ class CreateTests(SnapshotTestBase):
         with open(os.path.join(trees["parent"], "gate_shards.json")) as handle:
             self.assertEqual(json.load(handle), manifest["shards"])
         command = manifest["commands"][0]
-        for part in ("sudo -n -u odoo", "nice -n 10", "HAMS_OPEN_TREE=" + trees["open"], "--wait", "--solo", "-u "):
+        for part in ("nice -n 10", "HAMS_OPEN_TREE=" + trees["open"], "--wait", "HAMS_TEST_BATCH=off", "-u "):
             self.assertIn(part, command)
+        for stale in ("sudo", "HAMS_ISOLATED_NS", "HAMS_CI_LOAD_GATE_RATIO", "--solo"):
+            self.assertNotIn(stale, command)
         self.assertEqual(gs.verify_snapshot(trees["parent"], environ=self.env(manifest)), [])
         self.assertTrue(os.path.isfile(os.path.join(trees["open"], "daemons/cloudflared-ffi/libcloudflared.so")))
 

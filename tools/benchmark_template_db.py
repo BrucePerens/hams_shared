@@ -1186,7 +1186,6 @@ class Bench:
 # [@ANCHOR: tools:template_db_run_command]
 def run_command(args):
     """`run`: one module set, every arm, `--reps` repetitions interleaved, results written to `--out-dir`."""
-    os.environ.setdefault("HAMS_CI_LOAD_GATE_RATIO", "3")
     bench = Bench(args)
     runner = bench.runner
     key = bench.build_key()

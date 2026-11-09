@@ -456,6 +456,49 @@ class MainModeDispatchTests(unittest.TestCase):
         mock_run_cmd.assert_called_once()
 
 
+class StaleCommandFormTests(unittest.TestCase):
+    """The old `sudo -u odoo env HAMS_ISOLATED_NS=1 HAMS_CI_LOAD_GATE_RATIO=3 ...` command line made runs stall.
+
+    Tests [@ANCHOR: test:legacy_load_gate_ratio]
+    Tests [@ANCHOR: test:warn_isolated_ns_with_slots]
+    """
+
+    def test_the_ratio_alone_is_ignored_with_a_loud_warning(self):
+        said = []
+        self.assertIsNone(_test_runner.legacy_load_gate_ratio({"HAMS_CI_LOAD_GATE_RATIO": "3"}, 3.0, said.append))
+        self.assertEqual(len(said), 1)
+        self.assertIn("IGNORED", said[0])
+        self.assertIn("HAMS_CI_LOAD_GATE_LEGACY=1", said[0])
+
+    def test_the_ratio_applies_only_with_the_legacy_switch_and_unset_is_silent(self):
+        said = []
+        env = {"HAMS_CI_LOAD_GATE_RATIO": "3", "HAMS_CI_LOAD_GATE_LEGACY": "1"}
+        self.assertEqual(_test_runner.legacy_load_gate_ratio(env, 3.0, said.append), 3.0)
+        self.assertIsNone(_test_runner.legacy_load_gate_ratio({}, 3.0, said.append))
+        self.assertEqual(said, [])
+
+    def test_a_busy_box_does_not_hold_a_run_for_the_load_average_when_only_the_ratio_is_set(self):
+        with patch.dict(os.environ, {"HAMS_CI_LOAD_GATE_RATIO": "3"}, clear=False), \
+             patch.object(sys, "argv", ["test.py", "-u", "x"]), \
+             patch.object(_test_runner, "find_runner_worker_processes", return_value=[]), \
+             patch.object(_test_runner, "read_cpu_pressure", return_value=0.0), \
+             patch.object(_test_runner.os, "getloadavg", return_value=(99.0, 99.0, 99.0)), \
+             patch.object(_test_runner.os, "cpu_count", return_value=32), \
+             contextlib.redirect_stdout(io.StringIO()):
+            os.environ.pop("HAMS_SKIP_CI_LOAD_GATE", None)
+            os.environ.pop("HAMS_CI_LOAD_GATE_LEGACY", None)
+            self.assertTrue(_test_runner.wait_for_ci_load_to_subside(sleep_func=lambda s: None))
+
+    def test_isolated_ns_with_several_slots_warns_and_otherwise_stays_quiet(self):
+        said = []
+        self.assertTrue(_test_runner.warn_isolated_ns_with_slots({"HAMS_ISOLATED_NS": "1"}, 4, said.append))
+        self.assertIn("private namespace", said[0])
+        self.assertFalse(_test_runner.warn_isolated_ns_with_slots({"HAMS_ISOLATED_NS": "1"}, 1, said.append))
+        self.assertFalse(_test_runner.warn_isolated_ns_with_slots({}, 4, said.append))
+        self.assertFalse(_test_runner.warn_isolated_ns_with_slots({"HAMS_ISOLATED_NS": "1", "HAMS_TEST_LOCK_HELD": "1"}, 4, said.append))
+        self.assertEqual(len(said), 1)
+
+
 class SlotWiringMainTests(unittest.TestCase):
     """Tests [@ANCHOR: test:slot_handoff_args]
     Tests [@ANCHOR: test:enforce_slot_refusals]

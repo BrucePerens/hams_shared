@@ -1,5 +1,5 @@
 # User unit for the nightly whole-system canary (ADR 0118). Provided and NOT enabled: Bruce decides when it starts.
-# Install (as the user that owns the checkout; it runs `sudo -n -u odoo` inside, like every test run on this box):
+# Install (as the user that owns the checkout; test.py takes its own slot and private network namespace):
 #   mkdir -p ~/.config/systemd/user
 #   sed "s|@HAMS_SHARED_TOOLS@|$HOME/workspace/hams_open/hams_shared/tools|" hams-gate-canary.service > ~/.config/systemd/user/hams-gate-canary.service
 #   install -m 644 hams-gate-canary.timer ~/.config/systemd/user/ && systemctl --user daemon-reload
