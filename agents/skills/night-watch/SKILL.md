@@ -1460,7 +1460,9 @@ directory (hams_com, e.g. `ham_club_management/claims/`) are checked by
 `check_claims_freshness.py <module>`, which also prints only 12 characters. Its
 `compute_function_hash(<path to the .py file>)` returns `{anchor_name: full sha256 hex}` for that
 file, keyed by the anchor exactly as written (no prefix stripping), so paste
-`sha256:<value>` straight into `code_hash:`. Run it only after confirming `git diff HEAD` on that
+`sha256:<value>` straight into `code_hash:` and add `hash_algorithm: v2` under it (the token-stream hash that
+comments and formatting never stale; a claim without the field is legacy and is judged by its own commit's date;
+see `tools/README.md`, "Claim hashes"). `write_claim.py` writes both lines for you. Run it only after confirming `git diff HEAD` on that
 `.py` file is empty, or a peer's uncommitted edit gets hashed into your claim (2026-09-16,
 workspace-98).
 
