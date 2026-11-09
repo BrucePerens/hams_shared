@@ -16,7 +16,9 @@ detected), a long job is started as a NAMED JOB in its own session with a record
 pattern search never lists the searcher, its ancestors or its descendants. Pure /proc, standard library only.
 
     agent_procs.py find   [--cwd-under PATH] [--cmd-contains TEXT | --cmd-regex RE] [--user U] [--any-user] [--pid-file F]
-    agent_procs.py wait   (--pid N [--start-time T] | --job NAME | --file PATH [--contains RE] [--fail-contains RE])
+    agent_procs.py wait   (--pid N [--start-time T] | --job NAME | --file PATH [--contains RE] [--fail-contains RE]
+                          | SELECTOR [--all] [--allow-missing])     SELECTOR: --cwd-under/--cmd-contains/--cmd-regex; one match
+                          required (several: error listing them, or --all; none: error, or --allow-missing)
                           [--while-pid N] [--timeout S]       exit 0 done, 1 failed, 75 timeout, 2 usage, 3 refused
     agent_procs.py run    NAME [--tag AGENT] [--cwd DIR] -- COMMAND...     a named job; log in ~/.cache/hams-jobs/NAME.log
     agent_procs.py jobs   [--json]
@@ -154,6 +156,67 @@ def format_start(start_ticks):
         return datetime.datetime.fromtimestamp(when).strftime("%Y-%m-%dT%H:%M:%S")
     except (OverflowError, OSError, ValueError):
         return "unknown"  # a record file with a corrupt start time must not stop `agent_procs find`/`wait`
+
+
+# [@ANCHOR: agent_procs:parse_start_time]
+START_TIME_FORMAT = ("the `ticks=` number that `agent_procs.py find` prints for the process (field 22 of /proc/PID/stat, clock "
+                     "ticks since boot, e.g. 6209871), written `6209871` or `ticks=6209871`; the `start=` timestamp of the same "
+                     "line (e.g. 2026-11-09T09:37:10) is accepted too")
+
+
+def parse_start_time(value):
+    """A process start time as given by a person, as a half-open range `(low, high)` of /proc clock ticks.
+
+    Accepts an int or digits (ticks), `ticks=N`, a `(low, high)` tuple (returned as is), and the `start=YYYY-MM-DDTHH:MM:SS`
+    timestamp `find` prints (a whole second: `CLK_TCK` ticks wide). Anything else raises `ProcError` code 2 naming the
+    expected format: an unreadable start time must never be taken for "the process is gone"."""
+    if isinstance(value, tuple):
+        return value
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return (value, value + 1)
+    text = str(value).strip()
+    if text.startswith("ticks="):
+        text = text[len("ticks="):]
+    elif text.startswith("start="):
+        text = text[len("start="):]
+    if re.fullmatch(r"[0-9]{1,15}", text):
+        return (int(text), int(text) + 1)
+    try:
+        when = datetime.datetime.strptime(text.replace(" ", "T"), "%Y-%m-%dT%H:%M:%S")
+    except ValueError:
+        raise ProcError(f"cannot read the start time {value!r}; expected {START_TIME_FORMAT}") from None
+    low = round((when.timestamp() - boot_time()) * CLK_TCK)
+    if low < 0:
+        raise ProcError(f"the start time {value!r} is before this machine booted; expected {START_TIME_FORMAT}")
+    return (low, low + CLK_TCK)
+
+
+# [@ANCHOR: agent_procs:check_start_time]
+def check_start_time(info, spec):
+    """Compare the start time a person named (`parse_start_time`) with the live process `info` (`None` when the pid is gone).
+
+    Returns `"same"` when it is that process, `"reused"` when `info` started AFTER the named time (the pid was handed to a
+    new process, so the named one is gone), `"gone"` when `info` is `None` and the time is plausible. Raises `ProcError`
+    code 2 for a start time that cannot belong to this pid: in the future (milliseconds or epoch seconds, not ticks), later
+    than the process now holding the pid (a pid cannot be older than its owner's start: wrong pid or wrong number), or that
+    process's start in seconds instead of ticks. A mismatch that cannot be explained is never reported as "gone"."""
+    low, high = spec
+    uptime_ticks = (time.time() - boot_time()) * CLK_TCK
+    if low > uptime_ticks + 2 * CLK_TCK:
+        raise ProcError(f"start time {low} is in the future (this machine has been up {uptime_ticks:.0f} ticks): "
+                        f"that is not clock ticks since boot (epoch seconds or milliseconds?). Expected {START_TIME_FORMAT}")
+    if info is None:
+        return "gone"
+    if low <= info.start_ticks < high:
+        return "same"
+    if info.start_ticks < low:
+        raise ProcError(f"start time {low} does not fit pid {info.pid}: that process started at ticks={info.start_ticks}, "
+                        f"before the time you named, so the pid cannot be the one you meant. Wrong pid or a wrong number "
+                        f"(a wrapper's pid, or a start time from another process)? Expected {START_TIME_FORMAT}")
+    if high == low + 1 and low * CLK_TCK <= info.start_ticks < (low + 1) * CLK_TCK:
+        raise ProcError(f"start time {low} looks like seconds since boot, but ticks are {CLK_TCK} per second: pid {info.pid} "
+                        f"started at ticks={info.start_ticks}. Expected {START_TIME_FORMAT}")
+    return "reused"
 
 
 # [@ANCHOR: agent_procs:read_proc]
@@ -307,6 +370,16 @@ def ps_line(info):
             f"pgid={info.pgid} cwd={info.cwd or '?'} args={' '.join(info.argv)}")
 
 
+# [@ANCHOR: agent_procs:shell_clones]
+def shell_clones(table, ancestors):
+    """Pids of the forked copies of the caller's own shells: a child of one of `ancestors` whose command line is identical to
+    an ancestor's. A shell forks a subshell for each element of a pipeline (`wait --cmd-contains X | tail`) and the copy
+    carries the whole command text, so a text search for X would find "the waiter's own shell". Never a process that merely
+    shares a parent with different arguments."""
+    texts = {info.argv for pid, info in table.items() if pid in ancestors and len(info.argv) >= 3}
+    return {pid for pid, info in table.items() if info.ppid in ancestors and info.argv in texts}
+
+
 # [@ANCHOR: agent_procs:find_procs]
 def find_procs(table, me=None, user=None, any_user=False, cwd_under=None, contains=None, regex=None, pids=None,
                caller_uid=None, worktree=None, tmpdir=None):
@@ -320,6 +393,7 @@ def find_procs(table, me=None, user=None, any_user=False, cwd_under=None, contai
     another user without `any_user`."""
     caller_uid = os.getuid() if caller_uid is None else caller_uid
     family = self_family(table, me)
+    family |= shell_clones(table, ancestry(table, me or os.getpid()))
     own_name = user_name(caller_uid)
     if user is not None and user != own_name and not any_user:
         raise ProcError(f"--user {user} would list another user's processes: add --any-user (they are shown as protected)")
@@ -525,28 +599,67 @@ def start_job(name, argv, tag="", cwd=None, directory=None):
 # [@ANCHOR: agent_procs:wait_pid]
 def wait_pid(pid, start_ticks=None, timeout=DEFAULT_WAIT_TIMEOUT, interval=POLL_INTERVAL, sleep=time.sleep,
              clock=time.monotonic, table=None):
-    """Wait until process `pid` ends. Returns a `WaitResult`: code 0 when it ended (or was already gone, or the pid now
-    belongs to a different process: start time differs from `start_ticks`), 75 on timeout, 3 when `pid` is the caller's own
-    ancestry (watching the watcher: it could never end before this command).
+    """Wait until process `pid` ends. Returns a `WaitResult`: code 0 when it ended (or was already gone, or the pid was reused:
+    it now belongs to a process that started LATER than the one named), 75 on timeout, 3 when `pid` is the caller's own
+    ancestry (watching the watcher: it could never end before this command). Raises `ProcError` code 2 when `start_ticks`
+    cannot be read or cannot belong to this pid (`parse_start_time`, `check_start_time`): a mismatch is never "done".
 
-    `start_ticks` is the /proc start time printed by `find`; when `None` it is read at the first look. Never matches on a
+    `start_ticks` is the start time printed by `find` (`ticks=N` or `start=...`, see `parse_start_time`); when `None` it is read at the first look. Never matches on a
     command line. The exit status of a process that is not our child is not knowable, so a plain pid is "done", not "ok";
     wait for a named job (`wait_job`) or a marker file (`wait_file`) when the outcome matters."""
+    spec = None if start_ticks is None else parse_start_time(start_ticks)  # a bad format is an error, never "gone"
     if pid in ancestry(snapshot() if table is None else table, os.getpid()):
         return WaitResult(EX_REFUSED, f"refusing: pid {pid} is this command's own process or an ancestor (watching the watcher)")
     info = read_proc(pid)
+    if spec is not None and check_start_time(info, spec) == "reused":
+        return WaitResult(EX_OK, f"pid {pid} was reused: it now belongs to a process that started later (ticks={info.start_ticks}) "
+                                 f"than the one you named: the original is gone")
     if info is None:
         return WaitResult(EX_OK, f"pid {pid} is already gone")
-    if start_ticks is None:
-        start_ticks = info.start_ticks
-    elif info.start_ticks != start_ticks:
-        return WaitResult(EX_OK, f"pid {pid} now belongs to a different process (start time differs): the original is gone")
+    start_ticks = info.start_ticks
     deadline = clock() + timeout
     while pid_alive(pid, start_ticks):
         if clock() >= deadline:
             return WaitResult(EX_TIMEOUT, f"timeout after {timeout:g}s: pid {pid} is still running")
         sleep(interval)
     return WaitResult(EX_OK, f"pid {pid} ended")
+
+
+# [@ANCHOR: agent_procs:wait_matching]
+def short_command(info, width=100):
+    """The command line of `info`, cut to `width` characters with `...` when longer."""
+    text = " ".join(info.argv)
+    return text if len(text) <= width else text[:width - 3] + "..."
+
+
+def wait_matching(found, wait_all=False, allow_missing=False, timeout=DEFAULT_WAIT_TIMEOUT, interval=POLL_INTERVAL,
+                  sleep=time.sleep, clock=time.monotonic):
+    """Wait for the processes a selector matched (`found` is `find_procs`' result, taken once, at the start).
+
+    Exactly one match: wait until it ends (judged by pid AND start time). More than one match is an ERROR (`ProcError` code
+    2 listing every match with pid, start time, user and a shortened command, and the exact `--pid P --start-time T` way to
+    name one) unless `wait_all`, which waits until every one of them has ended. No match is an ERROR (code 2: did it
+    already finish, or is the selector wrong?) unless `allow_missing`, which is "done". A match that ends later is "done";
+    a pattern is never turned into a signal. Returns a `WaitResult` (0 done, 75 timeout)."""
+    if not found:
+        if allow_missing:
+            return WaitResult(EX_OK, "nothing matches (--allow-missing): nothing to wait for")
+        raise ProcError("nothing matches: did it already finish, or is the selector wrong? (--allow-missing treats that as "
+                        "done; `find` with the same selector shows what it sees)")
+    if len(found) > 1 and not wait_all:
+        lines = [f"  pid={info.pid} ticks={info.start_ticks} user={info.user} cmd={short_command(info)}" for info, _ in found]
+        raise ProcError(f"ambiguous: {len(found)} matches\n" + "\n".join(lines) +
+                        "\nname one with `wait --pid P --start-time T` (pid and ticks as above), or add --all to wait until "
+                        "every one of them has ended")
+    deadline = clock() + timeout
+    pending = [(info.pid, info.start_ticks) for info, _ in found]
+    while True:
+        pending = [(pid, ticks) for pid, ticks in pending if pid_alive(pid, ticks)]
+        if not pending:
+            return WaitResult(EX_OK, f"{len(found)} matching process(es) ended")
+        if clock() >= deadline:
+            return WaitResult(EX_TIMEOUT, f"timeout after {timeout:g}s: still running: " + ", ".join(str(p) for p, _ in pending))
+        sleep(interval)
 
 
 # [@ANCHOR: agent_procs:wait_job]
@@ -690,9 +803,10 @@ def authorize_kill(info, start_ticks, cwd_under, directory=None):
     """How a single pid is allowed to be signalled, or raises `ProcError` (code 3). Returns the reason as text:
     `"recorded job"` when a job record names this pid and start time; `"start time confirmed"` when `start_ticks` equals the
     process's; `"cwd under <path>"` when `cwd_under` holds. A `start_ticks` that differs means the pid was reused: refused."""
-    if start_ticks is not None and start_ticks != info.start_ticks:
-        raise ProcError(f"refusing: pid {info.pid} was reused (start time {info.start_ticks}, you named {start_ticks})",
-                        EX_REFUSED)
+    if start_ticks is not None:
+        if check_start_time(info, parse_start_time(start_ticks)) == "reused":
+            raise ProcError(f"refusing: pid {info.pid} was reused (start time {info.start_ticks}, you named {start_ticks})",
+                            EX_REFUSED)
     for rec in list_records(directory):
         if rec.pid == info.pid and rec.start_ticks == info.start_ticks:
             return "recorded job"
@@ -769,10 +883,18 @@ def cmd_find(args, out=sys.stdout):
 # [@ANCHOR: agent_procs:cmd_wait]
 def cmd_wait(args, out=sys.stdout):
     """`wait` subcommand: exactly one of `--pid`, `--job`, `--file`. Prints the result message; returns its code."""
-    chosen = [bool(args.pid is not None), bool(args.job), bool(args.file)]
+    selector = bool(args.cwd_under or args.cmd_contains or args.cmd_regex)
+    chosen = [bool(args.pid is not None), bool(args.job), bool(args.file), selector]
     if sum(chosen) != 1:
-        raise ProcError("wait needs exactly one of --pid, --job, --file")
-    if args.pid is not None:
+        raise ProcError("wait needs exactly one of --pid, --job, --file, or a selector (--cwd-under, --cmd-contains, --cmd-regex)")
+    if (args.all or args.allow_missing) and not selector:
+        raise ProcError("--all and --allow-missing belong to a selector wait (--cwd-under, --cmd-contains, --cmd-regex)")
+    if selector:
+        found = find_procs(snapshot(), user=args.user, any_user=args.any_user, cwd_under=args.cwd_under,
+                           contains=args.cmd_contains, regex=args.cmd_regex, worktree=caller_worktree(),
+                           tmpdir=os.environ.get("TMPDIR"))
+        result = wait_matching(found, args.all, args.allow_missing, args.timeout, args.interval)
+    elif args.pid is not None:
         result = wait_pid(args.pid, args.start_time, args.timeout, args.interval)
     elif args.job:
         result = wait_job(args.job, args.timeout, args.interval)
@@ -835,8 +957,15 @@ def build_parser():
     find.add_argument("--quiet", action="store_true", help="print nothing; the exit code says whether anything matched")
     wait = sub.add_parser("wait", help="wait for an exact pid, a named job, or a file")
     wait.add_argument("--pid", type=int)
-    wait.add_argument("--start-time", type=int, metavar="TICKS", help="the ticks= value printed by find")
+    wait.add_argument("--start-time", metavar="TICKS", help="the ticks= value printed by find (or its start= timestamp)")
     wait.add_argument("--job", metavar="NAME")
+    wait.add_argument("--cwd-under", metavar="PATH", help="selector: processes whose cwd is under PATH (exactly one must match)")
+    wait.add_argument("--cmd-contains", metavar="TEXT", help="selector: literal substring of the full command line")
+    wait.add_argument("--cmd-regex", metavar="RE", help="selector: regular expression on the full command line")
+    wait.add_argument("--user", metavar="NAME", help="selector: default your own user")
+    wait.add_argument("--any-user", action="store_true", help="selector: also other users' processes")
+    wait.add_argument("--all", action="store_true", help="selector matching several: wait until every match has ended")
+    wait.add_argument("--allow-missing", action="store_true", help="selector matching nothing is done (default: an error)")
     wait.add_argument("--file", metavar="PATH")
     wait.add_argument("--contains", metavar="RE", help="with --file: the file must contain a match")
     wait.add_argument("--fail-contains", metavar="RE", help="with --file: a match means failure (exit 1)")
@@ -857,7 +986,7 @@ def build_parser():
                       help="override the protected-process refusal for your own job")
     kill = sub.add_parser("kill-pid", help="signal one exact, verified pid")
     kill.add_argument("pid", type=int)
-    kill.add_argument("--start-time", type=int, metavar="TICKS", help="the ticks= value printed by find")
+    kill.add_argument("--start-time", metavar="TICKS", help="the ticks= value printed by find (or its start= timestamp)")
     kill.add_argument("--cwd-under", metavar="PATH")
     kill.add_argument("--signal", default="TERM", metavar="NAME")
     kill.add_argument("--grace", type=float, default=DEFAULT_GRACE, metavar="SECONDS")
