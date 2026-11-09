@@ -58,14 +58,29 @@ class ImpactTests(unittest.TestCase):
         self.assertEqual(sorted(self.modules), ["base", "lonely", "mid", "open_mod", "top"])
         self.assertEqual(ti.module_dirs(["/nonexistent"]), {})
 
-    def test_read_depends_tolerates_bad_manifests(self):
+    def test_read_depends_refuses_bad_manifests_instead_of_answering_no_dependents(self):
         self.assertEqual(ti.read_depends(self.modules["top"]), ["mid", "web"])
         bad = os.path.join(self.tmp.name, "bad")
         os.makedirs(bad)
         with open(os.path.join(bad, "__manifest__.py"), "w") as handle:
             handle.write("not python (")
-        self.assertEqual(ti.read_depends(bad), [])
-        self.assertEqual(ti.read_depends(os.path.join(self.tmp.name, "missing")), [])
+        with self.assertRaises(ValueError):
+            ti.read_depends(bad)
+        with self.assertRaises(ValueError):
+            ti.read_depends(os.path.join(self.tmp.name, "missing"))
+
+    def test_an_unreadable_manifest_in_the_universe_makes_the_answer_full(self):
+        with open(os.path.join(self.com, "lonely", "__manifest__.py"), "w") as handle:
+            handle.write("{'depends': [")
+        impact = self.run_for("base/models/m.py")
+        self.assertEqual((impact.kind, impact.modules), (ti.KIND_FULL, sorted(self.modules)))
+        self.assertIn("cannot be proven", impact.reasons[-1])
+
+    def test_only_documentation_suffixes_are_documentation_under_the_documentation_directories(self):
+        for path in ("docs/data.json", "docs/table.csv", "night_shift_todo/low/x.py", "night_shift_history/y.json"):
+            self.assertEqual(self.run_for(path).kind, ti.KIND_FULL, path)
+        for path in ("docs/a.txt", "night_shift_questions/open/q.md", "docs/adrs/0001.md"):
+            self.assertEqual(self.run_for(path).kind, ti.KIND_NONE, path)
 
     def test_reverse_closure_is_transitive_and_crosses_repositories(self):
         self.assertEqual(ti.reverse_closure({"base"}, self.modules), ["base", "mid", "open_mod", "top"])

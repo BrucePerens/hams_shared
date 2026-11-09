@@ -907,6 +907,9 @@ def main(argv=None):
                         print("\n".join(prepare_cargo_target(full, budget=b)))
         return 0
     if command == "clear":
+        if which not in ("cargo", "results", "all"):
+            print(f"unknown scope {which!r}: clear takes cargo, results or all\n" + __doc__.split("CLI:")[-1].strip(), file=sys.stderr)
+            return 2
         targets = []
         if which in ("cargo", "all"):
             targets += [*cargo_bases(), *legacy_cargo_dirs()]

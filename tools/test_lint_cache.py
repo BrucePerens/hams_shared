@@ -304,6 +304,14 @@ class CargoBudgetTest(unittest.TestCase):
             self.assertEqual(lint_cache.main(["clear", "cargo"]), 0)
         self.assertFalse(os.path.exists(old))
 
+    def test_clear_with_an_unknown_scope_removes_nothing_and_exits_2(self):
+        environ = {"XDG_CACHE_HOME": self._tmp.name}
+        old = os.path.join(self._tmp.name, "hams-relay-export-test-target")
+        make_unit(os.path.join(old, "debug"), "a", "0123456789abcdef", 1000, 10)
+        with unittest.mock.patch.dict(os.environ, environ), unittest.mock.patch("sys.stderr"):
+            self.assertEqual(lint_cache.main(["clear", "cargoo"]), 2)
+        self.assertTrue(os.path.exists(old))
+
     # Tests [@ANCHOR: lint_cache:main]
     def test_clear_keeps_the_work_checkout_of_a_target_a_build_holds_the_lock_of(self):
         """`clear cargo` removed `work/<target>` while a build holding that target's lock compiled from it."""
