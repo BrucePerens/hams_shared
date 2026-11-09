@@ -78,11 +78,15 @@ def code_mask(text):
                     j += 1
             blank(i, j)
             i = j
-        elif c == "r" and re.match(r'r#*"', text[i : i + 40]) and (i == 0 or not (text[i - 1].isalnum() or text[i - 1] == "_")):
-            hashes = len(re.match(r"r(#*)", text[i:]).group(1))
-            end = text.find('"' + "#" * hashes, i + 2 + hashes)
+        elif c in "rbc" and (i == 0 or not (text[i - 1].isalnum() or text[i - 1] == "_")) and re.match(r'(?:br|cr|r)#*"', text[i : i + 40]):
+            # A raw string, also the raw byte (br"...") and raw C (cr"...") forms: no escapes inside, so a backslash
+            # before the closing quote must not be read as an escape.
+            opening = re.match(r"(?:br|cr|r)(#*)", text[i:])
+            hashes = len(opening.group(1))
+            start = i + opening.end() + 1
+            end = text.find('"' + "#" * hashes, start)
             end = n if end < 0 else end + 1 + hashes
-            blank(i + 2 + hashes, end - 1 - hashes)
+            blank(start, end - 1 - hashes)
             i = end
         elif c == '"':
             j = i + 1
