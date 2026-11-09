@@ -29,7 +29,7 @@ import xml.parsers.expat
 # behaviour gated on them stays gated for the entire life of a process started with `-i`/`-u`,
 # including one that goes on to serve -- which is how `distributed_redis_cache`'s cache
 # invalidation poll came to be disabled forever on any server deployed with a one-step
-# upgrade-and-restart (2026-09-15). `registry.ready` is the honest form of the same question.
+# upgrade-and-restart. `registry.ready` is the honest form of the same question.
 _ODOO_LOADING_FLAGS = ("init", "update", "stop_after_init")
 
 
@@ -187,9 +187,9 @@ GENERAL_ERROR_RULES = [
     (
         # Fast, cheap, targeted companion to check_owl_templates.py's own full-Owl-compile
         # checker (real headless-Chrome verification, slower, catches any compile error) --
-        # this one regex catches the exact bug class that made ham_shack.WebShackTemplate
+        # this one regex catches the exact failure that made ham_shack.WebShackTemplate
         # silently fail to compile for what several prior debugging sessions couldn't
-        # root-cause (see OFFLINE_HAM_OPERATION.md, 2026-09-07): a JS numeric separator
+        # root-cause (see OFFLINE_HAM_OPERATION.md): a JS numeric separator
         # (`1_000_000`) inside a QWeb t-directive expression attribute. Owl's own expression
         # compiler doesn't understand this ES2021 syntax and mangles it into invalid generated
         # JS (`1ctx['_000_000']`) rather than rejecting it up front -- the resulting error
@@ -262,8 +262,8 @@ GENERAL_ERROR_RULES = [
         # else it means to identify a real test file (e.g.
         # `self.filename.startswith("test_")`, line ~3994's
         # `filename.startswith("test_")`) -- this ext_pattern was the odd
-        # one out, matching raw substrings instead. Found and fixed
-        # 2026-09-13 while triaging real daemons/ bug-hunt findings.
+        # one out, matching raw substrings instead, so sm3cer_contest_sync.py
+        # was misclassified.
         r"(?:^|/)test_[^/]*\.py$",
         re.compile(
             r"(?<![\'\"])(?:urllib\.request\.urlretrieve|requests\.(?:get|post|put|delete))\s*\("
@@ -276,12 +276,11 @@ GENERAL_ERROR_RULES = [
         "CRITICAL NETWORK HARDCODING: 'localhost' and '127.0.0.1' are prohibited. In containerized environments, these resolve to the container's internal loopback, NOT the target service. Use Docker DNS names (e.g., 'odoo', 'redis').",
     ),
     (
-        # Real false-positive class found 2026-09-12, the same one already fixed for the
-        # TransactionCase-inheritance rule above and already precedented for the localhost/
-        # 127.0.0.1 rule two entries up (`(?!.*(?:/|^)tools/)`, reused here verbatim for
-        # consistency): this rule matches raw line text, not AST, so a Python string LITERAL
-        # containing "/tmp/..." trips it exactly as readily as a real hardcoded path. Confirmed
-        # live: 39 findings, 100% fixture/test-data strings, zero real production /tmp usage --
+        # False-positive class shared with the TransactionCase-inheritance rule above and
+        # already handled for the localhost/127.0.0.1 rule two entries up
+        # (`(?!.*(?:/|^)tools/)`, reused here verbatim for consistency): this rule matches raw line text, not AST, so a Python string LITERAL
+        # containing "/tmp/..." trips it exactly as readily as a real hardcoded path.
+        # Measured: 39 findings, 100% fixture/test-data strings, zero real production /tmp usage --
         # 34 in test_check_burn_list.py itself (fake filepath labels fed into this tool's own
         # AST-checking functions, e.g. filepath="/tmp/some_module/models/res_users.py", never
         # actually opened/written), 2 in test_infrastructure.py (a shell-injection ATTACK PAYLOAD
@@ -313,14 +312,14 @@ GENERAL_ERROR_RULES = [
         "CRITICAL TOUR RACE CONDITION: Do not poll the DOM natively for modals. You MUST use TourUtils.waitForAbsence or TourUtils.waitForElement to ensure they are mounted properly.",
     ),
     (
-        # Real false-positive class found 2026-09-12: this rule matches raw line text, not AST
+        # False-positive class: this rule matches raw line text, not AST
         # (see GENERAL_ERROR_RULES' own docstring note on this), so a Python string LITERAL
         # containing the text "class Foo(TransactionCase):" trips it exactly as readily as a
         # real class declaration would. `hams_shared/tools/test_check_test_tags.py` and
         # `test_check_self_writeable_field_tests.py` both legitimately need to feed a realistic-
         # looking "bad" Odoo test file (as a string, written to a temp fixture) to the checker
         # THEY test -- that fixture string is data describing what a real violation looks like,
-        # not a real class declaration in this file's own code. Confirmed live: 23 findings, one
+        # not a real class declaration in this file's own code. Measured: 23 findings, one
         # per fixture-string occurrence across those two files, zero of them a real Odoo test
         # class. Real Odoo test files (this rule's actual, intended target) never live under any
         # `tools/` directory in this codebase -- only meta-tests for the linter tooling itself do
@@ -330,7 +329,7 @@ GENERAL_ERROR_RULES = [
         #
         # `[^/]*` between `test_` and `.py$`, NOT `.*`: a greedy `.*` can span MULTIPLE path
         # segments, letting `re.search` latch onto an EARLIER, unrelated "/test_...py$" match
-        # elsewhere in the path (confirmed live: a pytest `tmp_path` fixture's own directory name
+        # elsewhere in the path (observed: a pytest `tmp_path` fixture's own directory name
         # is derived from the test function's name, e.g. `.../test_something_or_other0/hams_
         # shared/tools/real_file.py` -- an outer "/test_" segment the lookbehind was never meant
         # to police) and never even reach the real, later `/tools/` segment this exclusion
@@ -371,16 +370,16 @@ GENERAL_ERROR_RULES = [
         # (verify_anchors.py/check_function_test_anchors.py) had separately
         # already passed.
         #
-        # Also excludes hams_shared/tools/ (LINTER_POLICY_REVISIT.md,
-        # 2026-09-07): the same third case, none of these ~200 test_*.py
+        # Also excludes hams_shared/tools/ (LINTER_POLICY_REVISIT.md):
+        # the same third case, none of these ~200 test_*.py
         # files import or inherit from zero_sudo's Odoo TestCase-derived
         # classes either, so `self.safe_patch()` is not an available
-        # method to redirect to. Found live, not assumed: 114 of the 471
+        # method to redirect to. Measured, not assumed: 114 of the 471
         # findings from a real --scan-daemons-and-tools run were this
         # exact rule firing across tools/, the single largest category.
         #
-        # Also excludes */scripts/ (2026-09-08): a fourth instance of the identical case, found
-        # via distributed_redis_cache/scripts/test_provision_cache_manager_db_role.py -- its own
+        # Also excludes */scripts/: a fourth instance of the identical case, seen in
+        # distributed_redis_cache/scripts/test_provision_cache_manager_db_role.py -- its own
         # docstring says "Plain stdlib + psycopg2 script, no Odoo dependency," and confirmed
         # directly, it's a bare `unittest.TestCase`, not a zero_sudo-derived one, so
         # `self.safe_patch()` is genuinely not available here either. Checked before widening
@@ -388,25 +387,24 @@ GENERAL_ERROR_RULES = [
         # TransactionCase/HamsTransactionCase/odoo.tests, so this can't silently exempt a real
         # Odoo test file.
         #
-        # Also excludes .github/self-hosted-runner/ (2026-09-08): a fifth instance of the same
-        # case, found via test_cleanup_after_job.py/test_finish_registration.py -- both plain
+        # Also excludes .github/self-hosted-runner/: a fifth instance of the same
+        # case, seen in test_cleanup_after_job.py/test_finish_registration.py -- both plain
         # `unittest.TestCase`, no Odoo dependency at all (a GitHub Actions runner hook and a
         # one-time sudo registration script), so `self.safe_patch()` is not available here
         # either, the identical reasoning as daemons?/ingest/tools/scripts/ above.
         #
-        # Also excludes devbox_tools/ (2026-10-01): a sixth instance of the same case, found via
-        # test_import_gemini_club_dataset.py -- confirmed devbox_tools/test_deploy_to_production.py
-        # was ALREADY silently violating this rule too (plain unittest.TestCase classes, already
-        # using unittest.mock.patch directly), the same "found already live, not hypothetical"
-        # pattern as every prior addition to this list. `(?:^|/)tools/` does not already cover
-        # this: it anchors to an exact "tools" path SEGMENT, and "devbox_tools" is one segment,
+        # Also excludes devbox_tools/: a sixth instance of the same case, seen in
+        # test_import_gemini_club_dataset.py -- devbox_tools/test_deploy_to_production.py
+        # is a second such file (plain unittest.TestCase classes, already using
+        # unittest.mock.patch directly), the same pattern as every other path in this list.
+        # `(?:^|/)tools/` does not already cover this: it anchors to an exact "tools" path SEGMENT, and "devbox_tools" is one segment,
         # not "devbox" + "tools", so it never matched.
         r"^(?!.*daemons?/)(?!.*(?:^|/)ingest/)(?!.*(?:^|/)tools/)(?!.*(?:^|/)scripts/)(?!.*(?:^|/)\.github/self-hosted-runner/)(?!.*(?:^|/)devbox_tools/).*test_.*\.py$",
         re.compile(r"(?:@(?:mock\.)?patch\b|\b(?:mock\.)?patch(?:\.object)?\s*\()"),
         "CRITICAL ARCHITECTURE: Native patch decorators and context managers are forbidden. Use self.safe_patch() or self.safe_patch_object().",
     ),
     (
-        # Real false positives found 2026-09-08, a full-repo sweep: 5 hits, all in standalone,
+        # False positives: 5 hits, all in standalone,
         # single-tenant ops/infra scripts (pager_duty/daemon/*.py, distributed_redis_cache/
         # scripts/*.py) -- a Postgres-admin provisioning CLI reading its own password via
         # os.environ.get()-or-getpass(), and monitoring daemons reading REDIS_PASSWORD /
@@ -417,10 +415,10 @@ GENERAL_ERROR_RULES = [
         # (daemons?/, scripts/) already carved out for the sibling mock.patch rule immediately
         # above, for the identical reason: real, single-tenant, non-Odoo code living alongside
         # actual multi-tenant Odoo models this rule still correctly covers (confirmed zero
-        # TENANT LEAK hits inside any models/ file in this same sweep).
+        # TENANT LEAK hits inside any models/ file).
         #
-        # Real false positives found 2026-09-12, the hams_shared/tools/ 326-finding discovery: 3
-        # more hits, same shape, this time in tools/ itself -- check_dependency_releases.py's
+        # More false positives of the same shape in tools/ itself: 3
+        # hits -- check_dependency_releases.py's
         # GITHUB_TOKEN (a standard, optional CI personal-access-token for a scheduled dependency-
         # staleness check, not a per-customer secret) and env_validator.py's SMTP_PASS (a single,
         # systemwide daemon's outgoing-mail credential, read at process startup, not a per-tenant
@@ -436,7 +434,7 @@ GENERAL_ERROR_RULES = [
     (
         # The complement of the rule above, for exactly the paths it excludes. Reading a
         # credential from the environment is the correct pattern for a standalone daemon or
-        # script; giving that read a hardcoded fallback is not. Found 2026-09-15:
+        # script; giving that read a hardcoded fallback is not. Seen in
         # adif_processor and pdns_sync defaulted RMQ_PASS to "guest" (RabbitMQ's factory
         # account) and dx_firehose defaulted DB_PASS to "odoo". Their systemd units use
         # EnvironmentFile=-, which tolerates a missing file, so a misnamed env file would have
@@ -738,14 +736,14 @@ ODOO_ERROR_RULES = [
         # website.logo test hits /web/image/website/<id>/logo/...; session
         # auth API -- /web/session/get_session_info) confirmed as the only
         # actual repo-wide usages of either prefix, distinct from every
-        # other /web/* string literal in the codebase. dataset added
-        # 2026-09-08: /web/dataset/call_kw is Odoo 19 core's own real,
+        # other /web/* string literal in the codebase. dataset:
+        # /web/dataset/call_kw is Odoo 19 core's own real,
         # current JSON-RPC model-method-call route (odoo/addons/web/
         # controllers/dataset.py's own @http.route), unrelated to the bare
         # /web backend-UI-entrypoint redirect this rule exists to catch --
         # confirmed as the only real repo-wide usage of the /web/dataset
         # prefix, ham_base/tests/test_impersonate.py's own real RPC call.
-        # content added 2026-09-17: /web/content is Odoo 19 core's own real,
+        # content: /web/content is Odoo 19 core's own real,
         # current generic ir.attachment binary-serving route (odoo/addons/
         # web/controllers/binary.py's own @http.route, lines 63-67),
         # unrelated to the bare /web backend-UI-entrypoint redirect --
@@ -812,8 +810,8 @@ WARNING_RULES = [
         # never writes an archive-member's internal path to disk, so no
         # symlink-slip risk either). The real risk is specifically
         # `.extractall()`/`.extract()`, which write archive-member paths
-        # to the filesystem -- a real, previously undiscovered false
-        # positive found via ham_relay_bridge/tests/
+        # to the filesystem -- a false
+        # positive seen in ham_relay_bridge/tests/
         # test_relay_source_publish_api.py's `zipfile.ZipFile(buf, "w")`
         # (a test fixture that only ever writes a zip, never extracts
         # one).
@@ -828,7 +826,7 @@ FOUND_TEST_CONTENTS = {}
 FOUND_TOURS = []
 FOUND_MANIFESTS = {}
 
-# Bruce's own direct request, 2026-09-04: the single-line `[@ANCHOR: name]`
+# Multi-line anchors: the single-line `[@ANCHOR: name]`
 # form (still fully supported, unchanged -- see ANCHOR_REGEX below) ties an
 # anchor to whatever function happens to contain that one exact comment
 # line. That's fine for a short test, but it can't express "this anchor
@@ -849,8 +847,7 @@ ANCHOR_REGEX = re.compile(r"\[@ANCHOR:\s*([a-zA-Z0-9_]+)\s*\]")
 ANCHOR_BEGIN_REGEX = re.compile(r"\[@ANCHOR-BEGIN:\s*([a-zA-Z0-9_]+)\s*\]")
 ANCHOR_END_REGEX = re.compile(r"\[@ANCHOR-END:\s*([a-zA-Z0-9_]+)\s*\]")
 
-# Real bug found via the bug-hunt campaign, 2026-09-10 (already independently documented, but
-# not fixed, by test_check_burn_list.py's own
+# Bare-ignore bypass (documented by test_check_burn_list.py's own
 # test_sudo_with_the_tag_but_not_one_of_the_four_allowed_shapes_is_still_exempt and
 # test_an_unrelated_burn_ignore_tag_also_blanket_suppresses_an_unrelated_warning): TaintVisitor's
 # own add_error()/add_warning() used to gate their generic bypass on a bare `"burn-ignore" in
@@ -922,8 +919,8 @@ def check_anchor_pairing(content):
     list, so a pairing mistake counts toward the real pass/fail exit code
     like any other finding, not a side print nobody's told to check.
     """
-    # Real false-positive class found 2026-09-12, the same one already fixed for the
-    # TransactionCase/hardcoded-/tmp/exec() rules elsewhere in this file: this scan matches raw
+    # False-positive class shared with the TransactionCase/hardcoded-/tmp/exec() rules
+    # elsewhere in this file: this scan matches raw
     # line text, not AST, so a `[@ANCHOR-BEGIN: X]`-shaped example inside a docstring (explaining
     # the convention itself, e.g. this repo's own check_function_test_anchors.py) or a fixture
     # string testing THIS exact function's own detection logic (test_check_burn_list.py's own
@@ -1014,7 +1011,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
             # since HamsHttpCase/HttpCase tests do NOT have the
             # cross-connection stale-read problem
             # _check_real_transaction_case_stale_read() checks for --
-            # confirmed directly this session by many passing HamsHttpCase
+            # confirmed directly by many passing HamsHttpCase
             # tests reading self.env[...] right after url_open() with no
             # commit() at all.
             self.in_strict_real_transaction_case = False
@@ -1114,8 +1111,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
             own AST -- available since 3.8, not re-derived here), for
             checkers that need to find an ignore-tag comment anywhere on
             a call/handler/statement that a formatter may have wrapped
-            across multiple lines. Bruce's own request, 2026-09-04, after
-            a real confirmed case: reformatting long-line-wrapping a call
+            across multiple lines. Motivating case: reformatting long-line-wrapping a call
             like `self._get_service_uid(...)` moves its own trailing
             `# audit-ignore-service-uid-cursorless` comment onto the
             closing-paren line, while `node.lineno` (Python AST's own
@@ -1149,7 +1145,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
             ):
                 return
             # The OUTBOUND FETCH rule's own escape hatch, naming the trusted host (it was a warning until every existing
-            # site was converted or justified, 2026-09-28; see _check_unguarded_outbound_fetch).
+            # site was converted or justified; see _check_unguarded_outbound_fetch).
             if (
                 lineno <= len(self.lines)
                 and "audit-ignore-outbound-fetch" in self.lines[lineno - 1]
@@ -1351,7 +1347,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     if isinstance(item.context_expr, ast.Call) and getattr(
                         item.context_expr.func, "attr", ""
                     ) in ("assertRaises", "assertRaisesRegex"):
-                        # Real false positive found 2026-09-08: this check's own message says
+                        # False positive: this check's own message says
                         # "to trigger @api.constrains" -- it exists because @api.constrains
                         # validation can be deferred until flush, so ValidationError from a
                         # constrains method genuinely needs flush_all() to fire inside the
@@ -1515,7 +1511,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                             has_rname_lineno,
                             "CRITICAL SCHEMA: The use of " + "'_" + "rec_name' is forbidden. Every model MUST have a textual 'name' field defined."
                         )
-                    # Real false positive found 2026-09-12 (user_websites_seo's own
+                    # False positive (user_websites_seo's own
                     # ResUsersSEO/BlogBlogSEO/BlogPostSEO/WebsitePageSEO/UserWebsitesGroupSEO,
                     # each `_name = X; _inherit = [X, some_mixin]`): this rule fires per-class,
                     # with no awareness that `_name == _inherit[0]` means the class is EXTENDING
@@ -1530,7 +1526,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     # displayed record of its own -- it's always combined,
                     # via _inherit, into a concrete Model/TransientModel that
                     # already supplies its own real 'name' field. Demanding
-                    # one here too is a false positive: found for real via
+                    # one here too is a false positive: it appeared in
                     # user_websites_seo/models/seo_metadata_mixin.py's
                     # SEOMetadataMixin, an AbstractModel with no 'name' field
                     # of its own, always mixed into ResUsersSEO/BlogBlogSEO/
@@ -1570,8 +1566,8 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
         def _node_calls_something_real(self, node, visited=None):
             """True if `node`'s body calls anything outside this file's own
             defined functions, OR calls a locally-defined helper that
-            itself (recursively) does -- real false positive found
-            2026-09-12 in ingest/test_forms_ingest_daemon.py: four tests
+            itself (recursively) does -- e.g. in
+            ingest/test_forms_ingest_daemon.py, where four tests
             each call nothing but a single shared local helper
             (`_process_special_field_with_agent_result`) that itself drives
             the real target function under a real mock/tmp_path setup, a
@@ -1635,7 +1631,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
             a fresh transaction. Reading such a record straight after the
             HTTP call (no intervening commit) either raises a real
             MissingError or, worse, silently reads stale data -- a real bug
-            found live in ham_logbook/tests/test_adif_api.py this session.
+            seen in ham_logbook/tests/test_adif_api.py.
             """
             if not (
                 self.in_strict_real_transaction_case and node.name.startswith("test_")
@@ -1682,7 +1678,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
             # http call is what opens the fresh transaction -- its snapshot
             # is taken at THAT moment, after the http call's own (separate
             # connection) commit already landed. Confirmed empirically,
-            # 2026-09-06: two real, previously-flagged instances
+            # on a real run: two previously-flagged instances
             # (ham_training test_api_exam_success, user_websites
             # TestLifecycleAndGroups test_03/test_07) both follow exactly
             # this commit-then-http-then-read shape and pass cleanly on a
@@ -1957,8 +1953,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                                 "CRITICAL FAST FAIL: _get_service_uid MUST NOT be wrapped in a try/except block. It must fail fast if the service account is missing. If this call site is a response-middleware hook that may legitimately run on a cursor-less/database-free route, add '# audit-ignore-service-uid-cursorless' with a comment citing the evidence, plus a tracing anchor.",
                             )
 
-            # night_shift_todo/low/linter-rule-raw-sql-raise-without-savepoint-8f551159.md:
-            # a raw-SQL call to a Postgres procedure that can RAISE EXCEPTION, made inside a
+            # A raw-SQL call to a Postgres procedure that can RAISE EXCEPTION, made inside a
             # try whose handler recovers, still poisons the transaction for whatever the SAME
             # transaction runs next unless the call sits inside `with <cursor>.savepoint():` --
             # zero_sudo/models/security_utils.py's own _get_service_uid() is the canonical
@@ -2144,8 +2139,8 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     # A test proving a caller-supplied override_svc_uid
                     # parameter is now REJECTED (get_record_by_slug() and
                     # friends in edge_routing/tests/test_routing_mixin.py,
-                    # bug-hunt fix 2026-09-12: the parameter itself was
-                    # removed after a real RPC privilege-escalation finding)
+                    # the parameter itself was removed after an RPC
+                    # privilege-escalation finding)
                     # legitimately passes the literal SUPERUSER_ID token as
                     # the value an attacker would have tried, inside
                     # assertRaises(TypeError) -- it never runs with elevated
@@ -2197,7 +2192,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     and getattr(node.value, "value", None) in (False, 0)
                     and not re.search(r".*_?api\.py$", self.filename)
                 ):
-                    # Real false positive found 2026-09-08: this "is it an API" check was
+                    # False positive: this "is it an API" check was
                     # filename-only (must end in _api.py), never checking the same
                     # @http.route(...) call's own type= kwarg -- a real, correctly-
                     # authenticated (API-key, not cookie/session) type="jsonrpc" endpoint
@@ -2229,20 +2224,19 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
             if self.is_odoo_module:
                 if node.attr == "sudo":
                     # Deliberately NOT `self.node_span_text(node)` here, unlike
-                    # every other site this fix touched (2026-09-04) --
+                    # every other site that scans a statement's full span --
                     # `node` is the `Attribute` for `.sudo` alone (e.g. the
                     # `.sudo` in `record.sudo()._generate(vals)`), whose own
                     # `end_lineno` never extends into the outer `()._generate(
                     # vals)` call chain this check's own substring match
                     # (`"sudo()._generate("` etc.) actually needs to see --
                     # widening to `node.end_lineno` here would be a no-op,
-                    # not a real fix. A real fix needs the enclosing
+                    # not a solution. A real solution needs the enclosing
                     # statement's own span, which this visitor doesn't
                     # currently track (no parent/statement stack exists to
                     # walk up to from here) -- left as single-line, a real,
                     # known, narrower version of the same reflow gap the
-                    # other checks in this class no longer have, not silently
-                    # assumed fixed alongside them.
+                    # other checks in this class no longer have.
                     line_content = (
                         self.lines[node.lineno - 1]
                         if node.lineno <= len(self.lines)
@@ -2260,7 +2254,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                             # ran, against a recordset bound to a narrowly-
                             # scoped service account that deliberately lacks
                             # the Central Mail Service Group -- empirically
-                            # confirmed necessary 2026-09-12
+                            # confirmed necessary
                             # (ham_relay_bridge/tests/test_relay_node.py:
                             # removing .sudo() here made
                             # test_receive_telemetry_persists_and_tracks_operating_callsign
@@ -2328,7 +2322,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
             elif fid == "eval":
                 self.add_error(node.lineno, "CRITICAL RCE: Never use native eval()...")
             elif fid == "exec":
-                # Real, narrow exemption found 2026-09-12, mirroring the hasattr()/super()
+                # Narrow exemption, mirroring the hasattr()/super()
                 # exemption immediately above: hams_shared/tools' own test suite has an
                 # established, deliberate, and safe convention (test_run_linters.py,
                 # test_fix_manifests.py, test_bulk_explanation_manager.py, each with its own
@@ -2444,15 +2438,14 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
             if (
                 attr == "execute"
                 and getattr(node.func.value, "attr", getattr(node.func.value, "id", ""))
-                # Real SQL-injection false negative found via the bug-hunt campaign,
-                # 2026-09-10: this used to require the exact attribute/variable name "cr",
-                # missing the identical, still-valid, still-idiomatic Odoo cursor alias
+                # SQL-injection false negative: this used to require the exact
+                # attribute/variable name "cr", missing the identical, still-valid, still-idiomatic Odoo cursor alias
                 # `self._cr` (BaseModel's own underlying cursor attribute, predating the
                 # newer `self.env.cr` spelling but never removed) -- `self._cr.execute(f"...
                 # {name} ...")` is exactly the same SQLi-shaped call this rule exists to catch,
                 # via `is_tainted_sql()`, and was silently invisible to it. Confirmed via a real
                 # repro: an f-string interpolated straight into `self._cr.execute(...)` produced
-                # zero findings before this fix.
+                # zero findings when only "cr" was matched.
                 in ("cr", "_cr")
             ):
                 is_cr_execute = True
@@ -2473,7 +2466,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                 attr in ("md5", "sha1")
                 and getattr(node.func.value, "id", "") == "hashlib"
             ):
-                # Real, narrow exemption found 2026-09-12: this rule's own concern is a security
+                # Narrow exemption: this rule's own concern is a security
                 # token WE choose to generate with a broken hash -- it doesn't apply to
                 # faithfully reproducing an EXISTING external protocol's own, already-fixed,
                 # unchangeable hash algorithm for interop/testing. First used by
@@ -2508,7 +2501,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     attr in ("search", "create", "browse")
                     and getattr(node.func.value, "id", "") == "self"
                     and "model" not in self.current_decorators
-                    # Real false positive found 2026-09-08: `self.browse()` with NO arguments
+                    # False positive: `self.browse()` with NO arguments
                     # always returns an empty recordset of self's own model -- by definition,
                     # not ambiguously. This is the standard idiom for "start an empty recordset
                     # of my own model to accumulate into" (Odoo core does this constantly), with
@@ -2517,7 +2510,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     # can raise.
                     and not (attr == "browse" and not node.args and not node.keywords)
                 ):
-                    # Real false positive found 2026-09-08: inside an @api.model method, `self`
+                    # False positive: inside an @api.model method, `self`
                     # is always the model's own empty recordset -- `self.search(...)` there is
                     # the standard, idiomatic Odoo pattern (Odoo core itself does this
                     # constantly), not an ambiguous call discarding some other recordset's real
@@ -2551,7 +2544,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                             and arg0.args[0].value in ("base.user_admin", "base.user_root")
                             and "/tests/" not in self.filepath.replace("\\", "/")
                         ):
-                            # Found 2026-09-16: pager_duty's post_init_hook
+                            # Seen in pager_duty's post_init_hook
                             # registered its daemon key as base.user_admin,
                             # which the with_user(1)/SUPERUSER_ID checks above
                             # never saw because the admin is reached through
@@ -2739,8 +2732,8 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
             # at all. AST alone can't know the receiver's runtime type, so this
             # relies on the same _RE/_REGEX/_PATTERN naming convention this
             # linter file's own module-level compiled patterns already use
-            # (e.g. REMOVED_COMMENT_RULE_REGEX above) -- a real, previously
-            # undiscovered false positive found via
+            # (e.g. REMOVED_COMMENT_RULE_REGEX above) -- a false positive
+            # seen in
             # ics_forms/models/ics_form_handler.py's `_SCHEMA_SCRIPT_RE.search()`.
             if receiver_id.upper().endswith(("_RE", "_REGEX", "_PATTERN")):
                 return
@@ -2923,7 +2916,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
             every hop, including redirect targets, rather than trusting a
             second independently-timed DNS lookup.
 
-            An ERROR since 2026-09-28. It started as a warning, and the reason
+            This is an ERROR. It started as a warning, and the reason
             was blast radius rather than severity: this is a repo-wide scan
             that halts a run on its first error, so an error-level rule
             landing on the ~33 existing call sites would have broken every
@@ -3138,11 +3131,10 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
             self._check_unguarded_outbound_fetch(node, func_name)
             self._check_retry_replays_non_idempotent_methods(node, func_name)
 
-            # night_shift_todo/low/lint-rule-get-param-mock-must-fall-through-bd8524b6.md:
-            # a get_param patch whose replacement can return for an unmatched key without
+            # A get_param patch whose replacement can return for an unmatched key without
             # calling through to the real get_param breaks EVERY other config lookup in the
             # process, not just the one key the test cares about -- including keys Odoo's own
-            # HTTP layer needs (database.secret for CSRF, request-size limits, ...). Found
+            # HTTP layer needs (database.secret for CSRF, request-size limits, ...). Seen
             # twice in ham_club_management: a return_value=False mock zeroed a request-size
             # limit (spurious 413); a side_effect scoped to one key still broke
             # database.secret's own fallback (CSRF 500s on every page-rendering test,
@@ -3231,9 +3223,8 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     and getattr(node.func.value.value, "attr", "")
                     in ("registry", "models")
                 ):
-                    # Real false positive found 2026-09-12 (hams_shared/tools/ 326-finding
-                    # discovery): this check matches by variable NAME alone ("registry" or
-                    # "models"), with no way to tell Odoo's own live model registry
+                    # False positive (hams_shared/tools/): this check matches by variable
+                    # NAME alone ("registry" or "models"), with no way to tell Odoo's own live model registry
                     # (self.env.registry / self.pool) apart from an unrelated local
                     # variable that happens to share the name. odoo_registry_builder.py's
                     # own `registry = build_registry(roots)` is a plain dict this
@@ -3321,8 +3312,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     ):
                         is_su = True
                     if is_su:
-                        # Real, narrow, sanctioned exception, 2026-09-14 (night_shift_todo.md's
-                        # "OPEN QUESTION for Bruce" -> "FIXED" entry): `zero_sudo.security.
+                        # Narrow, sanctioned exception: `zero_sudo.security.
                         # utils._get_service_uid(xml_id)` -- the only sanctioned way to resolve a
                         # real, scoped service account's uid -- is itself an `@api.model` method
                         # on a real Odoo model, so calling it at all requires SOME existing
@@ -3334,10 +3324,9 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                         # web-request lifecycle) need a transient SUPERUSER_ID Environment for
                         # exactly one purpose: resolving the real uid, then discarding that
                         # Environment immediately and building a SECOND, real Environment with
-                        # the resolved uid for all actual work. Bruce's own explicit decision,
-                        # 2026-09-14, picking this over the sibling option of just exempting
-                        # these files outright. This tag is deliberately much narrower than a
-                        # file/directory exemption: it excuses only the ONE Environment(...) call
+                        # the resolved uid for all actual work. This was chosen over the
+                        # sibling option of just exempting these files outright. This tag is
+                        # deliberately much narrower than a file/directory exemption: it excuses only the ONE Environment(...) call
                         # this exact tag sits on, not every SUPERUSER_ID use in the file, so a
                         # second, real, unrelated SUPERUSER_ID misuse added later to the same
                         # file still trips this check normally. Whoever adds this tag is
@@ -3371,8 +3360,8 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     # meant to be piped/parsed by a caller, a pipeline
                     # script's own stderr warning for the human running it
                     # directly) through logging instead. Confirmed
-                    # repo-wide: every non-addon print() finding as of
-                    # 2026-08-31 (build_spec.py's stderr warning,
+                    # repo-wide: every non-addon print() finding at
+                    # the time of writing (build_spec.py's stderr warning,
                     # extract_pdf_batch.py's --count-only/batch-index JSON
                     # output, a scratch-like ingest/ debug script) is
                     # exactly this legitimate case, not log noise.
@@ -3422,14 +3411,12 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     arg0 = node.args[0]
 
                     def _is_escape_call(n):
-                        # Bug-hunt fix, 2026-09-11: recognizes html.escape(...)/
+                        # Recognizes html.escape(...)/
                         # markupsafe.escape(...)/bare escape(...) as a safe source, so a value
                         # that was explicitly escaped before interpolation isn't flagged as if
-                        # it were raw, unescaped user input. See night_shift_todo.md's own
-                        # 2026-09-10 "check_burn_list.py's Markup(...) XSS check is overbroad"
-                        # entry -- this closes it via the exact "trace whether a specific
-                        # interpolated name's own most recent assignment was an escape() call"
-                        # approach that entry proposed as candidate (a), reusing the existing
+                        # it were raw, unescaped user input. This uses a trace of whether a
+                        # specific interpolated name's own most recent assignment was an
+                        # escape() call, reusing the existing
                         # self.assignments per-scope dataflow tracking (see is_tainted_sql's own
                         # _resolve_str above for the same pattern).
                         return isinstance(n, ast.Call) and (
@@ -3681,7 +3668,7 @@ def _xml_audit_lookback_start(node, fallback_lines=8):
     A fixed line-count lookback is inherently arbitrary -- a real
     audit-ignore-* comment explaining a genuine architectural exception can
     run longer than any fixed guess (a real 9-line audit-ignore-cron comment
-    in edge_routing/data/security_data.xml was found one line past an
+    in edge_routing/data/security_data.xml once ran one line past an
     earlier 8-line guess). Prefer a real structural boundary this custom XML
     parser already tracks: the end of the nearest ancestor's own previous
     non-comment sibling, or the start of the document if none exists.
@@ -3698,7 +3685,7 @@ def _xml_audit_lookback_start(node, fallback_lines=8):
     wrapper elements -- e.g. <field name="arch"> -- in between). Climbing
     one ancestor level at a time from <xpath> stops the instant it meets
     ANY non-comment sibling, even an unrelated wrapper element several
-    levels short of the real <record>/<template> -- found for real via
+    levels short of the real <record>/<template> -- seen in
     hams_s3/views/res_config_settings_views.xml, where <field name="arch">
     (xpath's own immediate parent) has an ordinary preceding <field> sibling
     of its own, so a naive one-level-at-a-time climb stopped there and
@@ -3731,11 +3718,10 @@ def _xml_audit_lookback_start(node, fallback_lines=8):
     return scope.parent.lineno - 1
 
 
-# Service-account privilege audit, 2026-09-14 (bug-hunt, Bruce's own follow-up: "make linter
-# rules if it can"). Two of that audit's six findings generalize into cheap, low-noise, purely
-# mechanical checks over a single security/data XML file; both were confirmed against a real
-# reproduction (the pre-fix pager_duty/security/security.xml and backup_management/security/
-# security.xml, via `git show`) and against the fixed tree (zero hits), see
+# Service-account privilege rules. Two findings of a service-account privilege audit generalize
+# into cheap, low-noise, purely mechanical checks over a single security/data XML file; both
+# match the earlier pager_duty/security/security.xml and backup_management/security/
+# security.xml (via `git show`) and give zero hits on the current tree, see
 # test_check_burn_list.py's service-account tests.
 _SERVICE_ACCOUNT_HUMAN_ADMIN_GROUP_RE = re.compile(
     r"^(base\.group_system|base\.group_erp_manager|[a-z0-9_]+\.group_[a-z0-9_]*admin(istrator)?)$"
@@ -3782,8 +3768,8 @@ def _xml_comment_precedes(node, marker):
 
 
 def check_service_account_group_hygiene(root_node):
-    """Two mechanical service-account rules (finding #6 and finding #4 of the 2026-09-14
-    service-account privilege audit):
+    """Two mechanical service-account rules (findings #6 and #4 of the service-account
+    privilege audit):
 
     1. A service account (is_service_account=True) MUST NOT hold a human-facing administrator
        group (base.group_system, base.group_erp_manager, or any `<module>.group_*admin` /
@@ -3837,7 +3823,7 @@ _KEY_TUPLE_PATH_RE = re.compile(r'"(/opt/hams/etc/keys/(?:[a-zA-Z0-9_.-]+/)?[a-z
 
 
 def check_daemon_key_registration(target_dir):
-    """Repo-level rule (finding #5 of the 2026-09-14 service-account privilege audit): every
+    """Repo-level rule (finding #5 of the service-account privilege audit): every
     ODOO_KEY_FILE a systemd unit in hams_shared/tools/infrastructure.py reads MUST be registered
     in ham_init/hooks.py's daemons_to_register list, because that loop is the only place a
     daemon.key.registry row is ever created in a real deployment and a daemon whose key file has
@@ -3970,12 +3956,12 @@ def scan_file(filepath, is_odoo_module=False):
                     )
 
     if filename.endswith(".xml"):
-        # Real, previously-undiscovered bug found 2026-09-08 the hard way: XML forbids "--"
+        # XML forbids "--"
         # ANYWHERE inside a comment body (not just as the closing "-->"), a rule this codebase's
         # own "--" comment-dash convention (used pervasively in Python/Rust prose comments) walks
         # right into whenever it's copy-pasted into an XML <!-- --> comment. Two real instances
-        # found by a full-repo sweep after one of them silently aborted a real `-u all` Odoo
-        # module upgrade with a raw lxml.etree.XMLSyntaxError -- not a hypothetical. Checked via a
+        # existed, and one silently aborted a `-u all` Odoo module upgrade with a raw
+        # lxml.etree.XMLSyntaxError. Checked via a
         # DOTALL regex over the whole file (not the line-by-line loop below) since a comment, and
         # the "--" inside it, can span multiple lines.
         for comment_match in re.finditer(r"<!--(.*?)-->", content, re.DOTALL):
@@ -4185,8 +4171,7 @@ def scan_file(filepath, is_odoo_module=False):
                     # view's id can legitimately appear nowhere else in the
                     # repo as text -- a real, undressed blind spot in
                     # hams_shared/tools/check_dead_code.py (confirmed on
-                    # ham_aprs's 3 station views). Bruce's own instruction,
-                    # 2026-08-31: catch this instead of trying to model
+                    # ham_aprs's 3 station views). The rule catches this instead of trying to model
                     # Odoo's resolution algorithm as a heuristic, so every
                     # action can be filled in explicitly and the dead-code
                     # checker no longer needs to guess. Old-style actions
@@ -4210,7 +4195,7 @@ def scan_file(filepath, is_odoo_module=False):
                             and child.attrs.get("name") == "view_ids"
                             for child in node.children
                         )
-                        # Older Odoo pattern, found for real in
+                        # Older Odoo pattern, used in
                         # ham_logbook/views/ham_qso_views.xml's
                         # action_ham_qso_qsl_dashboard: a "views" field
                         # (not "view_ids") holding an eval'd list of
@@ -4380,7 +4365,7 @@ def scan_file(filepath, is_odoo_module=False):
                             )
 
                 if node.tag == "img":
-                    # Real false positive found 2026-09-08: QWeb's own dynamic-attribute
+                    # False positive: QWeb's own dynamic-attribute
                     # syntax (t-att-alt="expr" / t-attf-alt="...#{...}") genuinely sets the
                     # real HTML alt attribute at render time -- ham_profile/views/
                     # member_profile_templates.xml's own badge <img> already had a real,
@@ -4577,7 +4562,7 @@ def scan_file(filepath, is_odoo_module=False):
                 # model (see XMLNode's own doc/construction above) -- excluded here for the same
                 # reason line 2697's own `if node.tag != "#comment":` guard exists: a comment can
                 # never execute, so "request.env" appearing in one is prose discussing real code
-                # elsewhere (a real false positive found 2026-09-07 in
+                # elsewhere (a false positive in
                 # ham_classifieds/security/security_rules.xml, an adversarial-review comment that
                 # happens to mention "request.env" while describing a Python controller), never a
                 # genuine SSTI vector -- no audit-ignore judgment call needed, just exclude it.
@@ -4593,7 +4578,7 @@ def scan_file(filepath, is_odoo_module=False):
                     # expression referencing `request.env` (e.g. a server-side computed value
                     # like `_get_service_uid(...)`) is exactly as safe as any other Python
                     # expression in this same, git-reviewed file, and this static AST pass has
-                    # no way to tell the two apart -- confirmed false positive found 2026-09-07 in
+                    # no way to tell the two apart -- confirmed false positive in
                     # ham_club_management/views/website_club_ad_templates.xml's own
                     # audit-ignore-view/audit-ignore-xpath-covered service-account pattern. Same
                     # escape hatch shape as every other rule in this file that can have a
@@ -4665,8 +4650,8 @@ def scan_file(filepath, is_odoo_module=False):
                     # audit-ignore-xpath comment sits above other stacked
                     # comments (e.g. an [@ANCHOR: ...] line and an
                     # audit-ignore-view line) rather than immediately
-                    # before the <xpath> tag -- a real, previously
-                    # undiscovered false positive found via
+                    # before the <xpath> tag -- a false positive
+                    # seen in
                     # ham_init/data/site_cleanup_data.xml's
                     # hams_minimal_footer template.
                     lookback_start = _xml_audit_lookback_start(node)
@@ -4730,7 +4715,7 @@ def scan_file(filepath, is_odoo_module=False):
     # Odoo's asset bundler only ever picks up JS from a module's static/
     # directory -- a tool config file living outside one (eslint.config.js,
     # webpack.config.js, etc.) is never bundled and can't carry the pragma
-    # at all. Found via a real false positive on hams_shared/eslint.config.js.
+    # at all. Seen as a false positive on hams_shared/eslint.config.js.
     if filename.endswith(".js") and "/static/" in filepath.replace(os.sep, "/"):
         has_pragma = False
         code_started = False
@@ -4874,7 +4859,7 @@ def scan_file(filepath, is_odoo_module=False):
                     f"Line {line_num}: CRITICAL LINTER EVASION: Use of 'noqa' is strictly forbidden.\n      Code: `{stripped}`"
                 )
 
-        # Real false positive found 2026-09-12: a genuinely bare `# burn-ignore: <reason>`
+        # False positive: a genuinely bare `# burn-ignore: <reason>`
         # comment (no hyphenated tag name at all -- the always-allowed generic form
         # add_error()/add_warning() already recognize via _GENERIC_BURN_IGNORE_REGEX's own
         # `burn-ignore(?!-)` negative lookahead) used to be flagged as UNAUTHORIZED BYPASS
@@ -4933,10 +4918,9 @@ def scan_file(filepath, is_odoo_module=False):
                 # [@ANCHOR: resolve_bind_addr]) for exactly this reason: the
                 # safer default for a daemon with no documented need for
                 # direct external exposure. First used by
-                # daemons/hams_config.py's own resolve_bind_addr() (2026-09-14,
-                # centralizing what a first pass at adif_ingress/main.py and
-                # gdpr_csv_export/main.py's own --scan-daemons-and-tools fixes
-                # had each written inline) -- the literal lives in exactly this
+                # daemons/hams_config.py's own resolve_bind_addr() (centralizing what
+                # adif_ingress/main.py and gdpr_csv_export/main.py had each
+                # written inline) -- the literal lives in exactly this
                 # one shared, tested definition, not repeated per caller.
                 "burn-ignore-bind-address-default",
                 # cloudflared's own ingress architecture: it runs on the
@@ -4945,7 +4929,7 @@ def scan_file(filepath, is_odoo_module=False):
                 # localhost is the architecturally correct target here,
                 # not a container-to-container networking mistake. First
                 # used by cloudflare/models/tunnel.py's ingress config and
-                # tunnel_route.py's matching help text (found via a real
+                # tunnel_route.py's matching help text (seen as a
                 # false positive: this codebase's own established
                 # ingress rules genuinely route to
                 # ssh://localhost:22 / http://localhost:8069).
@@ -4959,7 +4943,7 @@ def scan_file(filepath, is_odoo_module=False):
                 # making a bare loopback address resolve to the wrong
                 # container when Odoo connects OUT to it). This
                 # deployment is Tunnel-only (cloudflared runs on the SAME
-                # host as Odoo, confirmed by Bruce 2026-09-11 -- see
+                # host as Odoo, confirmed -- see
                 # docs/bug_hunt_claims/hams_open/cloudflare/models/claims/cf_get_request_context.md),
                 # so a loopback remote_addr genuinely IS "this request came
                 # through our own tunnel," used to decide whether to trust
@@ -4983,7 +4967,7 @@ def scan_file(filepath, is_odoo_module=False):
                 # hams_s3/scripts/install_oca_storage.py's OCA
                 # storage_backend vendoring/patch script.
                 #
-                # Second use, 2026-09-12 (hams_shared/tools/ 326-finding discovery): the
+                # Second use (hams_shared/tools/): the
                 # identical shape for the CRITICAL AI LAZINESS: Catch-all AttributeError
                 # rule, not just the soft-dependency one above -- test_check_burn_list.py's
                 # own test_tools_directory_is_pruned_by_default_but_scanned_with_the_flag
@@ -5027,8 +5011,7 @@ def scan_file(filepath, is_odoo_module=False):
                 # comment). First used there.
                 "burn-ignore-optional-oca-dep",
                 # `'ham.dns.record' in self.env` (pager_duty/models/
-                # pager_check.py's update_lets_encrypt_domains(), asked
-                # about directly and answered by Bruce 2026-09-12): a
+                # pager_check.py's update_lets_encrypt_domains()): a
                 # different legitimate soft-dependency shape than the OCA
                 # one above -- ham_dns lives in hams_com, pager_duty lives
                 # in hams_open, and a real __manifest__.py 'depends' entry
@@ -5100,7 +5083,7 @@ def scan_file(filepath, is_odoo_module=False):
                 # check the production signup page itself uses.
                 #
                 # Also covers a closely related, deliberately-not-split-into-a-separate-tag
-                # shape (hams_shared/tools/ 326-finding discovery, 2026-09-12): a test whose
+                # shape (hams_shared/tools/): a test whose
                 # entire premise (a chmod 0o000 directory genuinely denies access) is false
                 # under a specific, checkable runtime precondition rather than a missing
                 # library/binary -- test_reap_stale_test_databases.py's
@@ -5111,10 +5094,10 @@ def scan_file(filepath, is_odoo_module=False):
                 # a real runtime fact rather than laziness" shape as the soft-dependency case
                 # above, just keyed on privilege level instead of package presence.
                 #
-                # Same discovery pass also covers two more of this tag's already-established
+                # This tag also covers two more of this tag's already-established
                 # "genuinely optional binary not installed" shape (test_run_rust_coverage.py's
                 # cargo-llvm-cov check, test_run_linters.py's flake8 check -- both confirmed
-                # actually installed on the dev box this was found on, so neither skip fires
+                # actually installed on the dev box used for the audit, so neither skip fires
                 # there, the same way the original ham_onboarding uses aren't always live
                 # either) and one more shape again keyed on a real, checkable runtime fact
                 # rather than package presence: test_rmsgw_protocol.py's
@@ -5217,10 +5200,8 @@ def scan_file(filepath, is_odoo_module=False):
                 # that actually executes them via browser_js() -- a real,
                 # tracked gap (check_hoot_runner_coverage.py's own check),
                 # not an intentional design choice. Grandfathers the 13
-                # modules already in this state when the check was added
-                # 2026-09-09 (found while fixing a separate, widespread
-                # window.fetch hoot-mocking bug that this exact kind of gap
-                # let sit unnoticed); new modules should add a runner
+                # modules already in this state when the check was added;
+                # new modules should add a runner
                 # instead of reaching for this tag.
                 "burn-ignore-hoot-runner-coverage",
                 # exec() on a REAL function's own source text, regex-extracted from the file
@@ -5253,9 +5234,8 @@ def scan_file(filepath, is_odoo_module=False):
                 # about -- "Let missing models in self.env fail fast"). The pwd/grp stdlib
                 # modules offer no non-exception-based "does this user/group exist" check,
                 # so this IS the correct, idiomatic mechanism, not a shortcut around one --
-                # confirmed by reading every real site (all 9, hams_shared/tools/
-                # 326-finding discovery, 2026-09-12), each already-tested or already-
-                # idempotent-by-design:
+                # confirmed by reading every real site (all 9, in hams_shared/tools/), each already-tested or
+                # already-idempotent-by-design:
                 #   - infrastructure.py's apply_permissions(): an unresolvable "user:group"
                 #     owner string skips chown but still chmods, already locked in by
                 #     test_infrastructure.py's own
@@ -5299,7 +5279,7 @@ def scan_file(filepath, is_odoo_module=False):
                 # UNAUTHORIZED BYPASS error, so following the rule's own
                 # advice ("add '# audit-ignore-outbound-fetch' naming the
                 # trusted host") turned a warning into a hard error that
-                # halts the whole scan. Found immediately on the first real
+                # halts the whole scan. This showed on the first real
                 # use, tagging zero_sudo's own local health-check poll.
                 "audit-ignore-outbound-fetch",
                 # The RETRY REPLAYS NON-IDEMPOTENT METHODS rule's escape hatch.
@@ -5326,10 +5306,9 @@ def scan_file(filepath, is_odoo_module=False):
                 "audit-ignore-gdpr-hand-rolled-unlink",
                 # `_get_service_uid()`'s narrow, single-call-site escape hatch
                 # from the "CRITICAL FAST FAIL" try/except ban above
-                # (visit_Try, has_ham_base branch). Bruce's own decision,
-                # 2026-08-31, after reviewing
-                # docs/proposals/CSP_FAIL_FAST_VS_RESPONSE_MIDDLEWARE_SAFETY.md's
-                # option 3: the existing broad-catch-with-safe-fallback design
+                # (visit_Try, has_ham_base branch). Decision recorded in
+                # docs/proposals/CSP_FAIL_FAST_VS_RESPONSE_MIDDLEWARE_SAFETY.md
+                # (option 3): the existing broad-catch-with-safe-fallback design
                 # in content_security_policy/models/ir_http.py's
                 # _post_dispatch is fine as-is -- it's a response-middleware
                 # hook that can legitimately run on a cursor-less/
@@ -5348,11 +5327,11 @@ def scan_file(filepath, is_odoo_module=False):
                 # The CRITICAL SSTI check's own dedicated escape hatch (visit_Call/
                 # visit_XmlNode's "request.env inside QWeb templates" rule, a few hundred
                 # lines above this generic allow-list), for a static, developer-authored
-                # expression with no reachable untrusted input. Same bug class already found
-                # for audit-ignore-gdpr-hand-rolled-unlink above: the SSTI rule has enforced
+                # expression with no reachable untrusted input. Same gap as
+                # audit-ignore-gdpr-hand-rolled-unlink above: the SSTI rule has enforced
                 # this tag since before this allow-list existed, but this file's own separate
                 # "is this audit-ignore tag recognized" check had never been told about it --
-                # found 2026-09-12 via a real false positive: this session's own
+                # the matching test,
                 # test_audit_ignore_ssti_suppresses_the_finding_for_a_reviewed_static_expression
                 # fixture correctly suppressed the CRITICAL SSTI finding but then tripped
                 # UNAUTHORIZED BYPASS on the exact same tag.
@@ -5366,8 +5345,7 @@ def scan_file(filepath, is_odoo_module=False):
                 # entry here, a correctly-tagged, correctly-suppressed transient-bootstrap line
                 # would still trip this separate generic "is this audit-ignore tag recognized"
                 # UNAUTHORIZED BYPASS check. First used by list_routes.py's own transient
-                # SUPERUSER_ID bootstrap (see night_shift_todo.md's "OPEN QUESTION for Bruce" ->
-                # "FIXED" entry, 2026-09-14).
+                # SUPERUSER_ID bootstrap bootstrap.
                 "audit-ignore-superuser-bootstrap-for-service-uid-resolution",
             ]
             if not any(tag in line for tag in valid_audits):
@@ -5389,7 +5367,7 @@ def scan_file(filepath, is_odoo_module=False):
                 # ham_init/tests/test_admin_password_bootstrap.py already
                 # has a correctly-tagged
                 # `# Tests [@ANCHOR: COMM_test_post_init_hook_daemon_registry]`
-                # -- undetectable before this fix.
+                # -- undetectable by the original single-name check.
                 anchor_match = re.search(r"\[@ANCHOR:\s*([a-zA-Z0-9_]+)\s*\]", line)
                 if anchor_match:
                     REQUIRE_TEST_VERIFICATION.append(
@@ -5517,7 +5495,7 @@ def _verify_test_ast(
 
     # `_find_anchor_line` recognizes both the single-line `[@ANCHOR: ...]`
     # form and the BEGIN half of a multi-line `[@ANCHOR-BEGIN: ...]` /
-    # `[@ANCHOR-END: ...]` pair (2026-09-04, Bruce's own request) -- either
+    # `[@ANCHOR-END: ...]` pair -- either
     # way, the anchor's own line is what "does this test function's line
     # range contain the anchor" below needs; the END marker (if present)
     # exists for the reformatting-robustness/documentation reasons named
@@ -5560,7 +5538,7 @@ def _verify_test_ast(
             if func_attr in ("assertRaises", "assertRaisesRegex"):
                 found_security_check = True
             if func_attr in ("assertFalse", "assertTrue"):
-                # Bug-hunt fix, 2026-09-11: burn-ignore-financial used to be discharged by
+                # burn-ignore-financial used to be discharged by
                 # ANY assertTrue/assertFalse call, including a vacuous, always-true literal
                 # (assertTrue(True), assertFalse(False)) that asserts nothing real about
                 # financial data protection at all -- a tag anyone could satisfy with a
@@ -5594,7 +5572,7 @@ def _verify_test_ast(
                     elif func_attr in ("assertRaises", "assertRaisesRegex"):
                         found_security_check = True
 
-    # Bug-hunt fix, 2026-09-11: this loop-evasion check only ever inspected `get_view`/
+    # This loop-evasion check originally inspected only `get_view`/
     # `url_open` calls -- but the surrounding validity checks above (found_view/found_trigger/
     # found_mail) also treat `_get_combined_arch`, `_trigger`, `send_mail`, and `message_post`
     # as equally valid evidence for their own tag types (audit-ignore-view/-xpath,
@@ -5602,7 +5580,7 @@ def _verify_test_ast(
     # a loop with no non-empty-iterable assertion had the identical "silently empty collection
     # skips the assertion" hole this check exists to catch, just via a different call name --
     # confirmed live-reachable via a real test fixture for each of the 3 previously-missed
-    # names before this fix (see test_check_burn_list.py).
+    # names (see test_check_burn_list.py).
     _LOOP_EVASION_CALL_NAMES = (
         "get_view",
         "url_open",
@@ -5618,7 +5596,7 @@ def _verify_test_ast(
                     isinstance(child, ast.Call)
                     and getattr(child.func, "attr", "") in _LOOP_EVASION_CALL_NAMES
                 ):
-                    # Exception (2026-09-09): a loop is only a problem when it can
+                    # Exception: a loop is only a problem when it can
                     # silently iterate zero times, making the assertion inside it
                     # never run at all -- not because it's a loop. If the function
                     # also asserts the loop's own iterable is non-empty (a
@@ -5720,7 +5698,7 @@ def _git_ignored_paths(target_dir):
     `-c safe.directory=<worktree>` is scoped to this one call: tools/test.py runs this linter as the `odoo` account, which
     does not own the checkout, and git then refuses with "detected dubious ownership". Falling back to an empty set on that
     failure lints every ignored file, which fails a multi-module test run on a machine holding synced course content
-    (found 2026-09-28: 538 false errors from ham_training/data/teachers_guide). So a git failure inside a repository is fatal."""
+    (one case: 538 false errors from ham_training/data/teachers_guide). So a git failure inside a repository is fatal."""
     if not os.path.isdir(target_dir):
         # test.py names a single test class as `module:TestClass`; there is no such directory to ask git about, and the walk
         # below finds nothing to scan for it either.
@@ -5805,7 +5783,7 @@ def main():
             "hams_com",
             # Genuinely vendored upstream Cloudflare client source
             # (daemons/cloudflared/README.md says so directly) --
-            # found live: scanning `daemons` directly as this
+            # Observed: scanning `daemons` directly as this
             # function's own target_dir doesn't trigger the
             # sibling "daemons" exclusion above (that only prunes
             # it as a *subdirectory* encountered during the walk,
@@ -5822,7 +5800,7 @@ def main():
             # stubs (odoo_type_stubs/odoo/...), used only to give
             # odoo_mypy_plugin.py's MRO-merging something to attach to --
             # every stub method body is a bare `...`, its own file header
-            # says "AUTO-GENERATED -- do not hand-edit". Found live: with
+            # says "AUTO-GENERATED -- do not hand-edit". With
             # tools/ unpruned this one 725-file generated tree alone
             # produced thousands of bogus "Elision (...) is strictly
             # forbidden" findings, drowning any real finding elsewhere.
@@ -5881,11 +5859,11 @@ def main():
                 scanned_files += 1
                 is_odoo = _is_odoo_module(filepath, target_dir)
                 errors, warnings = scan_file(filepath, is_odoo_module=is_odoo)
-                # Real bug found via the bug-hunt campaign, 2026-09-10: `FOUND_TOURS` (declared
+                # `FOUND_TOURS` (declared
                 # at module scope, consumed by the "Tour Asset Registration Trap" check at the
                 # tail of main()) was NEVER appended to anywhere in this file -- that whole check
-                # has been permanently dead code, always iterating an empty list, since whatever
-                # session originally wrote the consuming loop never wired up the producing side.
+                # has been permanently dead code, always iterating an empty list, since the
+                # consuming loop was never wired to a producing side.
                 # Confirmed by grep: no `FOUND_TOURS.append` or reassignment existed anywhere.
                 # This populates it the same way every other "is this a real, registered JS
                 # tour" question in this file is answered: the same tour.js/*_tour.js filename
@@ -5941,7 +5919,7 @@ def main():
                                 try:
                                     # Parse only a file that has a later `#!` line at all: the set is only
                                     # consulted for those lines, and parsing and walking every file's tree a
-                                    # second time was 7 of the 59 s of a hams_com scan (2026-11-08).
+                                    # second time was 7 of the 59 s of a hams_com scan (measured).
                                     if any(line.startswith("#!") for line in lines[1:]):
                                         for node in ast.walk(
                                             ast.parse("".join(lines), filename=filepath)
@@ -5997,7 +5975,7 @@ def main():
         # can newly resolve through a DIFFERENT anchor's citation.
         # `_anchor_citation_present` also accepts the BEGIN half of a
         # multi-line `[@ANCHOR-BEGIN: ...]`/`[@ANCHOR-END: ...]` pair
-        # (2026-09-04) -- same widening in kind as the COMM_-prefix
+        # -- same widening in kind as the COMM_-prefix
         # tolerance above, same reason (a real citation, written either
         # supported way, must still resolve).
         for f, c in FOUND_TEST_CONTENTS.items():
@@ -6037,13 +6015,13 @@ def main():
 
         manifest = FOUND_MANIFESTS[found_mod]
         assets = manifest.get("assets", {})
-        # Real bug found via the bug-hunt campaign, 2026-09-10: `assets` comes straight from
+        # `assets` comes straight from
         # ast.literal_eval() of the manifest dict with no shape validation -- a manifest with a
         # non-dict `'assets'` value (e.g. `None`, or an old pre-bundle-dict-format list) would
         # raise AttributeError on `.items()` here, uncaught, at the very tail of main() after
         # every real per-file finding has already been printed. Not the same crash as the
-        # scan_file()/FOUND_MANIFESTS ast.literal_eval() ValueError fixed elsewhere in this same
-        # session (that one aborted the scan before a single file was checked); this one only
+        # scan_file()/FOUND_MANIFESTS ast.literal_eval() ValueError handled elsewhere in this same
+        # module (that one aborted the scan before a single file was checked); this one only
         # loses the tour-asset-registration and orphan/dangling-tour checks and the final
         # exit-code summary, but it's still a real, silent fail-closed for those two checks.
         if not isinstance(assets, dict):
@@ -6105,7 +6083,7 @@ def main():
 
     # Audit Orphaned o_tour_ classes and Dangling Tour Targets (Bidirectional Audit)
     #
-    # Real bug found and fixed 2026-09-08: this check is inherently repo-wide (a class
+    # This check is inherently repo-wide (a class
     # is "orphaned" only if it's absent from *every* JS tour file, not any single one),
     # but its own findings used to print with no "📄 <file>" header of their own at
     # all -- the console output just inherited whichever file header the *previous*,
@@ -6123,12 +6101,11 @@ def main():
     for root, dirs, files in os.walk(target_dir):
         if "radae" in dirs:
             dirs.remove("radae")
-        # Real bug found 2026-09-12: unlike the main scan loop above (which prunes any
+        # Bug: unlike the main scan loop above (which prunes any
         # dotfile-prefixed directory), this second, independent walk over the same target_dir
-        # never excluded dotfile directories at all -- including this project's own standing
-        # convention of running concurrent bug-hunt dispatches in isolated git worktrees under
-        # .claude/worktrees/<session>/ inside the repo root (a real git worktree checkout,
-        # confirmed with a real `git worktree add` earlier tonight, not an empty directory).
+        # never excluded dotfile directories at all -- including git worktrees that
+        # agent sessions run in, nested under .claude/worktrees/<session>/ inside the repo
+        # root (a real worktree checkout, not an empty directory).
         # Without this, a real XML/JS tour file inside another session's own in-progress
         # worktree would be scanned for o_tour_ classes, potentially producing a bogus
         # "orphaned"/"dangling" tour finding tied to content that isn't part of the real repo
@@ -6184,7 +6161,7 @@ def main():
     # Always print a summary, even with zero findings -- a fully silent,
     # zero-byte-output exit was previously indistinguishable from the
     # tool having crashed, hung, or been invoked wrong (e.g. against an
-    # empty/nonexistent directory), found by actually hitting it: a real
+    # empty/nonexistent directory), a real
     # scan that genuinely had zero errors and zero warnings printed
     # nothing at all.
     print(f"\nScan Complete: Checked {scanned_files} files.")

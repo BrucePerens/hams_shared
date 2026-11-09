@@ -3,15 +3,13 @@
 """
 check_burn_list.py had zero automated test coverage despite being the
 core security/architecture linter this codebase runs on every commit
-(3600+ lines, dozens of distinct rules) -- every verification of a
-change to it this session was a manual before/after comparison, not a
-regression test that survives after the session ends. Starts with
-_xml_audit_lookback_start(), the specific function this session's own
-earlier work modified (unifying three separate magic-number lookback
-implementations into one real structural-boundary walk), using the
-exact two real regression cases documented in that function's own
-docstring -- not synthetic examples, the actual bugs found this session
-against real files (edge_routing/data/security_data.xml,
+(3600+ lines, dozens of distinct rules) -- a change to it used to be
+verified only by a manual before/after comparison, which leaves no
+regression test behind. Starts with
+_xml_audit_lookback_start() (which unifies three separate magic-number
+lookback implementations into one real structural-boundary walk), using
+the exact two real regression cases documented in that function's own
+docstring -- not synthetic examples, the actual bugs seen against real files (edge_routing/data/security_data.xml,
 hams_s3/views/res_config_settings_views.xml) -- as fixtures, so a
 future change that reintroduces either bug fails a real test instead of
 requiring another manual before/after diff.
@@ -212,7 +210,7 @@ def test_lookback_on_a_record_with_no_parent_uses_the_fallback():
 
 # Hypothesis property tests for _xml_audit_lookback_start, per CODE_REVIEW_PROCESS.md's own
 # standing "more Hypothesis property-test scoping" guidance -- a small, pure, well-typed target
-# sharing this session's own SSTI-fix work on this exact function's neighborhood. The four
+# covering the SSTI handling next to this function. The four
 # example tests above cover: a multi-line COMMENT, jumping past an intermediate wrapper, no
 # preceding comment at all, and no parent at all. None of them cover several separate STACKED
 # `<!-- -->` comment siblings (as opposed to one multi-line comment node) -- the real scenario
@@ -303,7 +301,7 @@ def test_domain_sandbox_flags_a_direct_id_chained_grant():
 
 
 def test_domain_sandbox_flags_the_variable_assignment_evasion_this_session_fixed():
-    # This session's own real fix: g = self.env.ref(...) stores the
+    # The guarded shape: g = self.env.ref(...) stores the
     # ref() result in a variable first, then g.id is read on a LATER,
     # separate line -- the direct .id-chain check alone can't see this
     # at all. Confirming this still fires is exactly what protects that
@@ -432,18 +430,17 @@ def test_patch_ban_exempts_hams_com_ingest():
     # non-Odoo daemon scripts (FUNCTION_TEST_ANCHOR_SWEEP.md's own sweep) --
     # it just lives at the top level instead of nested under a literal
     # daemons/ directory, so it needs the identical exemption for the
-    # identical reason. Found live: 23 of ingest/'s own real test_*.py
-    # files were already using native patch.object() before this exclusion
-    # existed.
+    # identical reason: 23 of ingest/'s own real test_*.py
+    # files use native patch.object().
     errors = _patch_ban_errors("ingest/test_daemon_utils.py")
     assert errors == []
 
 
 def test_patch_ban_exempts_hams_shared_tools():
     # hams_shared/tools/ is a third instance of the same case as daemons/
-    # and ingest/ (LINTER_POLICY_REVISIT.md, 2026-09-07): standalone
+    # and ingest/ (LINTER_POLICY_REVISIT.md): standalone
     # test_*.py files with no Odoo TestCase base class to redirect to.
-    # Found live: 114 of the 471 findings from a real
+    # Measured: 114 of the 471 findings from a real
     # --scan-daemons-and-tools run against hams_open were this exact rule
     # firing across tools/, the single largest category.
     errors = _patch_ban_errors("hams_shared/tools/test_check_burn_list.py")
@@ -460,10 +457,10 @@ def test_patch_ban_exempts_github_self_hosted_runner():
 
 
 def test_patch_ban_exempts_devbox_tools():
-    # devbox_tools/ (2026-10-01) is a sixth instance of the same case: standalone, non-Odoo
-    # test_*.py files with no Odoo TestCase base class to redirect to. Found live:
-    # devbox_tools/test_deploy_to_production.py was already using native unittest.mock.patch
-    # directly before this exclusion existed. `(?:^|/)tools/` does not already cover this --
+    # devbox_tools/ is a sixth instance of the same case: standalone, non-Odoo
+    # test_*.py files with no Odoo TestCase base class to redirect to.
+    # devbox_tools/test_deploy_to_production.py uses native unittest.mock.patch
+    # directly. `(?:^|/)tools/` does not already cover this --
     # it anchors to an exact "tools" path segment, and "devbox_tools" is one segment, not
     # "devbox" + "tools".
     errors = _patch_ban_errors("devbox_tools/test_import_gemini_club_dataset.py")
@@ -495,7 +492,7 @@ def _qweb_numeric_separator_errors(source):
 
 
 def test_qweb_numeric_separator_in_t_out_is_flagged():
-    # The exact real bug found and fixed in ham_shack.WebShackTemplate, 2026-09-07
+    # The exact real failure in ham_shack.WebShackTemplate
     # (OFFLINE_HAM_OPERATION.md): Owl's own expression compiler doesn't understand JS numeric
     # separators and silently produces invalid generated JS.
     source = '<t t-out="(state.autoTuneStatus.new_freq / 1_000_000).toFixed(6)"/>\n'
@@ -528,7 +525,7 @@ def test_qweb_numeric_separator_outside_a_t_directive_is_not_flagged():
 
 
 def test_tour_mandate_is_not_satisfied_by_audit_ignore_view_alone():
-    # The real bug found and fixed this session (pager_check_views.xml):
+    # The real case (pager_check_views.xml):
     # ADR 0076 section 3 says audit-ignore-view and burn-ignore-tour are
     # distinct bypasses for distinct concerns (backend view-rendering
     # test coverage vs. tour coverage) and "both tags must be explicitly
@@ -579,7 +576,7 @@ def test_tour_mandate_is_satisfied_by_a_real_tour_anchor():
 
 
 def test_csrf_form_check_flags_a_post_form_with_no_token():
-    # A real bug this session found live: two new ham_onboarding test
+    # A real case: two ham_onboarding test
     # files called a `_get_csrf_token()` helper that was never defined on
     # that test class (copy-pasted from a sibling file that DOES define
     # it locally rather than inheriting it) -- an AttributeError, not a
@@ -661,8 +658,8 @@ def _real_txn_stale_read_errors(content, filename="test_thing.py"):
 
 
 def test_real_transaction_case_flags_a_read_after_url_open_with_no_commit():
-    # The real bug this session found live, twice, in
-    # test_adif_api.py's own new test: RealTransactionCase uses a real,
+    # The real case, seen twice, in
+    # test_adif_api.py: RealTransactionCase uses a real,
     # separately-committing cursor, so a record created by url_open()'s
     # own HTTP connection isn't visible to this test's self.env until a
     # fresh transaction starts.
@@ -697,11 +694,11 @@ class TestThing(RealTransactionCase):
 
 
 def test_real_transaction_case_check_ignores_ordinary_httpcase():
-    # A real false positive this session found and fixed: HamsHttpCase
+    # A past false positive: HamsHttpCase
     # (unlike RealTransactionCase) shares its test cursor with the HTTP
     # dispatch, so reading self.env[...] straight after url_open() with
     # no commit() is the normal, working pattern -- confirmed directly
-    # by many passing tests written this same session. The broader
+    # by many passing tests. The broader
     # in_real_transaction_case flag (used by the commit()/rollback()
     # "TEST CURSOR CORRUPTION" check) deliberately also covers
     # HamsHttpCase/HttpCase; this check must use the narrower,
@@ -721,7 +718,7 @@ class TestThing(HamsHttpCase):
 
 
 def test_real_transaction_case_commit_before_http_makes_a_later_read_safe():
-    # A real false positive found and fixed this session: if the cursor's
+    # A past false positive: if the cursor's
     # own transaction was already closed by a commit() BEFORE the http
     # call (with nothing querying it since), the read after the http call
     # is the one that opens a fresh transaction -- its REPEATABLE READ
@@ -812,7 +809,7 @@ def _routing_deprecation_errors(source, filename="test_widget.py"):
 
 
 def test_web_tests_route_is_not_flagged_as_deprecated_routing():
-    # Real false positive found and fixed this session: /web/tests is
+    # False positive: /web/tests is
     # Odoo's own real, non-deprecated hoot unit-test runner route (used
     # unmodified in odoo/addons/web/tests/test_js.py itself), but the
     # allowlist only exempted /web/login, /web/signup, /web/assets, and
@@ -832,12 +829,12 @@ def test_a_real_deprecated_web_path_is_still_flagged():
 
 
 def test_web_database_route_is_not_flagged_as_deprecated_routing():
-    # Real false positive found 2026-08-27: /web/database/manager (and the rest of
+    # False positive: /web/database/manager (and the rest of
     # odoo.addons.web.controllers.database.Database's routes -- selector, create, duplicate,
     # drop, backup, restore, change_password, list) are real, current, non-deprecated routes in
     # this Odoo version -- confirmed both by introspecting the installed controller's own
-    # original_routing directly and by a real browser reaching /web/database/manager in the
-    # 2026-08-26 usability-audit run. cloudflare's DEFAULT_WAF_RULES intentionally references
+    # original_routing directly and by a real browser reaching /web/database/manager.
+    # cloudflare's DEFAULT_WAF_RULES intentionally references
     # "/web/database/" (fixing a real WAF gap that had been guarding the wrong,
     # nonexistent /odoo/database/* paths instead) and this check flagged that literal string as
     # deprecated routing, which it is not.
@@ -849,7 +846,7 @@ def test_web_database_route_is_not_flagged_as_deprecated_routing():
 
 
 def test_web_image_route_is_not_flagged_as_deprecated_routing():
-    # Real false positive found 2026-08-31: /web/image/<model>/<id>/<field>
+    # False positive: /web/image/<model>/<id>/<field>
     # is Odoo's own standard binary-field image-serving route (site logos,
     # avatars, attachments), unrelated to the deprecated backend
     # web-client entrypoint this rule targets -- confirmed as the only
@@ -860,7 +857,7 @@ def test_web_image_route_is_not_flagged_as_deprecated_routing():
 
 
 def test_web_session_route_is_not_flagged_as_deprecated_routing():
-    # Real false positive found 2026-08-31: /web/session/get_session_info
+    # False positive: /web/session/get_session_info
     # is Odoo's standard session/auth API, unrelated to the deprecated
     # backend web-client entrypoint this rule targets.
     source = 'app.router.add_get("/web/session/get_session_info", handler)\n'
@@ -868,7 +865,7 @@ def test_web_session_route_is_not_flagged_as_deprecated_routing():
 
 
 def test_web_content_route_is_not_flagged_as_deprecated_routing():
-    # Real false positive found 2026-09-17: /web/content is Odoo's own
+    # False positive: /web/content is Odoo's own
     # standard generic ir.attachment binary-serving route
     # (odoo/addons/web/controllers/binary.py's own @http.route), unrelated
     # to the deprecated backend web-client entrypoint this rule targets --
@@ -1110,7 +1107,7 @@ def test_a_model_with_neither_name_nor_rec_name_is_flagged():
 
 
 def test_a_class_extending_an_existing_model_by_the_same_name_is_not_flagged():
-    # Real false positive found live 2026-09-12 (user_websites_seo's own
+    # False positive (user_websites_seo's own
     # ResUsersSEO/BlogBlogSEO/BlogPostSEO/WebsitePageSEO/UserWebsitesGroupSEO): `_name = X;
     # _inherit = [X, mixin]` EXTENDS an already-existing model (Odoo core's own res.users,
     # blog.blog, etc.) rather than defining a fresh one -- that model's own `name` field was
@@ -1127,7 +1124,7 @@ def test_a_class_extending_an_existing_model_by_the_same_name_is_not_flagged():
 
 
 def test_an_abstract_model_mixin_with_no_name_field_of_its_own_is_not_flagged():
-    # Real false positive found live 2026-09-12
+    # False positive
     # (user_websites_seo/models/seo_metadata_mixin.py's own SEOMetadataMixin):
     # an AbstractModel gets no database table (Odoo never sets _auto=True for
     # it), so it never holds a record of its own -- it's always mixed, via
@@ -1207,7 +1204,7 @@ def test_an_fstring_passed_to_cr_execute_is_flagged():
 
 
 def test_an_fstring_passed_to_underscore_cr_execute_is_also_flagged():
-    # Real SQL-injection false negative found and fixed via the bug-hunt campaign, 2026-09-10:
+    # SQL-injection false negative:
     # `_check_forbidden_attributes()`'s own is_cr_execute detection used to require the exact
     # attribute/variable name "cr", missing the identical, still-valid, still-idiomatic Odoo
     # cursor alias `self._cr` (BaseModel's own underlying cursor attribute, predating the newer
@@ -1374,7 +1371,7 @@ def test_catch_all_keyerror_is_forbidden_by_default():
 
 
 def test_catch_all_keyerror_with_the_os_account_probe_tag_is_exempt():
-    # hams_shared/tools/ 326-finding discovery, 2026-09-12: pwd.getpwnam()/grp.getgrnam()
+    # hams_shared/tools/: pwd.getpwnam()/grp.getgrnam()
     # existence probes (infrastructure.py's apply_permissions/provision_system_accounts,
     # test.py's postgres-user/orig-user fallbacks) use `except KeyError:` as the only
     # non-exception-based way stdlib offers to check "does this Unix account/group exist" --
@@ -1478,8 +1475,8 @@ def test_get_service_uid_wrapped_in_try_except_is_not_flagged_with_scoped_escape
 
 
 def test_get_service_uid_escape_hatch_still_recognized_when_the_call_is_line_wrapped():
-    # The real regression this session's own node.lineno/node.end_lineno fix
-    # (2026-09-04) closes: a formatter wrapping a long call moves its own
+    # The real regression the node.lineno/node.end_lineno handling
+    # closes: a formatter wrapping a long call moves its own
     # trailing tag comment onto the closing-paren line, which is NOT
     # `node.lineno` (Python's AST always pins that to the line the call
     # *opens* on). Before the fix, this exact shape produced a false
@@ -1504,12 +1501,11 @@ def test_get_service_uid_escape_hatch_still_recognized_when_the_call_is_line_wra
 
 
 def test_raw_zero_sudo_sql_call_in_a_try_without_savepoint_is_flagged():
-    # night_shift_todo/low/linter-rule-raw-sql-raise-without-savepoint-8f551159.md: the
-    # zero_sudo_* Postgres procedures RAISE EXCEPTION -- calling one via raw cr.execute()
+    # The zero_sudo_* Postgres procedures RAISE EXCEPTION -- calling one via raw cr.execute()
     # inside a try/except with no `with cr.savepoint():` around it leaves the transaction
     # poisoned for whatever runs next in it even once the exception is caught. This is the
-    # shape the Fable round-2 review found five times across edge_routing before each was
-    # fixed by hand (all five now go through zero_sudo.security.utils's own, correctly
+    # shape that occurred five times across edge_routing before each was
+    # corrected by hand (all five now go through zero_sudo.security.utils's own, correctly
     # savepoint-protected _get_service_uid()/_get_service_env() instead of calling raw SQL
     # directly -- this rule exists to catch it if raw SQL like this reappears).
     source = (
@@ -1584,8 +1580,7 @@ def test_a_raw_sql_call_not_naming_a_zero_sudo_procedure_is_not_flagged():
 
 
 def test_get_param_patch_with_fixed_return_value_is_flagged_in_an_http_case():
-    # night_shift_todo/low/lint-rule-get-param-mock-must-fall-through-bd8524b6.md: a
-    # return_value on a get_param patch answers EVERY config key with that same value, not
+    # A return_value on a get_param patch answers EVERY config key with that same value, not
     # just the one the test cares about -- the exact ham_club_management/tests/
     # test_club_dues_stripe_webhook.py incident this rule exists to catch (a return_value=False
     # zeroed a request-size limit and turned a real request into a spurious 413).
@@ -1679,11 +1674,11 @@ def test_a_patch_of_an_unrelated_target_is_not_flagged():
 
 
 def test_except_base_exception_is_forbidden_without_the_audit_tag():
-    # Bug-hunt fix, 2026-09-11: the catch-all check only ever matched bare `except:` and
+    # The catch-all check originally matched only bare `except:` and
     # `except Exception`, missing `except BaseException` entirely -- a strictly WORSE
     # catch-all, since it also swallows KeyboardInterrupt/SystemExit/GeneratorExit, none of
-    # which `except Exception` would ever catch. A real, live, unmarked instance of exactly
-    # this shape was found in ics_forms/models/ics_form_record.py before this fix.
+    # which `except Exception` would ever catch. An unmarked instance of exactly
+    # this shape existed in ics_forms/models/ics_form_record.py.
     source = "try:\n    risky()\nexcept BaseException:\n    handle_it()\n"
     errors, _warnings = _dict_findings(source)
     assert any("Catch-all exceptions" in e for e in errors)
@@ -1702,14 +1697,14 @@ def test_a_base_exception_catch_all_with_the_audit_tag_and_logging_is_allowed():
 
 
 def test_a_catch_all_that_unconditionally_reraises_is_exempt_from_the_logging_requirement():
-    # Bug-hunt fix, 2026-09-11: a handler that always re-raises (the standard "clean up on
+    # A handler that always re-raises (the standard "clean up on
     # ANY exception -- including KeyboardInterrupt/SystemExit -- then propagate" idiom, e.g.
     # closing a file descriptor before the caller sees the original exception) never swallows
     # a traceback, so it shouldn't need a logging call of its own -- the exception still
-    # surfaces to whatever caller-side logging already exists. Real, live instances of exactly
-    # this shape (BaseException + unconditional bare raise) were found in
+    # surfaces to whatever caller-side logging already exists. Instances of exactly
+    # this shape (BaseException + unconditional bare raise) existed in
     # ham_relay_bridge/models/{device_command_authority,noise_attestation,
-    # subcarrier_attestation}.py before this fix.
+    # subcarrier_attestation}.py.
     source = (
         "try:\n"
         "    risky()\n"
@@ -1770,7 +1765,7 @@ def test_act_window_without_view_id_or_view_ids_is_recorded_for_cross_reference(
     # ir.actions.act_window with no explicit view field: Odoo silently
     # auto-resolves the default view by model+type, which is exactly the
     # blind spot check_dead_code.py's own README documents (confirmed on
-    # ham_aprs's 3 station views). Bruce's own instruction, 2026-08-31: catch
+    # ham_aprs's 3 station views). The rule catches
     # this at the source instead of the dead-code checker trying to model
     # Odoo's resolution algorithm as a heuristic.
     check_burn_list.ACT_WINDOW_ACTIONS.clear()
@@ -1814,7 +1809,7 @@ def test_act_window_with_inline_view_id_is_not_recorded():
 
 
 def test_act_window_with_older_views_field_is_not_recorded():
-    # Real false positive found by the sweep fork, 2026-08-31:
+    # False positive:
     # ham_logbook/views/ham_qso_views.xml's action_ham_qso_qsl_dashboard
     # pins its views via the older "views" field (an eval'd list of
     # (view_id_ref, view_type) tuples), not "view_id"/"view_ids" -- a
@@ -2068,7 +2063,7 @@ def test_importing_superuser_id_is_allowed_with_burn_ignore_superuser_rejection_
 
 
 def test_using_superuser_id_is_allowed_with_burn_ignore_superuser_rejection_test():
-    # Real case found live 2026-09-12
+    # Real case
     # (edge_routing/tests/test_routing_mixin.py): a regression test proving
     # a removed override_svc_uid parameter now raises TypeError legitimately
     # passes the literal SUPERUSER_ID token as the value that should be
@@ -2322,21 +2317,21 @@ def test_sudo_unlink_with_the_real_burn_ignore_tag_is_exempt():
 
 
 def test_sudo_create_with_the_real_burn_ignore_tag_is_exempt():
-    # Fourth allowed shape, added 2026-08-27 per Bruce's decision (ham_logbook's
+    # Fourth allowed shape (ham_logbook's
     # gamification badge-grant cron): gamification.badge.user.create() unconditionally calls
     # core Odoo's own check_granting(), which only permits an admin/superuser env or a badge
     # with rule_auth != "nobody" -- and ham_logbook's badges are deliberately "nobody" so a
     # human can't manually send one via the UI. The cron's own narrowly-scoped service
     # account fails the identical check a real (non-admin) user would, with no bypass core
-    # Odoo exposes other than .sudo(). See night_shift_todo.md's TL;DR decision item 5 for
-    # the full options considered before this was picked.
+    # Odoo exposes other than .sudo(). This shape is allowed explicitly
+    # rather than exempting the whole cron.
     source = "self.env['gamification.badge.user'].sudo().create(vals)  # burn-ignore-sudo\n"
     errors, _warnings = _dict_findings(source)
     assert not any(".sudo()" in e for e in errors)
 
 
 def test_sudo_message_ids_read_with_the_real_burn_ignore_tag_is_exempt():
-    # Fifth allowed shape, added 2026-09-12, empirically confirmed necessary
+    # Fifth allowed shape, empirically confirmed necessary
     # (not just asserted): ham_relay_bridge/tests/test_relay_node.py verifies
     # a record's own real chatter state (message_ids) via a recordset bound
     # to a narrowly-scoped service account deliberately excluded from the
@@ -2348,8 +2343,7 @@ def test_sudo_message_ids_read_with_the_real_burn_ignore_tag_is_exempt():
 
 
 def test_sudo_with_the_tag_but_not_one_of_the_four_allowed_shapes_is_still_flagged():
-    # Real bug found and fixed via the bug-hunt campaign, 2026-09-10 (this test used to document
-    # the bug itself, asserting the line was wrongly exempt -- see add_error()'s own
+    # Regression test: this used to be wrongly exempt -- see add_error()'s own
     # _GENERIC_BURN_IGNORE_REGEX comment for the full story): the rule's own inner check requires
     # the burn-ignore-sudo tag to be paired with one of four specific call shapes. Before the
     # fix, add_error()'s own generic bypass unconditionally suppressed ANY error on a line
@@ -2365,8 +2359,7 @@ def test_sudo_with_the_tag_but_not_one_of_the_four_allowed_shapes_is_still_flagg
 
 
 def test_an_unrelated_burn_ignore_tag_no_longer_suppresses_an_unrelated_warning():
-    # Real bug found and fixed via the bug-hunt campaign, 2026-09-10 (this test used to document
-    # the bug itself): add_warning()'s own first OR-branch used to be the identical bare
+    # Regression test: add_warning()'s own first OR-branch used to be the identical bare
     # "burn-ignore" substring check add_error() had -- a tag with no relation to the warning's
     # own subject matter still suppressed it. A burn-ignore-sudo comment (nothing to do with
     # time.sleep()) used to kill the unrelated THREAD BLOCKING audit warning too. Now that both
@@ -2390,7 +2383,7 @@ def test_a_genuinely_bare_burn_ignore_tag_still_suppresses_the_finding_it_sits_o
 
 
 def test_an_unrelated_purpose_specific_tag_does_not_suppress_a_critical_rce_finding():
-    # The concrete, most dangerous real-world shape of the bug this session fixed: a completely
+    # The concrete, most dangerous real-world shape of the bug this test covers: a completely
     # unrelated, legitimately-sanctioned tag (burn-ignore-tour, whose own allow-list entry is
     # exclusively about the XML UI-tour mandate, nothing to do with Python RCE bans) used to
     # blanket-suppress a CRITICAL RCE finding purely because both share the "burn-ignore" prefix.
@@ -2459,7 +2452,7 @@ def test_exec_is_flagged_by_default():
 
 
 def test_exec_with_the_real_burn_ignore_tag_is_exempt():
-    # Real, narrow exemption found 2026-09-12: hams_shared/tools' own test suite has an
+    # Narrow exemption: hams_shared/tools' own test suite has an
     # established, deliberate, and safe convention of exec()'ing a REAL function's own source
     # text, regex-extracted from the file under test, into an isolated namespace -- never
     # external/attacker-influenced input. Confirmed against this repo's own real
@@ -2553,7 +2546,7 @@ def test_hashlib_sha1_is_weak_crypto():
 
 
 def test_hashlib_md5_with_the_real_burn_ignore_tag_is_exempt():
-    # Real, narrow exemption found 2026-09-12: this rule's own concern is a security token WE
+    # Narrow exemption: this rule's own concern is a security token WE
     # choose to generate with a broken hash -- not faithfully reproducing an EXISTING external
     # protocol's own, already-fixed hash algorithm for interop/testing. Confirmed against this
     # repo's own real test_rmsgw_protocol.py's sgl_challenge_response(), a Python port of real
@@ -2688,7 +2681,7 @@ def test_threading_thread_is_an_unbounded_dos_vector():
 
 
 def test_threading_thread_with_test_daemon_thread_tag_is_allowed():
-    # Bug-hunt fix, 2026-09-11: `burn-ignore-test-daemon-thread` is documented (in the checker's
+    # `burn-ignore-test-daemon-thread` is documented (in the checker's
     # own tag registry) and already used by a real file
     # (ham_shack/tests/test_shack_sw_behavior_tour.py's hermetic fixture HTTP server) -- but the
     # check never actually looked for the tag, so that file was silently still flagged, blocking
@@ -2859,7 +2852,7 @@ def test_models_dot_get_is_forbidden_soft_dependency_checking():
 
 
 def test_a_local_variable_named_registry_in_tools_is_not_a_soft_dependency_violation():
-    # Real false positive found 2026-09-12: this check matches by variable NAME alone, with
+    # False positive: this check matches by variable NAME alone, with
     # no way to tell Odoo's own live model registry apart from an unrelated local variable
     # that happens to share the name. odoo_registry_builder.py's own `registry =
     # build_registry(roots)` is a plain dict this standalone static-analysis tool builds
@@ -2920,8 +2913,7 @@ def test_environment_instantiation_with_a_service_account_uid_is_not_flagged():
     assert not any("Instantiating an Environment" in e for e in errors)
 
 
-# The transient-bootstrap escape hatch, 2026-09-14 (night_shift_todo.md's "OPEN QUESTION for
-# Bruce" -> "FIXED" entry): _get_service_uid() is itself an @api.model method on a real Odoo
+# The transient-bootstrap escape hatch: _get_service_uid() is itself an @api.model method on a real Odoo
 # model, so resolving a scoped service account's uid requires SOME existing Environment to
 # call it through -- a handful of genuinely standalone bootstrap call sites (list_routes.py)
 # need a transient SUPERUSER_ID Environment for exactly that one purpose, discarded
@@ -2988,7 +2980,7 @@ def test_print_inside_a_tools_file_is_exempt():
 
 
 def test_print_inside_a_non_addon_standalone_script_is_exempt():
-    # Real false positive found running the LINT_DEBT_INVENTORY sweep:
+    # False positive (LINT_DEBT_INVENTORY):
     # docs/proposals/.../_pipeline/build_spec.py's stderr warning and
     # ingest/extract_pdf_batch.py's stdout-as-data-contract output are
     # genuine CLI tool output for a standalone, non-addon script -- not
@@ -3065,8 +3057,7 @@ def test_markup_of_a_plain_string_literal_is_not_flagged():
 
 
 def test_markup_percent_interpolation_of_an_html_escaped_value_is_not_flagged():
-    # Bug-hunt fix, 2026-09-11: closes the "Markup(...) XSS check is overbroad" gap tracked in
-    # night_shift_todo.md (found 2026-09-10) -- ham_onboarding/models/res_users.py and
+    # The Markup(...) XSS check must not be overbroad -- ham_onboarding/models/res_users.py and
     # upgrade_request.py both explicitly html.escape() every interpolated value before
     # Markup(...) % (...) specifically so real <br/>/<strong> markup renders instead of coming
     # out literal-escaped, and this pattern was blocking their whole module's test suite via the
@@ -3181,7 +3172,7 @@ def test_a_regex_named_objects_search_inside_a_loop_is_exempt_from_n_plus_one():
 
 
 def test_an_upper_snake_case_re_suffixed_constants_search_is_exempt_from_n_plus_one():
-    # Real false positive found 2026-09-12 in content_security_policy/models/
+    # False positive in content_security_policy/models/
     # csp_directive.py: `_CSP_CUSTOM_VALUE_INJECTION_RE.search(rec.custom_value)`
     # inside a `for rec in self:` loop was misidentified as an ORM '.search()'
     # call -- the receiver is a module-level compiled regex constant, not a
@@ -3230,7 +3221,7 @@ def test_company_scoped_search_count_inside_a_loop_with_the_ignore_tag_is_exempt
     # exactly this shape -- a .with_company(company) call whose loop
     # variable is what makes each company's records visible at all -- but
     # this rule never checked line_content for it, so the tag was
-    # permanently inert. Found live in user_websites/models/
+    # permanently inert. Seen in user_websites/models/
     # content_violation_report.py:98.
     source = (
         "for company in companies:\n"
@@ -3389,7 +3380,7 @@ def test_verify_test_ast_burn_ignore_financial_valid_with_assert_true_on_a_real_
 
 
 def test_verify_test_ast_burn_ignore_financial_invalid_with_a_vacuous_assert_true():
-    # Bug-hunt fix, 2026-09-11: burn-ignore-financial used to be discharged by ANY
+    # burn-ignore-financial used to be discharged by ANY
     # assertTrue/assertFalse call, including a vacuous literal that asserts nothing real
     # about financial data protection at all -- the cheapest possible evasion of this tag.
     target_content = (
@@ -3416,7 +3407,7 @@ def test_verify_test_ast_burn_ignore_financial_invalid_with_a_vacuous_assert_fal
 
 
 def test_verify_test_ast_loop_evasion_still_caught_for_get_view():
-    # Bug-hunt regression test, 2026-09-11: pre-existing coverage for the loop-evasion check's
+    # Pre-existing coverage for the loop-evasion check's
     # original two names (get_view/url_open) -- confirms the widened call-name tuple didn't
     # regress the names it already covered.
     target_content = (
@@ -3432,7 +3423,7 @@ def test_verify_test_ast_loop_evasion_still_caught_for_get_view():
 
 
 def test_verify_test_ast_loop_evasion_now_caught_for_get_combined_arch():
-    # Bug-hunt fix, 2026-09-11: the loop-evasion check only ever inspected get_view/url_open,
+    # The loop-evasion check originally inspected only get_view/url_open,
     # missing _get_combined_arch even though it's an equally valid audit-ignore-view/-xpath
     # call elsewhere in this same function -- a loop wrapping it with no non-empty-iterable
     # assertion has the identical "silently empty collection skips the assertion" hole.
@@ -3449,7 +3440,7 @@ def test_verify_test_ast_loop_evasion_now_caught_for_get_combined_arch():
 
 
 def test_verify_test_ast_loop_evasion_now_caught_for_trigger():
-    # Bug-hunt fix, 2026-09-11: same gap for _trigger() (audit-ignore-cron's own required call).
+    # Same gap for _trigger() (audit-ignore-cron's own required call).
     target_content = (
         "class FooTests(TestCase):\n"
         "    def test_cron_runs(self):\n"
@@ -3463,7 +3454,7 @@ def test_verify_test_ast_loop_evasion_now_caught_for_trigger():
 
 
 def test_verify_test_ast_loop_evasion_now_caught_for_message_post():
-    # Bug-hunt fix, 2026-09-11: same gap for message_post()/send_mail() (audit-ignore-mail's
+    # Same gap for message_post()/send_mail() (audit-ignore-mail's
     # own required calls).
     target_content = (
         "class FooTests(TestCase):\n"
@@ -3537,7 +3528,7 @@ def test_verify_test_ast_anchor_not_inside_any_function_is_invalid():
     assert result == (1, 1)
 
 
-# Multi-line anchors (Bruce's own request, 2026-09-04): a `[@ANCHOR-BEGIN:
+# Multi-line anchors: a `[@ANCHOR-BEGIN:
 # name]` line found anywhere inside a test function resolves the anchor
 # exactly the same way a single-line `[@ANCHOR: name]` already does -- the
 # whole point is that a formatter reflowing the lines between BEGIN and
@@ -3650,8 +3641,8 @@ def test_check_anchor_pairing_allows_independent_anchors_in_the_same_file():
 
 
 def test_check_anchor_pairing_exempts_a_tagged_example_line():
-    # Real false-positive class found 2026-09-12, the same one already fixed for the
-    # TransactionCase/hardcoded-/tmp/exec() rules elsewhere in this file: this scan matches raw
+    # False-positive class shared with the TransactionCase/hardcoded-/tmp/exec() rules
+    # elsewhere in this file: this scan matches raw
     # line text, so a begin-marker-shaped example inside a docstring explaining the convention
     # itself trips it exactly as readily as a real forgotten end marker. Confirmed against this
     # repo's own real check_function_test_anchors.py docstring. Confirmed to FAIL against the
@@ -3724,7 +3715,7 @@ def test_verify_test_ast_a_loop_wrapping_view_validation_is_ast_evasion():
 
 
 def test_verify_test_ast_a_loop_is_exempt_when_its_own_iterable_non_emptiness_is_asserted():
-    # 2026-09-09: the failure mode this rule guards against is a silently
+    # The failure mode this rule guards against is a silently
     # zero-iteration loop, not the loop construct itself -- a loop whose
     # iterable is affirmatively shown non-empty first is real coverage, not
     # a hole.
@@ -3967,7 +3958,7 @@ def test_storage_backend_check_with_the_optional_oca_dep_tag_is_exempt():
     # of the soft-dependency check's target pattern" -- OCA's storage_backend
     # addon, genuinely optional and installed post-hoc by a script. Real
     # false positive: this rule never checked line_content for the tag, so
-    # it was permanently inert despite being recognized. Found live in
+    # it was permanently inert despite being recognized. Seen in
     # hams_s3/models/res_config_settings.py and its test file (5 sites).
     source = "if 'storage.backend' in self.env:  # burn-ignore-optional-oca-dep\n    pass\n"
     errors, _warnings = _dict_findings(source)
@@ -3979,8 +3970,8 @@ def test_ham_dns_check_with_the_optional_cross_repo_dep_tag_is_exempt():
     # dependency shape than the OCA one above -- an optional integration
     # with a module that lives in the OTHER hams_open/hams_com repo, where
     # a real __manifest__.py dependency would break standalone
-    # installability across that repo boundary. Asked and confirmed with
-    # Bruce 2026-09-12: pager_duty/models/pager_check.py's ham_dns
+    # installability across that repo boundary. Confirmed explicitly:
+    # pager_duty/models/pager_check.py's ham_dns
     # integration is a pure convenience (auto-create a DNS record), not
     # something pager_duty structurally needs.
     source = "if 'ham.dns.record' in self.env:  # burn-ignore-optional-cross-repo-dep\n    pass\n"
@@ -4038,7 +4029,7 @@ def test_a_test_method_that_calls_a_real_external_assertion_is_not_an_empty_test
 
 
 def test_a_test_calling_only_a_local_helper_that_does_real_work_is_not_empty():
-    # Real false positive found 2026-09-12 in
+    # False positive in
     # ingest/test_forms_ingest_daemon.py: four sibling tests each called
     # nothing but one shared local helper
     # (_process_special_field_with_agent_result) that itself drives the
@@ -4175,7 +4166,7 @@ def test_scan_file_exempts_check_burn_list_dot_py_itself():
 
 
 def test_manifest_with_a_non_literal_dict_value_does_not_crash_scan_file():
-    # Real bug found via the bug-hunt campaign, 2026-09-10: `ast.literal_eval()` is not limited
+    # `ast.literal_eval()` is not limited
     # to raising SyntaxError/OSError -- a manifest dict value that is syntactically valid Python
     # but not a literal (e.g. referencing a module-level variable, a common real-world manifest
     # pattern) makes it raise ValueError instead ("malformed node or string"). The old
@@ -4206,7 +4197,7 @@ def test_manifest_with_a_non_literal_dict_value_does_not_crash_scan_file():
 def test_a_module_with_a_non_literal_manifest_value_does_not_abort_the_whole_scan(tmp_path):
     # End-to-end version of the test above, run via the real subprocess CLI entry point (like
     # test.py's own invocation) rather than calling scan_file() directly -- this is what actually
-    # broke before the fix: main() builds FOUND_MANIFESTS via its own separate
+    # broke in the original code: main() builds FOUND_MANIFESTS via its own separate
     # ast.literal_eval() call (a second, independent occurrence of the identical bug), and a
     # crash there happens BEFORE any file in the tree is ever scanned, so a real, unrelated
     # violation in a sibling file must still be detected and reported once the manifest itself no
@@ -4266,7 +4257,7 @@ def test_a_file_git_ignores_is_not_linted(tmp_path):
 
 
 def test_a_shebang_embedded_in_a_string_literal_is_not_flagged(tmp_path):
-    # Real false positive found live 2026-10-02: infrastructure.py's own MANIFEST generates
+    # False positive: infrastructure.py's own MANIFEST generates
     # wrapper-script/systemd-unit file content as triple-quoted string literals, each starting
     # with a real '#!/bin/bash' line for the FILE THAT GETS WRITTEN TO DISK -- the old line-based
     # check flagged these as a second shebang in infrastructure.py itself, blocking every PR
@@ -4365,8 +4356,7 @@ def test_outside_a_git_repository_nothing_is_ignored(tmp_path, monkeypatch):
 
 
 def test_a_shebang_inside_a_string_literal_is_not_flagged(tmp_path):
-    # Bug found live, 2026-10-02 (night_shift_todo/medium/service-account-creation-and-sudoers-
-    # sandboxes-are-untracked-infra-c3a9f714.md's own PR): infrastructure.py's own MANIFEST
+    # infrastructure.py's own MANIFEST
     # embeds whole separate files' content -- shebang line included -- as Python string literals
     # (its "static_files" entries' own `content` values), to be written out verbatim during
     # provisioning. The old plain-text line scan could not tell that apart from a real, second,
@@ -4736,7 +4726,7 @@ def test_a_dotted_id_record_updating_an_existing_base_group_is_not_a_data_integr
     # the ALREADY-EXISTING base.group_user record (created by the "base"
     # module), and only writes the fields listed here -- it never (re-)
     # creates the record, so "name" isn't required. Real false positive
-    # found live in user_websites/security/user_websites_security.xml,
+    # in user_websites/security/user_websites_security.xml,
     # which extends base.group_user/base.group_portal's own implied_ids.
     xml = (
         "<odoo>\n"
@@ -5230,7 +5220,7 @@ def test_request_env_inside_element_text_is_also_a_critical_ssti_vulnerability()
     assert any("CRITICAL SSTI" in e for e in errors)
 
 
-# Real false positive found 2026-09-07 in ham_club_management/views/website_club_ad_templates.xml:
+# False positive in ham_club_management/views/website_club_ad_templates.xml:
 # a static, developer-authored `t-set`/`t-value` expression referencing `request.env` (a
 # server-side computed value like `_get_service_uid(...)`) is exactly as safe as any other Python
 # expression in the same git-reviewed file -- this static AST pass has no way to distinguish that
@@ -5268,7 +5258,7 @@ def test_request_env_in_a_template_without_audit_ignore_ssti_still_fires():
 
 
 def test_request_env_mentioned_in_prose_inside_an_xml_comment_is_not_ssti():
-    # Real false positive found 2026-09-07 in
+    # False positive in
     # ham_classifieds/security/security_rules.xml: an adversarial-review comment discussing a
     # real Python controller happened to mention "request.env" as prose. This parser's own
     # XMLNode stores a comment's content under attrs["text"] (see XMLNode's own construction),
@@ -5301,7 +5291,7 @@ def test_survey_state_field_comparison_is_a_removed_deprecated_field():
 
 
 def test_state_comparison_mentioned_in_an_xml_comment_attribute_is_not_a_deprecation_finding():
-    # Same class of bug as the SSTI comment-exclusion fix above, found in the same sweep: a
+    # Same class of bug as the SSTI comment-exclusion above: a
     # comment's own text lives under attrs["text"] in this parser's data model, so the
     # attrs-iterating half of this check would treat prose inside a comment as a real attribute
     # value. A comment can never execute, so it can never actually compare against the removed
@@ -5514,7 +5504,7 @@ def test_environment_instantiation_with_a_dotted_superuser_id_attribute_is_a_sud
     assert any("Instantiating an Environment" in e and "ZERO-SUDO" in e for e in errors)
 
 
-# main()'s own directory-walk pruning -- LINTER_POLICY_REVISIT.md, 2026-09-07: `target/` (Cargo
+# main()'s own directory-walk pruning -- LINTER_POLICY_REVISIT.md: `target/` (Cargo
 # build output) and `odoo_type_stubs/` (ODOO_AWARE_TYPE_CHECKING.md's generated stubs, every body a
 # bare `...`) must always be pruned regardless of any flag, since neither is real source; `tools/`
 # and `daemons/` are pruned by default but included when `--scan-daemons-and-tools` is passed.
@@ -5544,13 +5534,11 @@ def test_target_directory_is_always_pruned(tmp_path):
 
 
 def test_a_claude_worktree_directory_is_never_walked_by_the_tour_class_audit(tmp_path):
-    # Real bug found 2026-09-12: the main scan loop above already prunes any dotfile-prefixed
+    # The main scan loop above already prunes any dotfile-prefixed
     # directory, but a SECOND, independent os.walk over the same target_dir (the "Orphaned
-    # Tour Class" / "Dangling Tour Target" bidirectional audit) never did -- including this
-    # project's own standing convention of running concurrent bug-hunt dispatches in isolated
-    # git worktrees under .claude/worktrees/<session>/ inside the repo root (a real git
-    # worktree checkout, confirmed with a real `git worktree add` earlier tonight, not an empty
-    # directory). Before this fix, an XML tour class defined only inside another session's own
+    # Tour Class" / "Dangling Tour Target" bidirectional audit) never did -- including git
+    # worktrees that agent sessions run in, nested under .claude/worktrees/<session>/ inside the
+    # repo root (a real worktree checkout, not an empty directory). Without the pruning, an XML tour class defined only inside another session's own
     # in-progress worktree -- with no corresponding JS target anywhere in the REAL repo -- would
     # be flagged as a genuine "Orphaned Tour Class", a false positive tied to content that isn't
     # part of the real repo state this invocation is actually scoped to check.
@@ -5585,7 +5573,7 @@ def test_tools_directory_is_pruned_by_default_but_scanned_with_the_flag(tmp_path
     # The AttributeError-catch-all ban (GENERAL_ERROR_RULES, ext_pattern
     # r"\.py$" unconditionally) is used here specifically because it is
     # NOT one of the test_.*\.py$-scoped, Odoo-test-convention rules this
-    # same session found and excluded for tools/ (the native-patch ban) --
+    # also excluded for tools/ (the native-patch ban) --
     # this asserts the flag genuinely unprunes the directory for scanning,
     # not that every rule now fires there regardless of fit.
     tools_file = tmp_path / "hams_shared" / "tools" / "some_checker.py"
@@ -5599,13 +5587,13 @@ def test_tools_directory_is_pruned_by_default_but_scanned_with_the_flag(tmp_path
 
 
 # "Tour Asset Registration Trap" (main()'s own tail-of-scan cross-check against FOUND_TOURS) --
-# real bug found via the bug-hunt campaign, 2026-09-10: FOUND_TOURS was declared at module scope
+# FOUND_TOURS was declared at module scope
 # but nothing anywhere in the file ever appended to it (confirmed by grep: no
 # `FOUND_TOURS.append` existed), so this whole check permanently iterated an empty list and could
 # never fire, regardless of any real tour-not-registered-in-any-asset-bundle violation in the
-# scanned tree. Fixed by populating FOUND_TOURS from the same tour.js/*_tour.js naming convention
+# scanned tree. FOUND_TOURS is populated from the same tour.js/*_tour.js naming convention
 # already used throughout ODOO_ERROR_RULES, gated on the file actually registering a tour under
-# the real 'web_tour.tours' category. A second, related crash-on-shape bug was fixed alongside it:
+# the real 'web_tour.tours' category. A second, related crash-on-shape case:
 # `manifest.get("assets", {}).items()` assumed the manifest's own 'assets' value is always a
 # dict -- a non-dict value (e.g. `None`) raised an uncaught AttributeError at the tail of main(),
 # after every per-file finding had already been printed but before the final summary/exit code.
@@ -5704,7 +5692,7 @@ def test_a_real_transaction_case_subclass_outside_tools_is_flagged(tmp_path):
 
 
 def test_a_fixture_string_containing_transactioncase_text_inside_tools_is_not_flagged(tmp_path):
-    # Real false-positive class found 2026-09-12, confirmed against this repo's own real
+    # False-positive class, confirmed against this repo's own real
     # test_check_test_tags.py/test_check_self_writeable_field_tests.py (23 findings total, zero
     # of them a real Odoo test class): this rule matches raw line text, not AST, so a Python
     # string LITERAL containing "class Foo(TransactionCase):" -- used as fixture data to test
@@ -5752,7 +5740,7 @@ def test_a_real_hardcoded_tmp_path_outside_tools_is_flagged(tmp_path):
 
 
 def test_a_fixture_string_containing_a_tmp_path_inside_tools_is_not_flagged(tmp_path):
-    # Real false-positive class found 2026-09-12, the same one already fixed for the
+    # False-positive class shared with the
     # TransactionCase-inheritance rule above: this rule matches raw line text, not AST, so a
     # Python string LITERAL containing "/tmp/..." -- used as a fake filepath label fed into an
     # AST-checking function under test, never actually opened or written -- tripped this rule
@@ -5783,7 +5771,7 @@ def test_env_var_credential_fallback_in_a_real_odoo_model_is_a_tenant_leak():
 
 
 def test_env_var_credential_fallback_in_hams_shared_tools_is_not_a_tenant_leak():
-    # Real false positive found 2026-09-12, the hams_shared/tools/ 326-finding discovery:
+    # False positive in hams_shared/tools/:
     # check_dependency_releases.py (a standalone CLI that checks GitHub for stale pinned
     # dependencies) reads an optional GITHUB_TOKEN from the environment -- the standard
     # personal-access-token pattern for a scheduled, non-interactive CI job, not a per-tenant
@@ -5798,7 +5786,7 @@ def test_env_var_credential_fallback_in_hams_shared_tools_is_not_a_tenant_leak()
 
 
 def test_noqa_example_tag_exempts_a_real_fixture_string_from_the_linter_evasion_check():
-    # Real false positive found 2026-09-12: a Python string literal (embedded `\n` escapes,
+    # False positive: a Python string literal (embedded `\n` escapes,
     # not real newlines, so the multi-line-docstring skip never applies) feeding a fixture
     # into test_noqa_comment_is_forbidden_linter_evasion tripped this same rule when the
     # OUTER check_burn_list.py scans test_check_burn_list.py itself.
@@ -5817,7 +5805,7 @@ def test_noqa_example_tag_does_not_leak_into_a_real_untagged_noqa_elsewhere():
 
 
 def test_a_genuinely_bare_burn_ignore_comment_is_not_an_unauthorized_bypass():
-    # Real false positive found 2026-09-12: the "is this a recognized burn-ignore tag"
+    # False positive: the "is this a recognized burn-ignore tag"
     # check used a bare `"burn-ignore" in line` substring test, so it couldn't tell a
     # genuinely bare `# burn-ignore: <reason>` (always allowed -- see
     # _GENERIC_BURN_IGNORE_REGEX's own `burn-ignore(?!-)` negative lookahead, the mechanism
@@ -5836,7 +5824,7 @@ def test_a_hyphenated_but_unapproved_burn_ignore_tag_is_still_an_unauthorized_by
 
 
 def test_audit_ignore_ssti_is_a_recognized_tag_not_an_unauthorized_bypass():
-    # Real false positive found 2026-09-12: audit-ignore-ssti has been a real, enforced
+    # False positive: audit-ignore-ssti has been a real, enforced
     # exemption tag for the CRITICAL SSTI check since before this separate "is this
     # audit-ignore tag recognized" allow-list existed, but the allow-list had never been
     # told about it -- the same "two separate checks disagree about the same tag" bug
@@ -5847,7 +5835,7 @@ def test_audit_ignore_ssti_is_a_recognized_tag_not_an_unauthorized_bypass():
 
 
 # ---------------------------------------------------------------------------
-# Service-account privilege rules (2026-09-14 service-account privilege audit)
+# Service-account privilege rules (from a service-account privilege audit)
 # ---------------------------------------------------------------------------
 
 _SVC_ACCOUNT_XML_HEAD = (
@@ -5878,7 +5866,7 @@ def _svc_privilege_errors(xml):
 
 
 def test_service_account_holding_human_admin_group_is_flagged():
-    # Real pre-fix shape of backup_management/security/security.xml (2026-09-14 audit).
+    # Real pre-fix shape of backup_management/security/security.xml.
     xml = _SVC_ACCOUNT_XML_HEAD + _svc_account_record(
         "user_backup_service_internal",
         "backup_service_internal",
@@ -5942,7 +5930,7 @@ def test_service_account_admin_group_ignore_comment_is_honored_and_human_users_a
 
 
 def test_two_service_accounts_with_identical_groups_are_flagged():
-    # Real pre-fix shape of pager_duty/security/security.xml (2026-09-14 audit).
+    # Real pre-fix shape of pager_duty/security/security.xml.
     groups = "[(6, 0, [ref('pager_duty.group_pager_service'), ref('base.group_user'), ref('website.group_multi_website')])]"
     xml = (
         _SVC_ACCOUNT_XML_HEAD
@@ -6050,7 +6038,7 @@ def test_daemon_key_registration_sees_a_key_file_in_a_family_key_directory():
 
 
 # CRITICAL HARDCODED CREDENTIAL DEFAULT: a credential env read under daemons/, scripts/ or
-# tools/ must not fall back to a literal (2026-09-15: RMQ_PASS="guest", DB_PASS="odoo").
+# tools/ must not fall back to a literal (e.g. RMQ_PASS="guest", DB_PASS="odoo").
 _CRED_DEFAULT_MSG = "HARDCODED CREDENTIAL DEFAULT"
 
 
@@ -6096,8 +6084,8 @@ def test_credential_default_rule_is_suppressed_by_burn_ignore_env():
 
 
 # The loading-flag gate ban (`config['update']` / `config.get('update')` and their `init` /
-# `stop_after_init` siblings), added 2026-09-15 alongside the distributed_redis_cache fix it
-# generalizes: Odoo 19 never clears those flags after loading, so a server started with `-u` and
+# `stop_after_init` siblings), which generalizes the distributed_redis_cache case:
+# Odoo 19 never clears those flags after loading, so a server started with `-u` and
 # left serving keeps them set for its whole lifetime and any behaviour gated on them never runs
 # again. See _ODOO_LOADING_FLAGS in check_burn_list.py for the source trace.
 
@@ -6161,8 +6149,8 @@ def test_a_test_file_may_assert_what_the_loading_flags_really_are():
 
 
 def _outbound_fetch_warnings(source, filepath="/tmp/some_module/models/importer.py"):
-    # An error since 2026-09-28 (a warning until every existing site was converted or justified); reading both channels keeps
-    # these tests about the rule's shape rather than its severity.
+    # An error (it was a warning until every existing site was converted or justified);
+    # reading both channels keeps these tests about the rule's shape rather than its severity.
     lines = source.splitlines()
     errors, warnings = check_ast_vulnerabilities(
         filepath, source, lines, is_odoo_module=True
@@ -6352,7 +6340,7 @@ def test_outbound_fetch_does_not_fire_outside_odoo_modules():
 def test_the_outbound_fetch_tag_is_itself_a_sanctioned_tag():
     """Using the tag the rule recommends must not be an UNAUTHORIZED BYPASS.
 
-    Found on this rule's very first real use, tagging zero_sudo's own local
+    Seen on this rule's very first real use, tagging zero_sudo's own local
     health-check poll: the tag was implemented in add_warning's suppression
     list but never registered in the sanctioned-tag allow-list, so following
     the rule's own printed advice turned a warning into a hard ERROR that
