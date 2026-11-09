@@ -515,6 +515,13 @@ def write_batch_stamp(tip, step_names, batch_id, with_tips=(), known_red=""):
         print(f"(pass stamp not written: {error})", file=sys.stderr)
 
 
+def stamped_head_repo(repo_root, dir_path, layout=None):
+    """The repository whose HEAD must not move during a run for the pass stamp to be written. A hams_shared worktree is linted in a
+    layout of throwaway clones (`layout`): `repo_root` is then a clone that never moves, and the stamp goes to the worktree
+    `dir_path`, so that is the HEAD to watch. Otherwise it is `repo_root`."""
+    return dir_path if layout is not None else repo_root
+
+
 def _write_pass_stamps(repos, mode, step_names=(), hosts=(), known_red=""):
     """Record "run_linters.py passed (mode) with a clean tree at commit <sha>" for each repo
     involved. devbox_tools/prmerge.sh refuses to merge a branch whose tip has no stamp, so a
@@ -2544,7 +2551,8 @@ def main():
     remote_jobs = []
     whole_run = False
     all_steps = list(steps)
-    head_before = _git_lines(repo_root, "rev-parse", "HEAD")
+    head_repo = stamped_head_repo(repo_root, dir_path, layout)
+    head_before = _git_lines(head_repo, "rev-parse", "HEAD")
     # Coalescing batch (ADR 0115): a heavy, plain, committed `--changed` run joins the batch of this repository
     # instead of queueing alone; the leader runs one combined tree, every member gets its own verdict.
     batch_durations = lint_lock.known_durations() if pending else {}
@@ -2723,7 +2731,7 @@ def main():
         print("[*] no known-red baseline applies (none recorded for this repository, or it is switched off); "
               "`run_linters.py --baseline-refresh` records main's own failures")
     if not linters_failed and not (options.only or options.skip or target_modules_str):
-        if _git_lines(repo_root, "rev-parse", "HEAD") != head_before:
+        if _git_lines(head_repo, "rev-parse", "HEAD") != head_before:
             print("(pass stamp not written: HEAD moved during the run)", file=sys.stderr)
         else:
             _write_pass_stamps(
