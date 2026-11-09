@@ -11,6 +11,7 @@ import sys
 import re
 import io
 import tokenize
+import check_target
 from tree_files import tree_walk
 
 def _code_hits(text, pattern):
@@ -36,7 +37,7 @@ def _code_hits(text, pattern):
     return hits
 
 
-def check_rabbitmq(repo_dir):
+def check_rabbitmq(repo_dir, stats=None):
     violations = []
     
     # Common directories to ignore
@@ -74,6 +75,8 @@ def check_rabbitmq(repo_dir):
             # Skip the rabbitmq pool itself
             if "rabbitmq_pool.py" in file_path:
                 continue
+            if stats is not None:
+                stats["files"] = stats.get("files", 0) + 1
 
             try:
                 with open(file_path, "r", encoding="utf-8") as f:
@@ -98,8 +101,10 @@ if __name__ == "__main__":
         print("Usage: check_rabbitmq_pool.py <repo_dir>")
         sys.exit(1)
 
-    repo_dir = sys.argv[1]
-    violations = check_rabbitmq(repo_dir)
+    repo_dir = check_target.require_directory(sys.argv[1], "check_rabbitmq_pool")
+    stats = {}
+    violations = check_rabbitmq(repo_dir, stats)
+    check_target.require_scanned(stats.get("files", 0), repo_dir, "check_rabbitmq_pool", "Python files")
 
     if violations:
         print("❌ RabbitMQ Pool Violations:")

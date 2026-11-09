@@ -141,6 +141,8 @@ class MainIntegrationTests(unittest.TestCase):
         # Same untagged class shape, but not under a "tests" directory --
         # not this checker's concern (e.g. a helper module that happens to
         # define a Test-prefixed class outside the tests/ convention).
+        # One real test file in scope: a scan of nothing is red (check_target.py), and the pruning below is only proven if the walk finds something.
+        _write(os.path.join(self.tmp, "ok_mod", "tests", "test_ok.py"), "# burn-ignore-test-tags\n")
         _write(
             os.path.join(self.tmp, "mod_a", "models", "test_helper.py"),
             "class TestFoo(TransactionCase):\n    pass\n",
@@ -149,6 +151,8 @@ class MainIntegrationTests(unittest.TestCase):
         self.assertEqual(code, 0, out)
 
     def test_a_non_test_prefixed_file_inside_tests_is_not_scanned(self):
+        # One real test file in scope: a scan of nothing is red (check_target.py), and the pruning below is only proven if the walk finds something.
+        _write(os.path.join(self.tmp, "ok_mod", "tests", "test_ok.py"), "# burn-ignore-test-tags\n")
         _write(
             os.path.join(self.tmp, "mod_a", "tests", "helpers.py"),
             "class TestFoo(TransactionCase):\n    pass\n",
@@ -161,6 +165,8 @@ class MainIntegrationTests(unittest.TestCase):
         # inside the repo root -- real git worktree checkouts (verified with a real
         # `git worktree add`), not empty directories -- which this set must exclude, as its
         # own comment says it matches check_absolute_paths.py's ignore set (which has .claude).
+        # One real test file in scope: a scan of nothing is red (check_target.py), and the pruning below is only proven if the walk finds something.
+        _write(os.path.join(self.tmp, "ok_mod", "tests", "test_ok.py"), "# burn-ignore-test-tags\n")
         _write(
             os.path.join(
                 self.tmp, ".claude", "worktrees", "sess1", "mod_a", "tests", "test_foo.py"
@@ -175,6 +181,8 @@ class MainIntegrationTests(unittest.TestCase):
         # suite (e.g. pyarrow) inside site-packages/pyarrow/tests/ -- an
         # untagged class there is that library's own business, not an
         # Odoo test-tagging violation in this repo.
+        # One real test file in scope: a scan of nothing is red (check_target.py), and the pruning below is only proven if the walk finds something.
+        _write(os.path.join(self.tmp, "ok_mod", "tests", "test_ok.py"), "# burn-ignore-test-tags\n")
         _write(
             os.path.join(
                 self.tmp,

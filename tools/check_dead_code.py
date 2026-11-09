@@ -63,6 +63,7 @@ Usage: check_dead_code.py <repo_root>
 """
 
 import os
+import check_target
 import lint_exec
 import re
 import sys
@@ -271,7 +272,14 @@ def main():
         print("Usage: check_dead_code.py <repo_root>")
         sys.exit(1)
 
+    check_target.require_directory(sys.argv[1], "check_dead_code")
     repo_roots = _resolve_repo_roots(sys.argv[1])
+    check_target.require_scanned(
+        sum(1 for root in repo_roots for _module in _iter_module_dirs(root)),
+        ", ".join(repo_roots),
+        "check_dead_code",
+        "Odoo module directories (a directory holding __manifest__.py)",
+    )
     dead_templates, dead_views, dead_js = check_dead_code(repo_roots)
 
     has_findings = bool(dead_templates or dead_views or dead_js)

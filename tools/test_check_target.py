@@ -38,14 +38,20 @@ def run_checker(script, *args, env=None, cwd=None):
     )
 
 
-def assert_checker_refuses_a_bad_target(case, script, extra_args=(), empty=True, file_target=True):
+def assert_checker_refuses_a_bad_target(case, script, extra_args=(), empty=True, file_target=True, target_flag=None):
     """Run `script` on a missing path, a plain file and an empty directory; each must exit 2 and say why.
 
     `extra_args` goes after the target (a checker that takes more arguments). `empty=False` skips the empty-directory case for a
-    checker that documents an empty scan as normal; `file_target=False` skips the plain-file case for one that accepts a file."""
+    checker that documents an empty scan as normal; `file_target=False` skips the plain-file case for one that accepts a file.
+    `target_flag` names the option (`--repo-root`) for a checker whose target is not a positional argument."""
+
+    def run(target, env=None, cwd=None):
+        lead = [target_flag, target] if target_flag else [target]
+        return run_checker(script, *lead, *extra_args, env=env, cwd=cwd)
+
     with tempfile.TemporaryDirectory() as tmp:
         missing = os.path.join(tmp, "no_such_directory")
-        done = run_checker(script, missing, *extra_args, cwd=tmp)
+        done = run(missing, cwd=tmp)
         case.assertEqual(done.returncode, 2, f"{script} on a missing directory:\n{done.stdout}{done.stderr}")
         case.assertIn("does not exist", done.stdout + done.stderr)
         case.assertNotIn("Passed", done.stdout)
@@ -53,20 +59,20 @@ def assert_checker_refuses_a_bad_target(case, script, extra_args=(), empty=True,
             a_file = os.path.join(tmp, "a_file.txt")
             with open(a_file, "w", encoding="utf-8") as handle:
                 handle.write("x\n")
-            done = run_checker(script, a_file, *extra_args, cwd=tmp)
+            done = run(a_file, cwd=tmp)
             case.assertEqual(done.returncode, 2, f"{script} on a file:\n{done.stdout}{done.stderr}")
             case.assertIn("not a directory", done.stdout + done.stderr)
         if empty:
             nothing = os.path.join(tmp, "empty")
             os.mkdir(nothing)
-            done = run_checker(script, nothing, *extra_args, cwd=tmp)
+            done = run(nothing, cwd=tmp)
             case.assertEqual(done.returncode, 2, f"{script} on an empty directory:\n{done.stdout}{done.stderr}")
             case.assertIn("scanned 0", done.stdout + done.stderr)
             case.assertIn(check_target.ALLOW_EMPTY_ENV, done.stdout + done.stderr)
             # The documented opt-out turns only the empty-scan failure into a pass.
-            done = run_checker(script, nothing, *extra_args, env=checker_environment(**{check_target.ALLOW_EMPTY_ENV: "1"}), cwd=tmp)
+            done = run(nothing, env=checker_environment(**{check_target.ALLOW_EMPTY_ENV: "1"}), cwd=tmp)
             case.assertEqual(done.returncode, 0, f"{script} on an empty directory with the opt-out:\n{done.stdout}{done.stderr}")
-            done = run_checker(script, missing, *extra_args, env=checker_environment(**{check_target.ALLOW_EMPTY_ENV: "1"}), cwd=tmp)
+            done = run(missing, env=checker_environment(**{check_target.ALLOW_EMPTY_ENV: "1"}), cwd=tmp)
             case.assertEqual(done.returncode, 2, f"{script} on a missing directory with the opt-out:\n{done.stdout}{done.stderr}")
 
 

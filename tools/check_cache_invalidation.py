@@ -4,6 +4,7 @@
 import ast
 import os
 import sys
+import check_target
 from tree_files import tree_walk
 
 
@@ -145,11 +146,14 @@ def main():
         sys.exit(1)
 
     all_errors = []
+    scanned = 0
     for directory in search_dirs:
+        check_target.require_directory(directory, "check_cache_invalidation")
         for root, _dirs, files in tree_walk(directory, ".py", IGNORE_DIR_NAMES, untracked=True):
             for file in files:
                 if file.endswith(".py") and "models" in root:
                     filepath = os.path.join(root, file)
+                    scanned += 1
                     try:
                         all_errors.extend(check_file(filepath))
                     except (SyntaxError, OSError) as e:
@@ -158,6 +162,7 @@ def main():
                             file=sys.stderr,
                         )
 
+    check_target.require_scanned(scanned, ", ".join(search_dirs), "check_cache_invalidation", "Python files under a models/ directory")
     if all_errors:
         print("CRITICAL: Found raw SQL mutations without cache invalidations:")
         for error in all_errors:

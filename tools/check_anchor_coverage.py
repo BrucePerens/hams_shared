@@ -44,6 +44,7 @@ import os
 import sys
 
 import check_function_test_anchors as cfta  # noqa: E402
+import check_target  # noqa: E402
 import verify_anchors as va  # noqa: E402
 
 
@@ -59,7 +60,7 @@ def load_coverage_files(coverage_json_path):
     return data.get("files", {})
 
 
-def check_anchor_coverage(repo_root, coverage_files):
+def check_anchor_coverage(repo_root, coverage_files, stats=None):
     """Returns a list of (identity, start, end) for every anchored
     function whose own line span coverage.json has real statement data
     for (i.e. the file was actually in this run's own scope), but none of
@@ -74,6 +75,8 @@ def check_anchor_coverage(repo_root, coverage_files):
         file_cov = coverage_files.get(rel_path)
         if file_cov is None:
             continue
+        if stats is not None:
+            stats["files"] = stats.get("files", 0) + 1
         executed = set(file_cov.get("executed_lines", []))
         missing = set(file_cov.get("missing_lines", []))
         statement_lines = executed | missing
@@ -129,12 +132,17 @@ def main():
     )
     args = parser.parse_args()
 
+    repo_root = check_target.require_directory(args.repo_root, "check_anchor_coverage")
     coverage_files = load_coverage_files(args.coverage_json)
     if not coverage_files:
         print("[!] ERROR: coverage.json has no per-file data -- nothing to cross-reference.")
         return 1
 
-    gaps = check_anchor_coverage(args.repo_root, coverage_files)
+    stats = {}
+    gaps = check_anchor_coverage(repo_root, coverage_files, stats)
+    # Coverage data that names none of this repository's tracked files (the wrong --repo-root, or a report from another tree)
+    # cross-references nothing, and "clean" would only mean that.
+    check_target.require_scanned(stats.get("files", 0), repo_root, "check_anchor_coverage", "tracked Python files that coverage.json reports on")
     scoped_file_count = len(coverage_files)
     print(
         f"[i] Cross-referenced anchors against {scoped_file_count} file(s) this "

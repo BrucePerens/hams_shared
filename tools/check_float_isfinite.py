@@ -41,6 +41,7 @@ import ast
 import os
 import sys
 
+import check_target
 import lint_cache
 from tree_files import tree_files
 
@@ -180,6 +181,7 @@ def main():
     # Several roots (hams_com and hams_open) are scanned by ONE process, one step in run_linters.py.
     roots = []
     for given in sys.argv[1:]:
+        check_target.require_directory(given, "check_float_isfinite")
         repo_root = os.path.abspath(given)
         if os.path.basename(repo_root) == "hams_shared":
             repo_root = os.path.dirname(repo_root)
@@ -190,8 +192,10 @@ def main():
     # source), so only files that changed since a run on this machine are parsed. --no-cache bypasses it.
     cache = lint_cache.ResultCache("check_float_isfinite", lint_cache.checker_version(os.path.abspath(__file__)))
     any_found = False
+    scanned = 0
     for repo_root in roots:
         for path in find_python_files(repo_root):
+            scanned += 1
             for line_num, msg in lint_cache.cached_file_result(cache, path, check_file):
                 any_found = True
                 rel = os.path.relpath(path, repo_root)
@@ -200,6 +204,7 @@ def main():
                 print(f"❌ {rel}:{line_num}: {msg}")
 
     cache.save()
+    check_target.require_scanned(scanned, ", ".join(roots), "check_float_isfinite", "Python files")
     if any_found:
         sys.exit(1)
     sys.exit(0)

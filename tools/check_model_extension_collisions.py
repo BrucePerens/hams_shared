@@ -47,6 +47,7 @@ collision is a property of the whole registry, not any single module.
 
 import ast
 import os
+import check_target
 import lint_exec
 import sys
 from tree_files import tree_files
@@ -173,7 +174,7 @@ def _module_of(filepath, cache):
     return result
 
 
-def _scan(roots):
+def _scan(roots, stats=None):
     # model_name -> list of (module, file, lineno)  ALL `_name = ...` decls,
     # including ones that also self-reference in _inherit.
     name_owners = {}
@@ -197,6 +198,8 @@ def _scan(roots):
             mod = _module_of(fpath, module_cache)
             if not mod:
                 continue
+            if stats is not None:
+                stats["files"] = stats.get("files", 0) + 1
             try:
                 with open(fpath, "r", encoding="utf-8") as f:
                     tree = ast.parse(f.read(), filename=fpath)
@@ -227,13 +230,16 @@ def main():
         print("Usage: check_model_extension_collisions.py <repo_root>")
         sys.exit(1)
 
+    check_target.require_directory(sys.argv[1], "check_model_extension_collisions")
     repo_root = _resolve_repo_root(sys.argv[1])
     roots = [repo_root]
     sibling = _find_sibling_repo(repo_root)
     if sibling:
         roots.append(sibling)
 
-    name_owners, claiming_owners, auto_false_models, inherit_only = _scan(roots)
+    stats = {}
+    name_owners, claiming_owners, auto_false_models, inherit_only = _scan(roots, stats)
+    check_target.require_scanned(stats.get("files", 0), ", ".join(roots), "check_model_extension_collisions", "Python files inside an Odoo module")
     errors_found = False
 
     # Check 1: ambiguous multi-owner model
