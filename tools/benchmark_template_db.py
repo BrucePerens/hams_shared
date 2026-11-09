@@ -45,7 +45,7 @@ import threading
 import time
 
 # [@ANCHOR: tools:template_db_identifier]
-SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\Z")
 """Same rule as test.py's `_SAFE_DB_NAME_RE`: a database or tablespace name is interpolated into SQL inside double quotes."""
 
 TEMPLATE_PREFIX = "hams_tpl_"
