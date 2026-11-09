@@ -428,6 +428,7 @@ class MainModeDispatchTests(unittest.TestCase):
                      patch.object(_test_runner, "FailureExtractor", return_value=MagicMock()), \
                      patch.object(_test_runner, "check_linters") as mock_check_linters, \
                      patch.object(_test_runner, "rebuild_db") as mock_rebuild_db, \
+                     patch.object(_test_runner, "apply_failure_policy", side_effect=lambda *a: a[2]), \
                      patch.object(_test_runner, "run_cmd") as mock_run_cmd:
                     with self.assertRaises(SystemExit) as ctx:
                         _test_runner.main()

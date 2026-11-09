@@ -50,6 +50,7 @@ if "--mcp" in sys.argv:
 
 import host_requirements
 import infrastructure
+import known_red
 import lock_queue
 import odoo_test_batch
 import offline_browser_ns
@@ -582,6 +583,10 @@ class FailureExtractor:
         # appears in the stream -- there can be more than one on a multi-module `-u a,b` run) so
         # `finish_and_write()` can report it as the authoritative pass/fail signal instead.
         self.odoo_result_lines = []
+        # Failing and started tests as named in the log, and the verdict of the known-red/flake policy
+        # (ADR 0118, known_red.py); None until main() applied it.
+        self.observation = known_red.RunObservation()
+        self.policy_outcome = None
 
         if not disable_atexit:
             atexit.register(self.finish_and_write)
@@ -671,6 +676,7 @@ class FailureExtractor:
 
     def process_line(self, line):
         line_clean = re.sub(r"\x1b\[[0-9;]*m", "", line)
+        self.observation.feed(line_clean)
         if self.test_start_pattern.search(line_clean):
             self.set_context(line_clean.strip())
 
@@ -927,6 +933,11 @@ class FailureExtractor:
             print(
                 "🛑 TEST RUN ABORTED: Did not complete due to pre-flight linter errors."
             )
+        elif odoo_ran and (odoo_total_failed or odoo_total_errors) and self.policy_outcome and self.policy_outcome.run_green:
+            print(
+                f"✅ TEST RUN COMPLETE: Odoo reports {odoo_total_failed} failed, {odoo_total_errors} error(s) of "
+                f"{odoo_total_tests} tests; every failure is known red or a flake (listed below), none is new."
+            )
         elif odoo_ran and (odoo_total_failed or odoo_total_errors):
             print(
                 f"🚨 TEST RUN COMPLETE: Odoo reports {odoo_total_failed} failed, "
@@ -965,7 +976,11 @@ class FailureExtractor:
                 "only."
             )
             print(f"📄 Failure details extracted and saved to: {path_note}")
-        if self.child_exit_status not in (None, 0) and not (a or self.cpu_limit_line or self.signal_line):
+        if self.policy_outcome:
+            for policy_line in self.policy_outcome.summary_lines():
+                print(policy_line)
+        policy_green = bool(self.policy_outcome and self.policy_outcome.run_green)
+        if self.child_exit_status not in (None, 0) and not (a or self.cpu_limit_line or self.signal_line or policy_green):
             print(f"🛑 Odoo exited with status {self.child_exit_status}: this run is a failure.")
         print("==========================================================\n")
 
@@ -1554,6 +1569,48 @@ def exit_status_for_run(returncode, extractor, results_before=0):
         return 0
     print("🛑 Odoo exited 0 but printed no odoo.tests.result line: no test ran, so this run is a failure.")
     return 1
+
+
+# [@ANCHOR: test:apply_failure_policy]
+def apply_failure_policy(args, extractor, rc_odoo, rerun, base_dir, target_modules, slot):
+    """The exit status of a standard-mode run once the known-red baseline and the flake rerun (ADR 0118) were
+    applied to Odoo's run. Full entry: tools/README.md.
+
+    Returns 0 only when Odoo printed a verdict, exited 1 because of counted test failures, and every failure is
+    baselined or a flake; otherwise `rc_odoo`. Called only for a failing run (a passing run writes nothing); writes test_results.json beside the report.
+    `--raw-failures` skips the policy (every failure stays red) but still writes the file."""
+    observation = extractor.observation
+    commit = known_red.git_head(base_dir)
+    if args.raw_failures:
+        outcome = known_red.raw_outcome(observation)
+    else:
+        try:
+            baseline = known_red.load_baseline(known_red.baseline_paths(base_dir))
+            threshold = known_red.flake_threshold()
+            flake_path = os.environ.get(known_red.FLAKE_FILE_ENV) or os.path.join(
+                os.path.dirname(extractor.output_path), known_red.FLAKE_FILE_NAME
+            )
+            outcome = known_red.decide(
+                observation, baseline, rerun, flake_path, commit, threshold, modules=set(target_modules)
+            )
+        except known_red.BaselineError as error:
+            print(f"❌ ERROR: {error}")
+            return rc_odoo
+    from_odoo_failures = (
+        rc_odoo == 1 and observation.counted() > 0 and not extractor.cpu_limit_line and not extractor.signal_line
+    )
+    status = 0 if (rc_odoo == 0 or (outcome.run_green and from_odoo_failures)) else rc_odoo
+    outcome.run_green = status == 0
+    if not args.raw_failures and rc_odoo != 0:
+        extractor.policy_outcome = outcome
+    results_path = os.path.join(
+        os.path.dirname(extractor.output_path), runner_slots.slot_file_name("test_results.json", slot)
+    )
+    try:
+        known_red.write_results(results_path, outcome, commit, observation)
+    except OSError as error:
+        print(f"[!] Could not write {results_path}: {error}")
+    return status
 
 
 def is_git_checkout_root(path):
@@ -4120,6 +4177,12 @@ def build_arg_parser():
         "overlay, discarded after every run). A full run (no -u) always builds them.",
     )
     parser.add_argument(
+        "--raw-failures",
+        action="store_true",
+        help="Report Odoo's verdict untouched: ignore the known-red baseline and rerun nothing (ADR 0118). "
+        "test_results.json is still written, listing every failing test; tools that bisect a failure use this.",
+    )
+    parser.add_argument(
         "--solo",
         action="store_true",
         help="Run alone: never join a coalesced batch of other branches' `-u MODULES` runs "
@@ -4867,6 +4930,21 @@ def main():
         ]
 
         rc_odoo = exit_status_for_run(run_cmd(cmd, extractor), extractor)
+
+        def rerun_alone(test_ids):
+            # One rerun of just these tests on a fresh database with the same modules installed (ADR 0118).
+            print(f"[*] Rerunning {len(test_ids)} failed test(s) once, alone, on a fresh database.")
+            rebuild_db(args.db, flush_db)
+            again = known_red.RunObservation()
+            tags_at = cmd.index("--test-tags") + 1
+            alone = cmd[:tags_at] + [known_red.rerun_tags(test_ids)] + cmd[tags_at + 1:]
+            again.child_exit_status = run_cmd(alone, again)
+            return again
+
+        if rc_odoo != 0:
+            rc_odoo = apply_failure_policy(
+                args, extractor, rc_odoo, rerun_alone, base_dir, target_modules, held_slot
+            )
         if rc_odoo != 0:
             final_rc = rc_odoo
 

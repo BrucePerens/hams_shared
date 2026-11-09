@@ -1669,6 +1669,211 @@ Purpose: the backstop in the root phase of the full pipeline, which outlives the
 `PostgresAccess` running `psql` as the `postgres` account over the host socket; its filestore is in the discarded overlay, so only the database is dropped. `run_args` is the
 parsed command line (`slots`, `db`, `keep_db`).
 
+## Known-red baseline and flakes (`known_red.py`, ADR 0118)
+
+`test.py` used to turn red for any failing test, whoever caused it, so every whole-system failure had to be debugged by hand before anything else could
+be judged. After Odoo's run, a failing standard-mode run now goes through this policy; a passing run is untouched.
+
+1. A failing test listed in a **baseline file** is "known red, not new". It does not turn the run red and is named in the summary with its owner, first-seen
+   commit and reason. A baselined test that ran and passed is named too ("remove its baseline entry").
+2. Any other failing test is **rerun once, alone**: a fresh database (`rebuild_db`, the slot's own database), the same modules installed, only the failed tests
+   selected with `--test-tags /module:Class.method,...`. Passing on the rerun is a **flake**: it is counted in the flake file, named in the summary, and does
+   not turn the run red. Failing again is a real failure and the run is red.
+3. A **setup or class error** (`setUpClass`, `tearDownClass`, a module-level error) is never rerun. It is reported as "NEW SETUP/CLASS ERROR (never rerun)" and
+   is red unless baselined. More than 25 new failures (a systemic problem), or a failure the log parser could not name (Odoo counted more failures than
+   were found in the log), is also red and is not rerun.
+4. The summary prints every tolerated test. Nothing is hidden. The exit status is 0 only when Odoo printed a verdict, exited with status 1 because of counted test
+   failures, and every failure is known red or a flake. A signal, the CPU limit or a run with no verdict is never made green.
+5. `--raw-failures` switches the policy off: no baseline, no rerun, every failure red. It still writes `test_results.json`. Tools that need Odoo's own list
+   of failing tests (the module bisection) use it.
+6. The run writes `test_results.json` (slot files: `test_results.slot-K.json`) beside `filtered_test.txt` when it fails. Version 1; see `PolicyOutcome.results`.
+
+The policy applies to `--mode standard`. `--mode individual` keeps Odoo's verdict untouched.
+
+**The baseline file** `known_red_baseline.json`: `{"version": 1, "entries": [{"test_id", "first_seen", "owner", "reason"}, ...]}`. `test_id` is
+`<module>:<Class>.<method>` (a class-level error uses the method `setUpClass`); `first_seen` the commit that first showed the failure; `owner` who fixes it;
+`reason` why it is red. All four are required and non-empty. A malformed file, a malformed id or a duplicate stops the run (exit status unchanged, the cause
+printed), because tolerating or dropping tests on a guess would hide failures. Files read: `HAMS_KNOWN_RED_BASELINE` (an `os.pathsep` list) if set, else
+`known_red_baseline.json` in the repository root being tested, in a sibling or nested `hams_open`, and `tools/known_red_baseline.json` here.
+A private repository keeps its entries in its own root file; this directory's file lists only tests of this public repository.
+
+**The flake file** is `test_flakes.json` in the log directory (`HAMS_TEST_FLAKE_FILE` overrides): `{"version": 1, "tests": {id: {"count", "first", "last",
+"last_commit"}}}`. Tests whose count is above `HAMS_FLAKE_FIX_ME_THRESHOLD` (default 3) and whose module is under test are listed as "FIX ME" in every summary.
+
+### `[@ANCHOR: known_red:FailureRecord]` `FailureRecord`
+
+A frozen dataclass: one failing test found in Odoo's log. It lives for one run in one process and is never serialized.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `test_id` | str | `<module>:<Class>.<method>`; a class-level error uses `setUpClass`, `tearDownClass`, `setUpModule` or `tearDownModule` as the method. |
+| `flavour` | str | Odoo's word: `FAIL` (an assertion) or `ERROR` (an exception). |
+| `setup` | bool | True for a class- or module-level error, which is never rerun. |
+
+Invariants: `test_id` always matches `module:Class.method`. A failing subtest is recorded under its parent test; one test with several failing subtests
+gives several records with the same id (Odoo counts each).
+
+### `[@ANCHOR: known_red:parse_failure_line]` `parse_failure_line(line)`
+
+Purpose: finds a failing test in one log line. Called for every line by `RunObservation.feed`.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `line` | str | One Odoo log line without ANSI colour. |
+
+Returns a `FailureRecord`, or None. It reads Odoo's logger form `ERROR <db> odoo.addons.<module>...: FAIL|ERROR: Class.method` (also `Subtest Class.method (...)`) and the
+class form `ERROR <db> unittest.suite: ERROR: setUpClass (odoo.addons.<module>.tests.<file>.Class)`. Anything else, including an error
+line from a logger that is not an Odoo add-on, returns None. Pure; no errors.
+
+### `[@ANCHOR: known_red:parse_started_line]` `parse_started_line(line)`
+
+Purpose: names a test Odoo started, so a baselined test that ran and passed can be told from one that did not run. Returns `<module>:<Class>.<method>` from
+`INFO <db> odoo.addons.<module>...: Starting Class.method ...`, else None. Pure.
+
+### `[@ANCHOR: known_red:RunObservation]` `RunObservation`
+
+What one Odoo process said about its tests, built line by line. It also carries the attributes `run_cmd` sets on its consumer, so a rerun uses it in place of
+the `FailureExtractor` (which writes reports and removes the report file when created). `FailureExtractor.observation` is one; it is fed from `process_line`.
+
+| Field or method | Type | Meaning |
+|---|---|---|
+| `failures` | list of `FailureRecord` | Every failing test line, in order, duplicates kept (so the count matches Odoo's). |
+| `started` | set of str | Ids of every test Odoo started. |
+| `odoo_result_lines` | list of dict | One per `odoo.tests.result:` line: `failed`, `errors`, `total`, `raw`. |
+| `cpu_limit_line`, `signal_line`, `child_exit_status` | str, str, int or None | Set by `run_cmd`; the policy refuses to make a run green when the first two are set. |
+| `feed(line)`, `process_line(line)` | method | Read one line (`process_line` first strips ANSI colour). |
+| `counted()` | method, int | Failures plus errors Odoo counted, summed over every result line. |
+| `failed_ids()` | method, set | The ids in `failures`. |
+
+Not thread safe; `run_cmd` feeds it from one reader thread.
+
+### `[@ANCHOR: known_red:BaselineEntry]` `BaselineEntry`
+
+A frozen dataclass of one baseline line: `test_id`, `first_seen`, `owner`, `reason` (strings from the file) and `source` (path of the file it came from). Created by
+`load_baseline`, read by `classify` and the summary; never mutated.
+
+### `[@ANCHOR: known_red:baseline_paths]` `baseline_paths(base_dir, environ=None)`
+
+Purpose: which baseline files this run reads.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `base_dir` | str | The repository root being tested (the working directory of `test.py`). |
+| `environ` | mapping or None | Where `HAMS_KNOWN_RED_BASELINE` is read; default `os.environ`. |
+
+Returns the existing files, de-duplicated by real path, in the order: environment list, or `<base_dir>/known_red_baseline.json`,
+`<base_dir>/hams_open/...`, `<base_dir>/../hams_open/...`, `tools/known_red_baseline.json` beside the module. A missing file is skipped (no baseline is
+an empty baseline). Reads only file metadata.
+
+### `[@ANCHOR: known_red:load_baseline]` `load_baseline(paths)`
+
+Purpose: reads and validates baseline files. Returns `{test_id: BaselineEntry}`. Raises `BaselineError` (a `ValueError`) for an unreadable or non-JSON file, a version other than
+1, an entry without all four non-empty fields, an id that is not `module:Class.method` (a leading `/` is accepted and removed), or an id listed twice, naming the
+file. The caller prints the cause and keeps Odoo's exit status. Reads the files; no side effects.
+
+### `[@ANCHOR: known_red:flake_threshold]` `flake_threshold(environ=None)`
+
+Purpose: the count above which a flaky test is listed as "FIX ME". Returns `HAMS_FLAKE_FIX_ME_THRESHOLD` or 3. Raises `BaselineError` for a value that is not a whole number
+of at least 1.
+
+### `[@ANCHOR: known_red:load_flakes]` `load_flakes(path)`
+
+Purpose: the flake counters. Returns `{test_id: {"count": int, "first": str, "last": str, "last_commit": str}}`, `{}` when the file does not exist, and raises `BaselineError`
+for a file that exists but is not the documented JSON (an unreadable history must not look like an empty one). Reads the file without locking: `record_flakes` replaces it atomically.
+
+### `[@ANCHOR: known_red:record_flakes]` `record_flakes(path, test_ids, commit, now=None)`
+
+Purpose: counts one flake for each id.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `path` | str | The flake file; its directory is created. |
+| `test_ids` | iterable of str | Ids that failed and then passed alone. Duplicates count once. |
+| `commit` | str | The commit under test, stored as `last_commit`. |
+| `now` | str or None | UTC timestamp `YYYY-MM-DDTHH:MM:SSZ`; default the current time. |
+
+Returns the updated entries for those ids. Takes an exclusive `flock` on `<path>.lock`, then writes a temporary file and `os.replace`s it, so concurrent runs in other slots lose no count and
+readers never see a half-written file (mode 0666, as several accounts write it). Raises `BaselineError` for a corrupt existing file and `OSError` for an unwritable directory.
+
+### `[@ANCHOR: known_red:Classification]` `Classification`
+
+A dataclass built by `classify`: `known_red` (dict id to `BaselineEntry`: tolerated), `new` (list of ids to rerun), `setup_new` (new class-level errors, never rerun),
+`unparsed` (int: failures Odoo counted that no log line named), `now_passing` (baselined ids that were started and did not fail). One run, one process.
+
+### `[@ANCHOR: known_red:classify]` `classify(observation, baseline)`
+
+Purpose: splits the first run's failures. Returns a `Classification`. `unparsed` is `observation.counted() - len(observation.failures)` (not below 0): a failure that no line named is
+treated as new, never tolerated. A baselined id that did not run is neither failing nor "now passing". Pure.
+
+### `[@ANCHOR: known_red:rerun_tags]` `rerun_tags(test_ids)`
+
+Purpose: the `--test-tags` value for the single rerun: `/module:Class.method` for each id, sorted, comma separated. Pure.
+
+### `[@ANCHOR: known_red:PolicyOutcome]` `PolicyOutcome`
+
+A dataclass: the policy's verdict. `test.py` stores it as `extractor.policy_outcome`, prints `summary_lines()` under the run headline, and writes `results(commit, counts)` to `test_results.json`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `run_green` | bool | True when the run exits 0. `apply_failure_policy` sets it from the final exit status. |
+| `known_red` | dict | Tolerated baselined failures, id to `BaselineEntry`. |
+| `flakes` | dict | Ids that failed and passed alone this run, with their updated counter entries. |
+| `failed_again` | list | New failures that failed again alone (all failures, with `--raw-failures`). |
+| `setup_new` | list | New class-level errors. |
+| `not_rerun` | dict | New failures not rerun, id to reason (systemic number, or an unnamed failure present). |
+| `unparsed` | int | Failures Odoo counted that no log line named. |
+| `now_passing` | list | Baselined ids that passed: their entries should be removed. |
+| `fix_me` | dict | Flake entries above the threshold for modules under test. |
+| `rerun_ran` | bool | Whether the rerun happened. |
+
+`test_results.json` (version 1): `version`, `commit`, `run_green`, `counts` (`failed`, `errors`, `total`), `known_red` (id to owner, reason, first_seen), `flakes`, `new_failures`
+(sorted failed-again, setup and not-rerun ids), `setup_errors`, `unparsed`, `now_passing`, `fix_me`.
+
+### `[@ANCHOR: known_red:decide]` `decide(first, baseline, rerun, flake_path, commit, threshold, modules=None, now=None, max_rerun=25)`
+
+Purpose: applies the policy to the first run.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `first` | `RunObservation` | The whole run. |
+| `baseline` | dict | From `load_baseline`. |
+| `rerun` | callable | `rerun(test_ids)` runs those tests alone once and returns a `RunObservation`. Called at most once. |
+| `flake_path`, `commit`, `threshold`, `now` | str, str, int, str | See `record_flakes`, `flake_threshold`. |
+| `modules` | set or None | Modules under test; limits the fix-me list to them. |
+| `max_rerun` | int | More new failures than this are systemic: not rerun, red. |
+
+Returns a `PolicyOutcome`. A rerun counts as a pass only when it printed a verdict, started the test and did not fail it; a rerun that did not run the test or printed no verdict leaves it red.
+Writes the flake file when something passed alone. Raises `BaselineError` for a corrupt flake file. The rerun is the expensive part (database rebuild and module install).
+
+### `[@ANCHOR: known_red:raw_outcome]` `raw_outcome(first)`
+
+Purpose: the outcome for `--raw-failures`: every failure red, nothing tolerated, nothing rerun. Returns a `PolicyOutcome` with `run_green` False. Pure.
+
+### `[@ANCHOR: known_red:git_head]` `git_head(directory)`
+
+Purpose: the commit under test, recorded as `first_seen` hints, flake `last_commit` and in `test_results.json`. Returns the full 40-character id from `git rev-parse HEAD` (with `safe.directory` set for
+this one call, as the runner does for worktrees), or "" on any failure. Never raises; 20 second timeout.
+
+### `[@ANCHOR: known_red:write_results]` `write_results(path, outcome, commit, observation)`
+
+Purpose: writes `test_results.json`. `path` is the file (its directory must exist), `outcome` a `PolicyOutcome`, `commit` a string, `observation` the first run's `RunObservation`
+(supplies `counts`). Writes a temporary file and replaces atomically, mode 0644. Raises `OSError` when the directory is unwritable; `apply_failure_policy` prints that and carries on.
+
+### `[@ANCHOR: test:apply_failure_policy]` `apply_failure_policy(args, extractor, rc_odoo, rerun, base_dir, target_modules, slot)`
+
+Purpose: `test.py`'s one call into the policy, from `main()` after a failing standard-mode Odoo run.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `args` | Namespace | Parsed options; `raw_failures` is read. |
+| `extractor` | `FailureExtractor` | Supplies `observation`, `output_path`, `cpu_limit_line`, `signal_line`; receives `policy_outcome`. |
+| `rc_odoo` | int | The run's exit status (non-zero). |
+| `rerun` | callable | The rerun callback (`rerun_alone` in `main`: `rebuild_db`, then the same command with `--test-tags` replaced). |
+| `base_dir`, `target_modules`, `slot` | str, list, int | The repository root, modules under test, the slot (names `test_results.json`). |
+
+Returns the exit status: 0 when `rc_odoo` is 1, Odoo counted failures, there was no CPU limit or signal, and the outcome is green; else `rc_odoo` (also when the baseline or the flake file is invalid:
+the cause is printed). Writes `test_results.json`; takes the slot's database for the rerun through the callback.
+
 ## Staged-file size check
 
 `check_staged_files.py` (run by `git-hooks/pre-commit`) refuses a commit that stages a file over 5 MB (`MAX_BYTES`) or
