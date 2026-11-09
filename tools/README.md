@@ -4599,3 +4599,37 @@ a path, so a missing file raises `FileNotFoundError` (no silent empty text). Ret
 Purpose: the command line. `--before SPEC...` and `--after SPEC...` run the check (exit 0 all present, 1 something missing, with each missing unit and its
 missing sentences; units longer than 200 characters are cut in the report); `--measure SPEC...` prints characters and `~tokens (chars/4)` per file and exits 0
 unless a check also runs. Neither given: usage error (exit 2). Read only.
+
+## Wall-clock limits and hang reports (`hang_guard.py`)
+
+Every lint step (`lint_exec.run_step`) and every Odoo test run (`test.py run_cmd`) has a wall-clock limit. A step over its limit is
+`TIMED OUT` (exit 124, a failure that is never rerun as a load flake); before its process group is stopped, a hang report is written to
+`$HAMS_HANG_REPORT_DIR` (default `~/.cache/hams/hang_reports`): the process tree, and per process the wait channel, syscall, kernel stack,
+open files and sockets (`ss`) and a `py-spy dump` when py-spy is installed. Pytest steps also get `-o faulthandler_timeout=<limit, at most
+600>` so a hung test dumps all thread stacks into the step output. Environment: `HAMS_LINT_STEP_FACTOR` (4), `HAMS_LINT_STEP_FLOOR` (300 s),
+`HAMS_LINT_STEP_CAP` (3600 s), `HAMS_LINT_STEP_DEFAULT` (1800 s, a step never run before), `HAMS_LINT_RUN_CAP` (7200 s, the whole run),
+`HAMS_LINT_STEP_TIMEOUT_<NAME>` (one step exactly), `HAMS_TEST_RUN_CAP` (14400 s, one Odoo test run).
+
+### `[@ANCHOR: hang_guard:step_env_name]` `step_env_name(step_name)`
+The environment variable that sets one step's limit: the name upper-cased, every run of other characters one `_`.
+
+### `[@ANCHOR: hang_guard:step_limit]` `step_limit(step_name, recent_seconds, environ=None, scale=1.0)`
+Median of the step's last runs x factor, between floor and cap, stretched by the load `scale` (cap still applies); an exact variable wins.
+
+### `[@ANCHOR: hang_guard:run_cap]` `run_cap(environ=None)`
+Seconds a whole lint run may take.
+
+### `[@ANCHOR: hang_guard:remember]` `remember(history, name, seconds, keep=7)`
+Keeps the last durations of a step (the lint cache stores them under `recent`).
+
+### `[@ANCHOR: hang_guard:process_section]` `process_section(info)`
+The report text of one process.
+
+### `[@ANCHOR: hang_guard:write_hang_report]` `write_hang_report(root_pid, label, reason, directory=None)`
+Writes the report of a process tree; returns the path.
+
+### `[@ANCHOR: hang_guard:stop_own_group]` `stop_own_group(pid, start_ticks, grace=10)`
+SIGTERM then SIGKILL to the group a child leads; refuses a reused pid, a pid that leads no group of its own, and the caller's own group.
+
+### `[@ANCHOR: hang_guard:run_limited]` `run_limited(argv, limit, label, directory=None, **popen_kwargs)`
+`subprocess.run` with a limit: on timeout the report first, then `stop_own_group`; returns (completed, report path, timed_out).
