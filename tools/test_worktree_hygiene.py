@@ -106,6 +106,100 @@ class WorktreeHygieneTest(unittest.TestCase):
         subprocess.run(["git", "-C", path, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "old"], env=env, check=True)
         self.assertEqual(wh.main([self.repo, "--no-fetch", "--stale-minutes", "30"]), 1)
 
+    def _hold(self, path, how):
+        """A real running process holding `path`: by its working directory, or by an open file inside it."""
+        if how == "cwd":
+            proc = subprocess.Popen(["sleep", "60"], cwd=path)
+        else:
+            with open(os.path.join(path, "a")) as handle:  # `a` is tracked, so the tree stays clean
+                proc = subprocess.Popen(["sleep", "60"], stdin=handle, cwd="/")
+        self.addCleanup(proc.wait)
+        self.addCleanup(proc.terminate)
+        return proc
+
+    def test_a_worktree_held_by_a_running_process_is_kept_until_the_process_ends(self):
+        for how in ("cwd", "file"):
+            with self.subTest(how=how):
+                path = self.worktree(f"held-{how}")
+                proc = self._hold(path, how)
+                report = wh.run(self.repo, True, 1800, {}, now=time.time() + 3600)
+                self.assertTrue(os.path.isdir(path), report)
+                self.assertEqual(report["removed"], [])
+                self.assertEqual([(p, b, [pid for pid, _ in who]) for p, b, who in report["held"]], [(path, f"held-{how}", [proc.pid])])
+                self.assertIn(f"held-{how}", _git(self.repo, "branch", "--format=%(refname:short)"))
+                proc.terminate()
+                proc.wait()
+                report = wh.run(self.repo, True, 1800, {}, now=time.time() + 3600)
+                self.assertEqual(report["removed"], [(path, f"held-{how}")])
+                self.assertFalse(os.path.isdir(path))
+
+    def test_the_callers_own_shell_chain_does_not_count_as_holding(self):
+        self.assertIn(os.getpid(), wh.calling_shells())
+        path = self.worktree("mine")
+        proc = self._hold(path, "cwd")
+        self.assertEqual([pid for pid, _ in wh.holding_processes(path, exempt=set())], [proc.pid])
+        self.assertEqual(wh.holding_processes(path, exempt={proc.pid}), [])
+
+    def test_a_locked_worktree_is_never_removed(self):
+        path = self.worktree("locked")
+        _git(self.repo, "worktree", "lock", "--reason", "batch run", path)
+        report = wh.run(self.repo, True, 1800, {}, now=time.time() + 3600)
+        self.assertTrue(os.path.isdir(path))
+        self.assertEqual([p for p, _, _ in report["held"]], [path])
+
+    def test_the_holders_mode_lists_what_holds_a_path(self):
+        path = self.worktree("lister")
+        proc = self._hold(path, "cwd")
+        out = subprocess.run([sys.executable, wh.__file__, "--holders", path], capture_output=True, text=True, check=True).stdout
+        self.assertIn(f"{proc.pid} sleep", out.splitlines())
+
+    def _post_merge(self, name, tip, cwd):
+        """`prmerge.sh`'s call: from a shell sitting in `cwd`, after the pull request merged `tip`."""
+        script = f"cd {cwd} && {sys.executable} {wh.__file__} --apply --no-fetch --branch {name} --tip {tip} {self.repo}"
+        return subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+
+    def test_post_merge_cleanup_run_from_the_merged_worktree_removes_it_and_its_branch(self):
+        path = self.worktree("squashed", commits=2)
+        other = self.worktree("other-merged")
+        os.symlink(self.tmp.name, os.path.join(path, "link_outside"))  # like hams_shared -> the main checkout's
+        subprocess.run(["git", "-C", path, "add", "link_outside"], check=True)
+        _git(path, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "link")
+        tip = _git(path, "rev-parse", "HEAD")
+        result = self._post_merge("squashed", tip, path)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertIn("MERGED   removed worktree", result.stdout)
+        self.assertFalse(os.path.isdir(path))
+        self.assertTrue(os.path.isdir(self.tmp.name), "a symlink in the worktree was followed")
+        self.assertTrue(os.path.isfile(os.path.join(self.repo, "a")))
+        self.assertNotIn("squashed", _git(self.repo, "branch", "--format=%(refname:short)"))
+        self.assertTrue(os.path.isdir(other), "only the named branch is cleaned")
+        self.assertEqual(_git(self.repo, "branch", "--show-current"), "main")
+
+    def test_post_merge_cleanup_keeps_dirty_unmerged_and_held_worktrees_and_says_why(self):
+        dirty = self.worktree("dirty", commits=1, dirty=True)
+        extra = self.worktree("extra", commits=1)
+        merged_tip = _git(extra, "rev-parse", "HEAD")
+        _commit(extra, "after_the_merge")  # a commit made after the pull request's head was merged
+        held = self.worktree("held", commits=1)
+        held_tip = _git(held, "rev-parse", "HEAD")
+        proc = self._hold(held, "cwd")
+        for name, path, tip, word in (
+            ("dirty", dirty, _git(dirty, "rev-parse", "HEAD"), "STALE"),
+            ("extra", extra, merged_tip, "STALE"),
+            ("held", held, held_tip, "HELD"),
+        ):
+            result = self._post_merge(name, tip, "/")
+            self.assertTrue(os.path.isdir(path), (name, result.stdout, result.stderr))
+            self.assertIn(word, result.stdout, name)
+            self.assertIn(name, _git(self.repo, "branch", "--format=%(refname:short)"))
+        self.assertIn(f"sleep (pid {proc.pid})", result.stdout)
+
+    def test_post_merge_cleanup_deletes_a_merged_branch_that_has_no_worktree(self):
+        _git(self.repo, "branch", "gone", "origin/main")
+        result = self._post_merge("gone", _git(self.repo, "rev-parse", "origin/main"), "/")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("gone", _git(self.repo, "branch", "--format=%(refname:short)"))
+
 
 if __name__ == "__main__":
     unittest.main()
