@@ -462,3 +462,34 @@ class EslintNodeEnvTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StepsWithoutResultTests(unittest.TestCase):
+    """A pass stamp lists the steps that passed: a selected step with no result must fail the run, not be stamped."""
+
+    @staticmethod
+    def _result(name, code=0):
+        return run_linters.lint_exec.Result(name, code, "", 0.0)
+
+    def test_a_selected_step_with_no_result_is_named(self):
+        results = [self._result("flake8"), self._result("verify_anchors")]
+        self.assertEqual(run_linters.steps_without_result(["flake8", "check_js_syntax", "verify_anchors", "eslint"], results), ["check_js_syntax", "eslint"])
+
+    def test_no_selected_step_missing_is_empty(self):
+        self.assertEqual(run_linters.steps_without_result(["a", "b"], [self._result("b"), self._result("a")]), [])
+
+    def test_no_results_at_all_names_every_step(self):
+        self.assertEqual(run_linters.steps_without_result(["a", "b"], []), ["a", "b"])
+
+    def test_a_failed_result_counts_as_a_result(self):
+        self.assertEqual(run_linters.steps_without_result(["a"], [self._result("a", 1)]), [])
+
+    def test_main_fails_before_the_stamp_when_a_step_is_missing(self):
+        """Structural control on main(): the missing-step failure is decided before the stamp branch reads `linters_failed`."""
+        source = open(run_linters.__file__, encoding="utf-8").read()
+        body = source[source.index("def main()"):]
+        check = body.index("steps_without_result([step.name for step in all_steps], results)")
+        failed = body.index("linters_failed = True", check)
+        stamp = body.index("_write_pass_stamps(", failed)
+        self.assertLess(check, failed)
+        self.assertLess(failed, stamp)

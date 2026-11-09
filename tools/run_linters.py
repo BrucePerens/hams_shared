@@ -1083,6 +1083,15 @@ def invocation_root(script_path):
 
 
 # [@ANCHOR: run_linters:retry_timed_out_steps]
+# [@ANCHOR: run_linters:steps_without_result]
+def steps_without_result(selected_names, results):
+    """Names of the selected steps that produced no result, in selection order. A pass stamp says "these steps passed": a step that
+    was selected and left no result (a remote host that dropped it, a bug in the executor) is not a pass, and the run must fail
+    naming it rather than stamp a list that includes it."""
+    have = {r.name for r in results}
+    return [name for name in dict.fromkeys(selected_names) if name not in have]
+
+
 def retry_timed_out_steps(results, steps, execute=None, out=print):
     """Steps that failed by timing out on a saturated machine are rerun ONCE, alone and one at a time, after the whole run.
 
@@ -2798,6 +2807,16 @@ def main():
     linters_failed = any(r.returncode != 0 for r in results)
     if baseline_verdict is not None and baseline_verdict["passes"]:
         linters_failed = False
+    missing = steps_without_result([step.name for step in all_steps], results)
+    if missing:
+        # Checked after the known-red baseline: nothing tolerates a step that never reported.
+        print(
+            f"[!] {len(missing)} selected step(s) produced no result: {', '.join(missing)}. A step that did not report is not a "
+            "pass, so this run fails and writes no pass stamp. Cause: the step was dropped between selection and reporting (a "
+            "remote host that returned nothing for it, or an executor fault). Next: rerun; if it repeats, run the step alone "
+            "with `--only`."
+        )
+        linters_failed = True
     if options.timing or options.timing_top:
         table = lint_exec.timing_table(results, skipped, wall, top=options.timing_top or None)
         if lock_waited >= 1:
