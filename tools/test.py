@@ -2263,6 +2263,11 @@ def remove_stale_filestore(db_name, filestore_base=ODOO_FILESTORE_BASE):
     `reap_stale_test_databases.py`'s `sudo -n -u postgres psql`) for "fail fast, never block on an
     interactive password/polkit prompt" in an unattended script.
     """
+    # The name becomes a path below `filestore_base` that is removed recursively, with `sudo -n rm -rf` as the fallback: a name
+    # such as `../../x` (a `--db` value in slot mode reaches this before rebuild_db checks it) would remove a directory outside it.
+    if not _SAFE_DB_NAME_RE.match(db_name):
+        print(f"⚠️  WARNING: not removing a filestore for {db_name!r}: it is not a plain database name.")
+        return
     filestore_dir = os.path.join(filestore_base, db_name)
     if not os.path.isdir(filestore_dir):
         return
@@ -3809,7 +3814,7 @@ def _open_lock_file(lock_file_path):
         )
         lock_file = os.fdopen(fd, "a")
         try:
-            os.chmod(lock_file_path, 0o777)
+            os.fchmod(lock_file.fileno(), 0o777)  # the descriptor, not the path: a path swapped for a symlink is never followed
         except OSError as e:
             # Not the file's owner (e.g. a prior run by a different user already created it) -- fine,
             # we only need to flock it, not own or widen its permissions.
