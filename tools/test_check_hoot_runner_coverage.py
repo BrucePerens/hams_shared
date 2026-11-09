@@ -12,6 +12,7 @@ import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
+from unittest import mock
 
 import check_hoot_runner_coverage as chk  # noqa: E402
 
@@ -141,9 +142,18 @@ class CheckHootRunnerCoverageTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertNotIn("VIOLATION", out)
 
-    def test_a_module_without_any_manifest_is_skipped_without_crashing(self):
+    def test_a_root_without_any_manifest_is_not_a_pass(self):
+        # A root with no module scans nothing (check_target.py): exit 2, not "every module is covered".
         os.makedirs(os.path.join(self.tmp, "not_a_module"), exist_ok=True)
-        code, out = self._run_with_argv(self.tmp)
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("HAMS_CHECK_ALLOW_EMPTY", None)
+            code, out = self._run_with_argv(self.tmp)
+        self.assertEqual(code, 2)
+
+    def test_a_root_without_any_manifest_passes_with_the_documented_opt_out(self):
+        os.makedirs(os.path.join(self.tmp, "not_a_module"), exist_ok=True)
+        with mock.patch.dict(os.environ, {"HAMS_CHECK_ALLOW_EMPTY": "1"}):
+            code, out = self._run_with_argv(self.tmp)
         self.assertEqual(code, 0)
 
     def test_multiple_roots_are_both_scanned(self):

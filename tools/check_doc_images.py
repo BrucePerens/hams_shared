@@ -28,6 +28,7 @@ Usage: check_doc_images.py <repo_root>
 
 import hashlib
 import os
+import check_target
 import lint_exec
 import re
 import sys
@@ -112,14 +113,17 @@ def _resolve_repo_roots(given_path):
     return roots
 
 
+def _doc_files(repo_root):
+    return tree_files(
+        repo_root, (".md", ".html"), SKIP_DIRS, skip_hidden=True, accept=lambda rel: _is_doc_file(rel.replace("/", os.sep)), untracked=True
+    )
+
+
 def check_doc_images(repo_root, extra_roots=()):
     violations = []
     repo_roots = [repo_root] + [r for r in extra_roots if r != repo_root]
     modules_by_hash = {}
-    doc_files = tree_files(
-        repo_root, (".md", ".html"), SKIP_DIRS, skip_hidden=True, accept=lambda rel: _is_doc_file(rel.replace("/", os.sep)), untracked=True
-    )
-    for path in doc_files:
+    for path in _doc_files(repo_root):
         filename = os.path.basename(path)
         rel = os.path.relpath(path, repo_root)
         try:
@@ -169,6 +173,8 @@ if __name__ == "__main__":
     roots = _resolve_repo_roots(sys.argv[1])
     found = []
     for scan_root in roots:
+        check_target.require_directory(scan_root, "check_doc_images")
+        check_target.require_scanned(len(_doc_files(scan_root)), scan_root, "check_doc_images", "module documentation (.md/.html) files")
         found.extend(check_doc_images(scan_root, roots))
     for line in found:
         print(line)

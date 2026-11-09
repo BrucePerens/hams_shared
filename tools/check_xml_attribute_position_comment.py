@@ -35,6 +35,7 @@ Usage: check_xml_attribute_position_comment.py <repo_root>
 """
 
 import os
+import check_target
 import lint_exec
 import sys
 
@@ -71,8 +72,9 @@ def _is_hams_shared_tools(path):
     )
 
 
-def check_xml_attribute_position_comment(repo_root):
-    violations = []
+def _xml_tree(repo_root):
+    """The (dir, subdirs, files) walk of the .xml files this checker reads under `repo_root`."""
+
     def not_under_hams_shared_tools(rel):
         # The real hams_shared/tools directory (by path suffix, not bare name) is skipped with everything below it.
         parts = rel.split("/")[:-1]
@@ -80,9 +82,16 @@ def check_xml_attribute_position_comment(repo_root):
             part == "tools" and _is_hams_shared_tools(os.path.join(repo_root, *parts[: k + 1])) for k, part in enumerate(parts)
         )
 
-    for root, _dirs, files in tree_walk(
-        repo_root, ".xml", SKIP_DIRS, skip_hidden=True, accept=not_under_hams_shared_tools, untracked=True
-    ):
+    return tree_walk(repo_root, ".xml", SKIP_DIRS, skip_hidden=True, accept=not_under_hams_shared_tools, untracked=True)
+
+
+def count_xml_files(repo_root):
+    return sum(len(files) for _root, _dirs, files in _xml_tree(repo_root))
+
+
+def check_xml_attribute_position_comment(repo_root):
+    violations = []
+    for root, _dirs, files in _xml_tree(repo_root):
         for filename in files:
             if not filename.endswith(".xml"):
                 continue
@@ -123,6 +132,8 @@ if __name__ == "__main__":
 
     violations = []
     for repo_root in _resolve_repo_roots(sys.argv[1]):
+        check_target.require_directory(repo_root, "check_xml_attribute_position_comment")
+        check_target.require_scanned(count_xml_files(repo_root), repo_root, "check_xml_attribute_position_comment", "*.xml files")
         violations.extend(check_xml_attribute_position_comment(repo_root))
 
     if violations:

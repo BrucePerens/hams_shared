@@ -26,6 +26,10 @@ Not reported:
     is itself added or changed in the same diff: that script is the way to rewrite an
     `ir.rule` or `res.groups`, which `check_burn_list.py` requires to stay in noupdate.
 
+Empty-scan rule (check_target.py): this checker reads a git diff, and a diff with no changed XML data file is normal, so it
+does not demand files. It does demand a target that is an existing directory inside a git work tree and a base/head pair git can
+diff; otherwise it exits 2 ("could not check") instead of reporting no warnings.
+
 It is a warning, not a gate: exit status 0 unless --strict is given. There is no CI that runs
 checks here (2026-10-02 decision), so run it before merging a change to an XML data file:
 
@@ -40,6 +44,7 @@ import re
 import subprocess
 import sys
 
+import check_target
 from lxml import etree
 
 RECORD_TAGS = ("record", "template", "menuitem")
@@ -168,7 +173,18 @@ def main(argv=None):
     args = parser.parse_args(argv)
     total = 0
     for repo in args.repos:
-        root = _git(repo, "rev-parse", "--show-toplevel").stdout.strip() or repo
+        repo = check_target.require_directory(repo, "check_noupdate_edits")
+        top = _git(repo, "rev-parse", "--show-toplevel")
+        if top.returncode != 0 or not top.stdout.strip():
+            print(f"[!] check_noupdate_edits: {repo} is not inside a git work tree; there is no diff to read, so this is not a pass. "
+                  "Next: pass a checkout of hams_com, hams_open or hams_shared.", file=sys.stderr)
+            return check_target.EXIT_NOT_CHECKED
+        root = top.stdout.strip()
+        diff = _git(root, "diff", "--name-status", f"{args.base}...{args.head}")
+        if diff.returncode != 0:
+            print(f"[!] check_noupdate_edits: git cannot diff {args.base}...{args.head} in {root} ({diff.stderr.strip()}); "
+                  "no change set was read, so this is not a pass. Next: fetch the base ref or pass --base/--head that exist.", file=sys.stderr)
+            return check_target.EXIT_NOT_CHECKED
         for _path, _record_id, message in check_repo(root, args.base, args.head):
             print(f"WARNING: {message}")
             total += 1
