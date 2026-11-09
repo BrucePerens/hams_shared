@@ -3,6 +3,7 @@
 
 """Unit tests for worktree_hygiene.py against real temporary git repositories (a bare origin, a clone, real worktrees)."""
 
+import json
 import os
 import subprocess
 import sys
@@ -233,6 +234,89 @@ class WorktreeHygieneTest(unittest.TestCase):
         result = self._post_merge("gone", _git(self.repo, "rev-parse", "origin/main"), "/")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("gone", _git(self.repo, "branch", "--format=%(refname:short)"))
+
+    def nested(self, name, dirty=False):
+        """A worktree inside the main checkout (the layout that made scans of that checkout read it)."""
+        path = os.path.join(self.repo, "tmp", name)
+        _git(self.repo, "worktree", "add", "-q", "-b", name, path, "origin/main")
+        if dirty:
+            with open(os.path.join(path, "scratch"), "w") as handle:
+                handle.write("unsaved")
+        return path
+
+    # Tests [@ANCHOR: global:worktree_hygiene:container_checkout]
+    def test_container_checkout_finds_the_checkout_a_worktree_lies_in(self):
+        self.assertEqual(wh.container_checkout(self.nested("n1")), self.repo)
+        self.assertIsNone(wh.container_checkout(self.worktree("clean")))
+
+    # Tests [@ANCHOR: global:worktree_hygiene:nested_worktrees]
+    def test_nested_worktrees_are_flagged_and_dirty_or_held_ones_say_why(self):
+        free, dirty, held, clean = self.nested("free"), self.nested("dirty", dirty=True), self.nested("held"), self.worktree("clean")
+        found = {p: why for p, _b, _c, why in wh.nested_worktrees(self.repo, holders_of=lambda p: [(7, "vim")] if p == held else [])}
+        self.assertEqual(found, {free: None, dirty: "uncommitted changes", held: "in use by vim (pid 7)"})
+        self.assertNotIn(clean, found)
+
+    def test_the_main_run_exits_one_for_a_nested_worktree_and_zero_without(self):
+        self.assertEqual(wh.main([self.repo, "--no-fetch"]), 0)
+        self.nested("n2")
+        self.assertEqual(wh.main([self.repo, "--no-fetch"]), 1)
+
+    # Tests [@ANCHOR: global:worktree_hygiene:move_nested]
+    def test_move_nested_moves_a_clean_worktree_to_a_job_directory_with_sibling_links(self):
+        ws = os.path.join(self.tmp.name, "ws")
+        os.makedirs(os.path.join(ws, "tmp"))
+        os.makedirs(os.path.join(ws, "hams_open"))
+        main = os.path.join(ws, "hams_com")
+        subprocess.run(["git", "clone", "-q", os.path.join(self.tmp.name, "origin.git"), main], check=True, capture_output=True)
+        _git(main, "checkout", "-qB", "main")
+        path = os.path.join(main, "tmp", "topic")
+        _git(main, "worktree", "add", "-q", "-b", "topic", path, "origin/main")
+        new = wh.move_nested(main, path, workspace=ws)
+        self.assertEqual(new, os.path.join(ws, "tmp", "moved-topic", "hams_com"))
+        self.assertTrue(os.path.isfile(os.path.join(new, "a")))
+        self.assertFalse(os.path.exists(path))
+        self.assertEqual(sorted(os.listdir(os.path.dirname(new))), ["hams_com", "hams_open"])
+        self.assertEqual([p for p, _b in wh.worktrees(main)], [new])
+        other = os.path.join(main, "tmp", "topic2")
+        _git(main, "worktree", "add", "-q", "-b", "topic2", other, "origin/main")
+        os.makedirs(os.path.join(ws, "tmp", "moved-topic2"))
+        with self.assertRaises(RuntimeError):
+            wh.move_nested(main, other, workspace=ws)  # the target job directory exists
+        self.assertTrue(os.path.isdir(other))
+
+    def test_move_nested_mode_never_moves_dirty_work(self):
+        dirty = self.nested("dirty2", dirty=True)
+        with unittest.mock.patch.object(wh, "move_nested") as mover:
+            self.assertEqual(wh.main([self.repo, "--no-fetch", "--apply", "--move-nested"]), 1)
+        mover.assert_not_called()
+        self.assertTrue(os.path.isfile(os.path.join(dirty, "scratch")))
+
+    # Tests [@ANCHOR: global:worktree_hygiene:registered_jobs]
+    # Tests [@ANCHOR: global:worktree_hygiene:reap_finished_jobs]
+    def test_a_finished_registered_job_directory_is_removed_only_when_it_holds_just_links(self):
+        state = os.path.join(self.tmp.name, "state")
+        os.makedirs(state)
+        gone, mixed, live = (os.path.join(self.tmp.name, n) for n in ("gone", "mixed", "live"))
+        for job_dir in (gone, mixed, live):
+            os.makedirs(job_dir)
+            os.symlink(self.repo, os.path.join(job_dir, "hams_open"))
+        with open(os.path.join(mixed, "notes.txt"), "w") as handle:
+            handle.write("keep me")
+        os.makedirs(os.path.join(live, "hams_com"))
+        for name, job_dir in (("gone", gone), ("mixed", mixed), ("live", live)):
+            with open(os.path.join(state, name + ".json"), "w") as handle:
+                json.dump({"job": name, "job_dir": job_dir, "worktree": os.path.join(job_dir, "hams_com")}, handle)
+        with open(os.path.join(state, "bad.json"), "w") as handle:
+            handle.write("{")
+        self.assertEqual(len(wh.registered_jobs(state)), 3)
+        self.assertEqual(sorted(wh.reap_finished_jobs(False, state)), sorted([(gone, True), (mixed, False)]))
+        self.assertTrue(os.path.isdir(gone))
+        wh.reap_finished_jobs(True, state)
+        self.assertFalse(os.path.lexists(gone))
+        self.assertFalse(os.path.exists(os.path.join(state, "gone.json")))
+        self.assertTrue(os.path.isfile(os.path.join(mixed, "notes.txt")))
+        self.assertTrue(os.path.isdir(live))
+        self.assertTrue(os.path.isdir(self.repo))  # the link targets are untouched
 
 
 if __name__ == "__main__":

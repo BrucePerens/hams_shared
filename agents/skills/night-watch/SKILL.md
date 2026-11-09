@@ -979,8 +979,10 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   destroy another session's uncommitted work: the index dance only ever protected the commit step,
   never the working tree itself. Read
   `hams_shared/docs/adrs/0102_concurrent_session_isolation_and_merge_gating.md` before your first
-  commit of a run. Use `EnterWorktree` at the start of a run (`ExitWorktree` with `keep` if you stop
-  mid-task, `remove` when genuinely done); merging back is a PR from a branch named
+  commit of a run. Make the worktree at the start of a run with
+  `python3 devbox_tools/new_agent_worktree.py <hams_com|hams_open|hams_shared> night-shift/<slug>` (a clean job directory
+  `~/workspace/tmp/<job>/`, never inside a repo; `EnterWorktree` nests it under `.claude/worktrees/`, which anchor scans and linters
+  then read; remove it with `worktree_hygiene.py` or prmerge.sh when genuinely done); merging back is a PR from a branch named
   `night-shift/<slug>`, which waits for Bruce's review and his `--admin` merge -- no script merges
   it (ADR-0102 decision 4; step 7, above). It is deliberately not restated here -- two copies of a
   procedure are how the two copies drift apart. If you find a new shared-state failure mode, add
@@ -1703,7 +1705,7 @@ one session's working-tree-level command destroy another's uncommitted work).** 
 first commit in a session; `hams_com/CLAUDE.md` points there too, so every session gets it
 regardless of which skill it is running. The fix ADR-0102 makes is structural, not another
 procedural refinement of the same private-index idea: each session works in its own `git worktree`
-(`EnterWorktree`), so there is no shared working tree or shared index left for a pathspec, a
+(`devbox_tools/new_agent_worktree.py`), so there is no shared working tree or shared index left for a pathspec, a
 `GIT_INDEX_FILE`, or a resynchronisation step to protect in the first place. The five incidents
 recorded under ADR-0099 (now in its git history, not this file) are why that approach was
 abandoned rather than patched again.

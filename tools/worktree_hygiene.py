@@ -25,7 +25,14 @@ For every REPO (the main working tree of a repository):
   * `--branch NAME` is the post-merge mode `prmerge.sh` uses: only the worktree and local branch of NAME are considered, and no
     idle time is required, because the pull request has just merged and nothing else is going to use them. Dirty, unmerged (the
     local tip is not the merged head; `--tip SHA` names that head) and held worktrees are still kept, and reported with the reason.
-Exit status 1 when anything is STALE, so a timer or a session start can surface it.
+  * A linked worktree that lies INSIDE another git working tree (hams_open/tmp/..., .claude/worktrees/...) is NESTED (2026-11-09):
+    anchor scans, ESLint and other checks that walk a checkout then scan it too. It is reported with the command that makes the clean
+    layout; with `--move-nested --apply` a clean, unheld, unlocked one is moved to `<workspace>/tmp/<job>/<repo>` with the sibling
+    links of `devbox_tools/new_agent_worktree.py`. Dirty, held and locked ones stay where they are and say why. Make worktrees with
+    `devbox_tools/new_agent_worktree.py` and they are never nested.
+  * Jobs that tool registered (`~/.local/state/agent-worktrees/<job>.json`, AGENT_WORKTREE_STATE overrides) whose worktree is gone and
+    whose job directory holds nothing but symlinks have the directory removed with --apply (JOB).
+Exit status 1 when anything is STALE or NESTED, so a timer or a session start can surface it.
 
 Nothing unmerged or dirty is ever deleted. Merged pull request heads come from `gh pr list`; without gh only the plain
 "no commits beyond origin/main" test is used.
@@ -238,6 +245,107 @@ def _idle(now, touched, stale_seconds):
     return stale_seconds <= 0 or now - touched >= stale_seconds
 
 
+# [@ANCHOR: worktree_hygiene:container_checkout]
+def container_checkout(path):
+    """The git working tree that contains the worktree `path` (an ancestor holding a `.git`), or None for a worktree in a clean place."""
+    here = os.path.dirname(os.path.abspath(path))
+    while True:
+        if os.path.exists(os.path.join(here, ".git")):
+            return here
+        parent = os.path.dirname(here)
+        if parent == here:
+            return None
+        here = parent
+
+
+# [@ANCHOR: worktree_hygiene:nested_worktrees]
+def nested_worktrees(repo, holders_of=holding_processes):
+    """[(path, branch, container, why_kept or None)] of the linked worktrees lying inside another checkout. why_kept is set for one
+    that must not be moved: dirty, locked or held by a running process."""
+    locked = locked_worktrees(repo)
+    found = []
+    for path, branch in worktrees(repo):
+        container = container_checkout(path)
+        if not container:
+            continue
+        if path in locked:
+            why = "locked"
+        elif git(path, "status", "--porcelain", check=False):
+            why = "uncommitted changes"
+        else:
+            holders = holders_of(path)
+            why = "in use by " + ", ".join(f"{command} (pid {pid})" for pid, command in holders) if holders else None
+        found.append((path, branch, container, why))
+    return found
+
+
+# Sibling links a moved worktree's job directory carries, as devbox_tools/new_agent_worktree.py makes them.
+_SIBLINGS = {"hams_com": ("hams_open",), "hams_open": ("hams_com",), "hams_shared": ("hams_com", "hams_open")}
+
+
+# [@ANCHOR: worktree_hygiene:move_nested]
+def move_nested(repo, path, workspace=None):
+    """Moves the clean nested worktree `path` of `repo` to <workspace>/tmp/<job>/<repo name> with the sibling links. Returns the new
+    path. `git worktree move` refuses some trees (one with a submodule); the error is raised and nothing is left half-made."""
+    workspace = workspace or os.path.expanduser("~/workspace")
+    name = os.path.basename(all_worktrees(repo)[0][0].rstrip("/"))
+    job_dir = os.path.join(workspace, "tmp", "moved-" + os.path.basename(path.rstrip("/")))
+    target = os.path.join(job_dir, name)
+    if os.path.lexists(job_dir):
+        raise RuntimeError(f"{job_dir} already exists")
+    os.makedirs(job_dir)
+    try:
+        git(repo, "worktree", "move", path, target)
+    except RuntimeError:
+        os.rmdir(job_dir)
+        raise
+    for sibling in _SIBLINGS.get(name, ()):
+        main = os.path.join(workspace, "hams_open", "hams_shared") if sibling == "hams_shared" else os.path.join(workspace, sibling)
+        os.symlink(main, os.path.join(job_dir, sibling))
+    return target
+
+
+# [@ANCHOR: worktree_hygiene:registered_jobs]
+def registered_jobs(state_dir=None):
+    """[(record file, record dict)] of the jobs devbox_tools/new_agent_worktree.py registered. An unreadable record is skipped."""
+    state_dir = state_dir or os.environ.get("AGENT_WORKTREE_STATE") or os.path.expanduser("~/.local/state/agent-worktrees")
+    jobs = []
+    if os.path.isdir(state_dir):
+        for name in sorted(os.listdir(state_dir)):
+            if not name.endswith(".json"):
+                continue
+            path = os.path.join(state_dir, name)
+            try:
+                with open(path, encoding="utf-8") as handle:
+                    jobs.append((path, json.load(handle)))
+            except (OSError, ValueError):
+                continue
+    return jobs
+
+
+# [@ANCHOR: worktree_hygiene:reap_finished_jobs]
+def reap_finished_jobs(apply, state_dir=None):
+    """Removes the job directory (and record) of each registered job whose worktree is gone, when the directory holds only symlinks.
+    Returns [(job_dir, removed bool)]; a directory with anything else in it is reported (False) and kept."""
+    results = []
+    for record_path, record in registered_jobs(state_dir):
+        worktree, job_dir = record.get("worktree"), record.get("job_dir")
+        if not worktree or not job_dir or os.path.lexists(worktree):
+            continue
+        leftovers = [n for n in os.listdir(job_dir) if not os.path.islink(os.path.join(job_dir, n))] if os.path.isdir(job_dir) else []
+        if leftovers:
+            results.append((job_dir, False))
+            continue
+        if apply:
+            if os.path.isdir(job_dir):
+                for n in os.listdir(job_dir):
+                    os.remove(os.path.join(job_dir, n))
+                os.rmdir(job_dir)
+            os.remove(record_path)
+        results.append((job_dir, True))
+    return results
+
+
 # [@ANCHOR: worktree_hygiene:run]
 def run(repo, apply, stale_seconds, merged_heads, now=None, only_branch=None, holders_of=holding_processes):
     now = now or time.time()
@@ -288,6 +396,7 @@ def main(argv=None):
     parser.add_argument("--apply", action="store_true", help="remove merged worktrees and delete merged branches")
     parser.add_argument("--stale-minutes", type=float, default=30)
     parser.add_argument("--no-fetch", action="store_true")
+    parser.add_argument("--move-nested", action="store_true", help="with --apply: move clean, unheld worktrees nested inside a checkout to ~/workspace/tmp/<job>/")
     parser.add_argument("--branch", help="only this branch and its worktree, with no idle time required (the post-merge cleanup)")
     parser.add_argument("--tip", help="with --branch: the commit the pull request merged (its head); skips the `gh pr list` lookup")
     parser.add_argument("--holders", metavar="PATH", help="print 'pid command' of each process holding PATH and exit (used under sudo)")
@@ -319,6 +428,26 @@ def main(argv=None):
             print(f"  HELD     {path} {branch}: kept, in use by {who}")
         for path, branch in report["kept"]:
             print(f"  active   {path} {branch}")
+        for path, branch, container, why in nested_worktrees(repo):
+            if why:
+                any_stale = True
+                print(f"  NESTED   {path} {branch}: inside {container}; kept ({why}); move it once it is free")
+            elif args.move_nested and args.apply and not args.branch:
+                try:
+                    print(f"  NESTED   moved {path} ({branch}) to {move_nested(repo, path)}")
+                except RuntimeError as error:
+                    any_stale = True
+                    print(f"  NESTED   {path} {branch}: inside {container}; could not move it: {error}")
+            else:
+                any_stale = True
+                print(f"  NESTED   {path} {branch}: inside {container}, so scans of that checkout read it; "
+                      f"`--move-nested --apply` moves it to ~/workspace/tmp/<job>/ (or make it with devbox_tools/new_agent_worktree.py)")
+    if not args.branch:
+        for job_dir, removed in reap_finished_jobs(args.apply):
+            if removed:
+                print(f"  JOB      {'removed' if args.apply else 'would remove'} finished job directory {job_dir}")
+            else:
+                print(f"  JOB      {job_dir}: worktree gone but the directory holds other files; kept")
     return 1 if any_stale else 0
 
 
