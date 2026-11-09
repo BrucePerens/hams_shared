@@ -592,7 +592,8 @@ class InputFingerprints:
         digest.update(str(step.cwd).encode())
         for root in step.roots:
             digest.update(self.of_root(root, step.suffixes).encode())
-        tool_suffixes = frozenset({".py", ".cjs", ".js", ".json", ".sh"})
+        # .rs/.toml/.lock: the Rust tools (hams_lint and its rule file, rust_function_scan) decide results too.
+        tool_suffixes = frozenset({".py", ".cjs", ".js", ".json", ".sh", ".rs", ".toml", ".lock"})
         digest.update(self.of_root(self.tools_dir, tool_suffixes).encode())
         digest.update(self.versions().encode())
         return digest.hexdigest()

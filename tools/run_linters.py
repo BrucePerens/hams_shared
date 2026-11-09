@@ -937,9 +937,11 @@ def checker_env(argv):
     run_linters hands a checker a whole repository or a module directory it chose itself, and one of them may hold none of the
     files that checker reads (hams_shared has no SCSS, a module has no Rust), so an empty scan is normal here and is not a failure.
     A target that does not exist or is not a directory still fails inside the checker. Run by hand a checker is strict.
+    A checker migrated to the Rust engine (`hams_lint_bin.py run check NAME ...`, see ENGINE_CHECKS) gets the same.
     None (inherit) for every other step."""
     script = os.path.basename(str(argv[1])) if argv and len(argv) > 1 else ""
-    if not (script.startswith("check_") and script.endswith(".py")):
+    engine_check = script == "hams_lint_bin.py" and list(argv[2:4]) == ["run", "check"]
+    if not (script.startswith("check_") and script.endswith(".py")) and not engine_check:
         return None
     return dict(os.environ, **{check_target.ALLOW_EMPTY_ENV: "1"})
 
@@ -995,9 +997,30 @@ def _per_target_steps(add, python_exec, dir_path, script_name, targets, **option
         suffix = "" if len(targets) == 1 else f"[{os.path.basename(target)}]"
         add(
             stem + suffix,
-            [python_exec, os.path.join(dir_path, "tools", script_name), target],
+            checker_argv(python_exec, dir_path, script_name, [target]),
             **options,
         )
+
+
+# Checks that run on the Rust lint engine (tools/hams_lint) instead of their Python checker. A check is listed here only
+# after tools/lint_engine_parity.py showed byte-identical output and exit status on the whole tree, on the rule file's
+# examples and on injected violations (the parity rule); its Python checker stays in tools/ as the parity reference. The
+# step keeps the checker's name, so pass stamps, the lint cache and STEP_META are unchanged.
+ENGINE_CHECKS = frozenset({
+    "check_absolute_paths",
+    "check_shebang",
+    "check_window_fetch_reassignment",
+    "check_fake_network_listener",
+})
+
+
+def checker_argv(python_exec, dir_path, script_name, targets):
+    """The argv of the step that runs the checker `script_name` (`check_x.py`) on `targets`: the Python checker, or, for an
+    ENGINE_CHECKS name, the same check on the Rust engine through `hams_lint_bin.py run check NAME` (built on demand)."""
+    stem = script_name[: -len(".py")]
+    if stem in ENGINE_CHECKS:
+        return [python_exec, os.path.join(dir_path, "tools", "hams_lint_bin.py"), "run", "check", stem, *targets]
+    return [python_exec, os.path.join(dir_path, "tools", script_name), *targets]
 
 
 # [@ANCHOR: run_linters:shared_checkout_staleness]
@@ -2433,7 +2456,7 @@ def main():
     # tree walks; docs/LINT_STEP_ANALYSIS.md).
     _add(
         "check_window_fetch_reassignment",
-        [python_exec, os.path.join(dir_path, "tools", "check_window_fetch_reassignment.py"), *_pair_roots],
+        checker_argv(python_exec, dir_path, "check_window_fetch_reassignment.py", _pair_roots),
         print_ok=False,
     )
 
@@ -2493,7 +2516,7 @@ def main():
     # tree walks; docs/LINT_STEP_ANALYSIS.md).
     _add(
         "check_fake_network_listener",
-        [python_exec, os.path.join(dir_path, "tools", "check_fake_network_listener.py"), *_pair_roots],
+        checker_argv(python_exec, dir_path, "check_fake_network_listener.py", _pair_roots),
         print_ok=False,
     )
 
