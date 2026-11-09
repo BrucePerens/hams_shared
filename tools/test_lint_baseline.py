@@ -160,6 +160,32 @@ class JudgeTests(Env):
         self.assertTrue(reasons[1].startswith("new"))
         self.assertEqual(lb.classify(same, None)[0], {})
 
+    def test_negative_controls_a_recorded_failure_cannot_hide_a_failure_the_output_does_not_name(self):
+        base = self.doc({"pytest tools/": PYTEST_OUT})
+        # pytest counts four failures and lists two: the other two are nobody's known red.
+        more = PYTEST_OUT.replace("2 failed, 90 passed", "4 failed, 88 passed")
+        tolerated, blocking = lb.classify(lb.items_from_failures({"pytest tools/": more}), base)
+        self.assertEqual(len(tolerated), 2)
+        self.assertEqual(len(blocking), 1)
+        self.assertTrue(next(iter(blocking.values())).startswith("new"))
+        # the worker died after the recorded failure was printed
+        crashed = PYTEST_OUT + "INTERNALERROR> Traceback (most recent call last):\n"
+        tolerated, blocking = lb.classify(lb.items_from_failures({"pytest tools/": crashed}), base)
+        self.assertEqual(len(blocking), 1)
+        # an exact repeat of main's own failure is still tolerated
+        tolerated, blocking = lb.classify(lb.items_from_failures({"pytest tools/": PYTEST_OUT}), base)
+        self.assertEqual((len(tolerated), blocking), (2, {}))
+
+    def test_negative_controls_empty_output_and_an_empty_baseline_tolerate_nothing(self):
+        base = self.doc({"pytest tools/": PYTEST_OUT})
+        tolerated, blocking = lb.classify(lb.items_from_failures({"flake8": ""}), base)
+        self.assertEqual((tolerated, len(blocking)), ({}, 1))
+        empty = {"items": {}, "main": "aaa"}
+        tolerated, blocking = lb.classify(lb.items_from_failures({"pytest tools/": PYTEST_OUT}), empty)
+        self.assertEqual((tolerated, len(blocking)), ({}, 2))
+        self.assertFalse(lb.judge({"flake8": "x"}, "nokey", "/r", environ=self.env)["passes"])
+        self.assertFalse(lb.judge({}, "nokey", "/r", environ=self.env)["passes"])
+
     def test_since_must_be_in_the_branch_history(self):
         base = self.doc({"flake8": "x.py:1: bad\n"}, since="feedface")
         items = lb.items_from_failures({"flake8": "x.py:1: bad\n"})
