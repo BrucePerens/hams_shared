@@ -8,11 +8,10 @@ Regression tests for test.py's run_cmd() and main()'s --mode dispatch.
 module name collides with Python's stdlib `test` package -- same technique
 `test_test_oom_watchdog.py` already uses in this same directory.
 
-Before this bug-hunt pass, test.py had NO pytest coverage at all outside
-OOMWatchdog's own narrow memory-measurement fix (confirmed via
-`grep -rl "run_cmd\\b" tools/test_*.py`, which matched nothing) -- these
-tests cover the two real bugs this pass found and fixed in run_cmd() and
-main(), not an exhaustive suite of the whole file.
+test.py had no pytest coverage outside OOMWatchdog's own narrow memory-measurement
+tests (`grep -rl "run_cmd\\b" tools/test_*.py` matched nothing before this file). These tests
+cover two specific defects in run_cmd() and main(), not an exhaustive suite of the whole
+file.
 """
 
 import contextlib
@@ -189,7 +188,7 @@ class OdooCpuLimitTests(unittest.TestCase):
 class SignalExitVerdictTests(unittest.TestCase):
     """Tests [@ANCHOR: test:signal_exit_verdict]
 
-    Exit 247 (`sys.exit(-9)`) was unreadable, and a run SIGKILLed after "0 failed" looked like a plain failure (2026-11-04)."""
+    Exit 247 (`sys.exit(-9)`) was unreadable, and a run SIGKILLed after "0 failed" looked like a plain failure."""
 
     RESULT = [{"failed": 0, "errors": 0, "total": 267}]
 
@@ -305,8 +304,8 @@ class BlockPskTransportTests(unittest.TestCase):
 class RunCmdHangRecoveryTests(unittest.TestCase):
     """run_cmd()'s 60-second no-output branch used to kill headless chrome
     and retry FOREVER on every timeout -- `force_killed` was assigned
-    `False` once and never set `True` again anywhere in the function (a
-    2026-06-24 commit, e24ff25, removed the only site that used to set it,
+    `False` once and never set `True` again anywhere in the function (commit
+    e24ff25 removed the only site that used to set it,
     without bounding the new retry-forever replacement it introduced), so
     a process that stays hung even after chrome is killed made run_cmd --
     and the whole test.py invocation -- never terminate.
@@ -386,12 +385,12 @@ class MainModeDispatchTests(unittest.TestCase):
     """--mode has accepted "xml" and "downloads" as valid argparse choices
     since test.py's very first commit (confirmed via `git log -p --follow`
     on this file), but neither one was ever given a dispatch branch in
-    main() -- only "standard" and "individual" were. Before this fix,
+    main() -- only "standard" and "individual" were. Without a branch for them,
     either value silently skipped check_linters()'s only real gate,
     rebuild_db(), and run_cmd() entirely, falling straight through to the
     Chrome-cleanup/audio-sink checks with final_rc still at its initial 0:
     `test.py --mode xml -u <module>` reported a clean, passing exit code
-    having run zero actual Odoo tests (bug class 19: no-default-dispatch).
+    having run zero actual Odoo tests (a missing default dispatch branch).
 
     main() does a great deal before reaching the mode dispatch (privilege
     re-exec, namespace setup, the single-instance lock, linters) -- every
@@ -1358,7 +1357,7 @@ class NoTestsRanTests(unittest.TestCase):
 
 
 class ProductionHostRefusalTests(unittest.TestCase):
-    """Bruce's decision, 2026-10-02/03: test.py never runs on the production host (hams1). A
+    """test.py never runs on the production host (hams1). A
     HAMS_ISOLATED_NS=1 run there flushed production Redis db 0 and fed broker tests to production's
     RabbitMQ consumers. Either signal (deploy_to_production.py's marker files, or a hams_prod
     database on the target PostgreSQL) must stop the run before anything is touched."""
@@ -1449,7 +1448,7 @@ class ProductionHostRefusalTests(unittest.TestCase):
 
 
 class ResourceMonitorHelperTests(unittest.TestCase):
-    # Real bug found 2026-09-12: both of these helpers wrapped their real
+    # Both of these helpers once wrapped their real
     # work in `except Exception: pass`, silently returning None/0 (a
     # legitimate "monitoring is unavailable this cycle" fallback) with zero
     # trace of WHY. Deliberately a fresh, unstarted instance -- exercising
@@ -1469,7 +1468,7 @@ class ResourceMonitorHelperTests(unittest.TestCase):
         self.assertTrue(any("meminfo" in msg for msg in cm.output))
 
     def test_get_chrome_count_warns_and_returns_zero_on_a_real_counting_failure(self):
-        """Renamed and rewired 2026-09-16: this used to assert the failure of
+        """This used to assert the failure of
         `subprocess.run(["pgrep", "-c", "-f", "chrom"])`, which was the whole
         implementation. That box-wide substring match counted the developer's
         own desktop browser, so the counting method changed (see
@@ -1489,8 +1488,8 @@ class ResourceMonitorHelperTests(unittest.TestCase):
 
 
 class ResolveRepoLayoutTests(unittest.TestCase):
-    # Real bug found 2026-09-12: the `except (subprocess.CalledProcessError,
-    # OSError): pass` here used to swallow a real `git rev-parse` failure
+    # The `except (subprocess.CalledProcessError,
+    # OSError): pass` used to swallow a real `git rev-parse` failure
     # with zero trace, silently falling back to treating a linked worktree
     # as if it were a plain clone (a real behavior change -- the sibling-
     # checkout scan then looks in the wrong parent directory).
@@ -1514,18 +1513,15 @@ class ResolveRepoLayoutTests(unittest.TestCase):
         self.assertTrue(any(self.tmp in msg for msg in cm.output))
 
     def test_the_git_rev_parse_call_scopes_safe_directory_to_the_worktree(self):
-        # Real bug found live, 2026-09-22/23 (night_shift_todo/high/
-        # worktree-test-py-cannot-resolve-zero-sudo-addon-b9f496a7.md): a linked worktree's
-        # .git is a FILE, not a directory, and git's own ownership-safety check rejects it
-        # for an account (odoo, here) with no matching safe.directory entry in its global
-        # git config -- "detected dubious ownership", caught by the except below and
-        # silently falling back to the plain-clone layout, which is wrong for a worktree.
-        # Confirmed live against a real worktree that `-c safe.directory=<base_dir>` on this
-        # one subprocess call fixes it with no standing config mutation. This test doesn't
-        # reproduce the actual cross-account ownership mismatch (this process already owns
-        # its own tmpdir), but does assert the real subprocess call always carries the flag,
-        # so a future edit can't silently drop it and reintroduce the bug for every worktree
-        # run as odoo again.
+        # A linked worktree's .git is a FILE, not a directory, and git's own ownership-safety
+        # check rejects it for an account (odoo, here) with no matching safe.directory entry
+        # in its global git config -- "detected dubious ownership", caught by the except below
+        # and silently falling back to the plain-clone layout, which is wrong for a worktree.
+        # `-c safe.directory=<base_dir>` on this one subprocess call avoids it with no standing
+        # config mutation. This test doesn't reproduce the actual cross-account ownership
+        # mismatch (this process already owns its own tmpdir), but does assert the real
+        # subprocess call always carries the flag, so a future edit can't silently drop it and
+        # reintroduce the bug for every worktree run as odoo.
         captured_cmd = []
         real_run = _test_runner.subprocess.run
 
@@ -1563,8 +1559,7 @@ class ResolveRepoLayoutTests(unittest.TestCase):
 
 
 class FailureExtractorAttributeGuardTests(unittest.TestCase):
-    """hams_shared/tools/ 326-finding discovery, 2026-09-12 (CRITICAL AI LAZINESS:
-    Catch-all AttributeError): FailureExtractor.set_context()/finish_and_write() used to
+    """Catch-all AttributeError guards: FailureExtractor.set_context()/finish_and_write() used to
     wrap self.current_test/self._written/self.aborted reads in `try/except AttributeError`,
     even though __init__ unconditionally sets all three before returning and the only
     attribute this instance exposes to outside code before __init__ finishes
@@ -1750,8 +1745,8 @@ class RemoveStaleFilestoreTests(unittest.TestCase):
     """rebuild_db() used to DROP/CREATE the same-named database on every real test run without
     ever touching its on-disk Odoo filestore -- since a fresh, empty database has zero
     ir.attachment rows pointing at any of a prior run's own filestore blobs, those became
-    permanently orphaned garbage with no other cleanup path (found live: hams_test's own
-    filestore had grown to 2.3GB). remove_stale_filestore() is the fix, tested here in isolation
+    permanently orphaned garbage with no other cleanup path (hams_test's own
+    filestore had grown to 2.3GB). remove_stale_filestore() removes it, tested here in isolation
     from rebuild_db()'s own daemon-starting/DB-rebuilding side effects."""
 
     def test_no_op_when_filestore_directory_does_not_exist(self):
@@ -1839,7 +1834,7 @@ class RemoveStaleFilestoreTests(unittest.TestCase):
 
 class CoreDaemonsToStartTests(unittest.TestCase):
     """rebuild_db() starts host daemons only outside the isolated namespace, and PowerDNS is
-    never assumed to exist inside it (night_shift_todo 6d19d5cb)."""
+    never assumed to exist inside it."""
 
     def test_outside_isolation_all_four_host_daemons_are_started(self):
         self.assertEqual(
@@ -1866,11 +1861,9 @@ class CiLoadGateDecisionTests(unittest.TestCase):
     measurements rather than making them -- so every boundary below is
     exercised without a loaded machine and without mocking /proc.
 
-    The numbers come from the real incident recorded in
-    `night_shift_todo/medium/odoo-tours-vs-relay-ci-load-contention-4f9f03c6.md`:
-    a sixteen-processor box, healthy near a load average of 8 to 11 even with a
-    continuous-integration job running, and near 23 when browser tours and
-    url_open tests began failing on their own ten-second timeouts.
+    The numbers come from a real incident: a sixteen-processor box, healthy near a load
+    average of 8 to 11 even with a continuous-integration job running, and near 23 when browser
+    tours and url_open tests began failing on their own ten-second timeouts.
     """
 
     def test_a_running_runner_worker_is_busy_whatever_the_load_says(self):
@@ -1903,7 +1896,7 @@ class CiLoadGateDecisionTests(unittest.TestCase):
         self.assertIn("111, 222", reason)
 
     def test_high_load_with_no_runner_is_busy(self):
-        """The case the runner check cannot see at all. On 2026-09-15 two peer
+        """The case the runner check cannot see at all. Once two peer
         sessions running cargo by hand put the load near 23 with no
         continuous-integration job involved, and the same tours failed."""
         busy, reason = _test_runner.evaluate_ci_load_gate([], 23.0, 16, 1.0)
@@ -2225,8 +2218,8 @@ class CiLoadGateWaitTests(unittest.TestCase):
 
     def test_a_non_finite_override_falls_back_to_the_default_and_says_so(self):
         """float("nan")/float("inf")/float("-infinity") all parse without raising ValueError --
-        a plain `float(raw)` guard alone lets them through silently. Real bug found 2026-09-28 by
-        hams_shared/tools/check_float_isfinite.py; confirmed it would otherwise have set a NaN
+        a plain `float(raw)` guard alone lets them through silently. hams_shared/tools/check_float_isfinite.py
+        flags this; it would otherwise set a NaN
         threshold (every comparison against it is False, so the load gate would never trip) or an
         infinite timeout (the gate would wait forever)."""
         for bad_ratio, bad_timeout in (("nan", "inf"), ("inf", "-infinity"), ("-infinity", "nan")):
@@ -2245,7 +2238,7 @@ class CiLoadGateWaitTests(unittest.TestCase):
 class TestBrowserCountTests(unittest.TestCase):
     """`count_test_browser_processes()` replaced a box-wide
     `pgrep -c -f chrom`, which on a developer box with a desktop session was
-    wrong in both directions. Measured 2026-09-16 with no test running: 27
+    wrong in both directions. Measured with no test running: 27
     matching processes, 17 of them Bruce's own interactive Google Chrome and 8
     the Claude desktop application's Electron shell. The monitor duly printed
     "POSSIBLE BROWSER LEAK: 42 active Chromium processes" about a browser
@@ -2272,7 +2265,7 @@ class TestBrowserCountTests(unittest.TestCase):
     def test_chromiums_real_collapsed_argv_is_counted(self):
         """Chromium rewrites its own argv in place to set the process title,
         collapsing the whole command line into a single NUL-separated element.
-        Measured 2026-09-16 against a real headless chromium on this box: every
+        Measured against a real headless chromium: every
         one of its processes had exactly ONE element, several hundred
         characters long.
 
@@ -2447,9 +2440,8 @@ class CiLoadGateOrderingTests(unittest.TestCase):
         )
 
 class CheckLintersBurnListScopeTests(unittest.TestCase):
-    """Regression tests for the burn-list scan-scope decision in check_linters(),
-    per Bruce's own answer (night_shift_questions/answered/test-py-multi-target-burn-
-    list-scope-4e892722.md, 2026-09-23): a run naming one or more specific modules
+    """Regression tests for the burn-list scan-scope decision in check_linters():
+    a run naming one or more specific modules
     scans only those modules' own directories, not the whole repository -- a
     multi-module run now behaves the same way as a single-module run, rather than
     getting the whole-repo treatment only a zero-module ("test everything") run still
@@ -2723,7 +2715,7 @@ class AnchorScanSiblingDirTests(unittest.TestCase):
     """Tests [@ANCHOR: test:anchor_scan_sibling_dir]
 
     A combined batch tree (~/workspace/tmp/batch_test_*/hams_com) has no hams_open beside it, so the pre-flight
-    anchor scan ran on hams_com alone and reported ~200 false findings (found 2026-11-06 in a cloud session)."""
+    anchor scan ran on hams_com alone and reported ~200 false findings."""
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -2816,7 +2808,7 @@ class MissingHostAptPackagesTests(unittest.TestCase):
 
     def test_cargo_on_path_satisfies_the_rust_toolchain_packages(self):
         # Provisioning skips the apt cargo when rustup's cargo is on PATH (infrastructure._filter_apt_install), and
-        # the cloud container's pre-flight then stopped at "Missing required host APT packages: cargo" (2026-11-07).
+        # the cloud container's pre-flight then stopped at "Missing required host APT packages: cargo".
         installed = {"awscli", "jing"}
         self.assertEqual(
             _test_runner.missing_host_apt_packages(self.SPECS, "ubuntu", installed.__contains__, lambda n: False,
