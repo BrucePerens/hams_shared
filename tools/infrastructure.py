@@ -11066,6 +11066,42 @@ def _plan_ownership(path, owner_str, mode_int):
         _plan("chmod", f"{path}: {', '.join(changes)}")
 
 
+# Variables whose value, once written to an env file, provisioning never changes or drops: data and backups are encrypted with them, so a
+# new value makes every backup and every encrypted field unreadable (Bruce, 2026-11-09). There is no override; a human who must replace
+# one edits the file himself.
+UNCHANGEABLE_ENV_KEYS = re.compile(r"^(?:HAMS_CRYPTO_KEY|ODOO_BACKUP_CRYPTO_KEY|KOPIA_PASSWORD|PGBACKREST_REPO\d*_CIPHER_\w+)$")
+
+
+# [@ANCHOR: infrastructure:_refuse_to_change_unchangeable_keys]
+def _refuse_to_change_unchangeable_keys(filepath, content):
+    """
+    Raises RuntimeError when `filepath` exists and holds a UNCHANGEABLE_ENV_KEYS variable (HAMS_CRYPTO_KEY, ODOO_BACKUP_CRYPTO_KEY,
+    KOPIA_PASSWORD, a pgBackRest cipher passphrase) that `content` (the new file text) would change or leave out. Writing the
+    same value, adding new keys and a file that does not exist yet are fine. A file that cannot be read is not judged (a
+    plan run as a normal user). Without this, provisioning with the key missing from env_vars (a deleted file elsewhere, a
+    mode switch that starts from fresh defaults) silently replaced the key that every backup depends on.
+    """
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            old_lines = f.read().splitlines()
+    except OSError:
+        return
+    new_values = {}
+    for line in content.splitlines():
+        name, sep, value = line.partition("=")
+        if sep:
+            new_values[name.strip()] = value.strip()
+    for line in old_lines:
+        name, sep, value = line.partition("=")
+        name = name.strip()
+        if sep and UNCHANGEABLE_ENV_KEYS.match(name) and new_values.get(name) != value.strip():
+            raise RuntimeError(
+                f"Refusing to {'drop' if name not in new_values else 'change'} {name} in {filepath}: it encrypts data and backups, and a "
+                "new value makes them unreadable. Provisioning never replaces it. If this is a deliberate rebuild, a human edits "
+                "or removes that line himself after confirming no backup needs the old key."
+            )
+
+
 # [@ANCHOR: infrastructure:write_env_files]
 def write_env_files(base_etc_dir, env_vars, run_cmd_func, dest_dir=""):
     if dest_dir:
@@ -11076,6 +11112,7 @@ def write_env_files(base_etc_dir, env_vars, run_cmd_func, dest_dir=""):
     for filename, keys in MANIFEST["env_groups"].items():
         filepath = os.path.join(base_etc_dir, filename)
         content = "".join(f"{k}={env_vars[k]}\n" for k in keys if k in env_vars)
+        _refuse_to_change_unchangeable_keys(filepath, content)
         if _planning():
             state = _file_state(filepath, content)
             if state != "unchanged":
@@ -13150,30 +13187,16 @@ def _create_odoo_role_if_missing(run_cmd_func, db_pass, is_test=False):
     actually makes the substitution happen at all.
     """
     if _role_exists("odoo"):
-        # Fixed 2026-10-02 (seen live provisioning jetson-1, a
-        # genuinely fresh Ubuntu box): the Debian/Ubuntu `odoo` apt package's
-        # own postinst already creates a basic, non-superuser `odoo`
-        # PostgreSQL role (`Create DB` only) as a side effect of package
-        # installation, running BEFORE this function ever does -- so
-        # `_role_exists("odoo")` was already true by the time provisioning
-        # reached here, and the early `return` above meant the CREATE ROLE
-        # ... WITH SUPERUSER below (needed for `CREATE EXTENSION vector`,
-        # among other superuser-only DDL Odoo's own install step issues)
-        # never ran. Confirmed live: `psql -c '\du odoo'` showed only
-        # `Create DB`, and module installation failed with
-        # "psycopg2.errors.InsufficientPrivilege: permission denied to
-        # create extension \"vector\" ... Must be superuser." Never caught
-        # on the dev box/hams1 because their own `odoo` role already had
-        # superuser from earlier history predating the apt-package-creates-
-        # a-role behavior (the same class of "never provisioned from truly
-        # fresh" gap already found for the role/database bootstrap
-        # functions' own `:'var'`-substitution bug, see this function's own
-        # docstring above). Idempotent either way: ALTER ROLE ... SUPERUSER
-        # on an already-superuser role is a harmless no-op.
-        run_cmd_func(
-            ["sudo", "-u", "postgres", "psql", "-c", "ALTER ROLE odoo WITH SUPERUSER;"]
-        )
+        # Superuser is no longer granted here (Bruce, 2026-11-09; hams_com docs/runbooks/ODOO_DB_ROLE_DEMOTION.md): a superuser
+        # `odoo` role turns any SQL injection in the web process into command execution as the postgres OS account (COPY ... PROGRAM).
+        # The 2026-10-02 reason for `ALTER ROLE odoo WITH SUPERUSER` (the Debian package's own role has only CREATEDB, and
+        # `CREATE EXTENSION vector` failed) is met by _precreate_odoo_extensions, which creates the extensions as postgres.
+        # An existing role is never promoted and never demoted by a provisioning run (demoting hams1's is a separate,
+        # approved step in that runbook). Only a TEST host keeps SUPERUSER, because test.py drops and creates databases as `odoo`.
         if is_test:
+            run_cmd_func(
+                ["sudo", "-u", "postgres", "psql", "-c", "ALTER ROLE odoo WITH SUPERUSER;"]
+            )
             # A test host's env files carry DB_PASS, and the daemons log in with it over TCP. The role may
             # predate this run (the Debian odoo package creates one), so set its password to match. Test
             # hosts only: a production run keeps the password it has.
@@ -13186,14 +13209,39 @@ def _create_odoo_role_if_missing(run_cmd_func, db_pass, is_test=False):
                 text=True,
             )
         return
+    attributes = (
+        "SUPERUSER LOGIN" if is_test
+        else "LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
+    )
     run_cmd_func(
         [
             "sudo", "-u", "postgres", "psql",
             "-v", f"db_pass={db_pass}",
         ],
-        input="CREATE ROLE odoo WITH SUPERUSER LOGIN PASSWORD :'db_pass';\n",
+        input=f"CREATE ROLE odoo WITH {attributes} PASSWORD :'db_pass';\n",
         text=True,
     )
+
+
+# Extensions Odoo or a hams module needs in the application database. Created by the postgres superuser at provisioning time, so the
+# application role needs no superuser for them (`vector` is not a trusted extension: only a superuser can create it; pg_trgm is trusted).
+ODOO_DATABASE_EXTENSIONS = ("pg_trgm", "vector")
+
+
+# [@ANCHOR: infrastructure:_precreate_odoo_extensions]
+def _precreate_odoo_extensions(run_cmd_func, db_name):
+    """Creates ODOO_DATABASE_EXTENSIONS in db_name as the postgres superuser, when missing. A failure (for example the pgvector
+    package is not installed) is logged and never raised: the later steps of provisioning must still run, and the module that needs
+    the extension then reports the missing one itself."""
+    statements = "".join(f"CREATE EXTENSION IF NOT EXISTS {name};\n" for name in ODOO_DATABASE_EXTENSIONS)
+    try:
+        run_cmd_func(
+            ["sudo", "-u", "postgres", "psql", "-v", "ON_ERROR_STOP=1", "-d", db_name],
+            input=statements,
+            text=True,
+        )
+    except Exception as e:  # audit-ignore-catch-all
+        _logger.warning("[*] Could not pre-create the PostgreSQL extensions %s in %s: %s", ", ".join(ODOO_DATABASE_EXTENSIONS), db_name, e)
 
 
 # [@ANCHOR: infrastructure:_read_env_value]
@@ -14544,6 +14592,7 @@ def provision_environment(
 
                 # Unconditionally ensure the database is owned by odoo to fix pre-existing DBs
                 _alter_database_owner_to_odoo(run_cmd_func, db_name)
+                _precreate_odoo_extensions(run_cmd_func, db_name)
 
                 _logger.info(
                     "[*] Provisioning cache_manager.py's own minimally-privileged "

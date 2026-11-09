@@ -5,6 +5,8 @@ Tests for check_claude_hook_registration.py: every repository checkout (hams_com
 signal guard PreToolUse hook in its tracked .claude/settings.json (incident of 2026-11-09: an agent worked in a hams_shared
 worktree that had no such file and killed its own parent).
 
+Tests [@ANCHOR: check_claude_hook_registration:command_runs]
+Tests [@ANCHOR: check_claude_hook_registration:matcher_covers]
 Tests [@ANCHOR: check_claude_hook_registration:command_is_guard]
 Tests [@ANCHOR: check_claude_hook_registration:matcher_covers_bash]
 Tests [@ANCHOR: check_claude_hook_registration:is_tracked]
@@ -30,8 +32,15 @@ GOOD_COMMAND = ('f="$HOME/workspace/hams_open/hams_shared/tools/claude_hooks/gua
                 'exec python3 "$f"')
 
 
-def settings(command=GOOD_COMMAND, matcher="Bash", event="PreToolUse", kind="command"):
-    return {"hooks": {event: [{"matcher": matcher, "hooks": [{"type": kind, "command": command, "timeout": 10}]}]}}
+BACKUP_COMMAND = ('f="$HOME/workspace/hams_open/hams_shared/tools/claude_hooks/guard_backup_secrets.py"; [ -f "$f" ] || exit 0; '
+                  'exec python3 "$f"')
+BACKUP_MATCHER = "Bash|Write|Edit|MultiEdit|NotebookEdit|Read|Grep|Artifact"
+
+
+def settings(command=GOOD_COMMAND, matcher="Bash", event="PreToolUse", kind="command", backup_matcher=BACKUP_MATCHER, backup_command=BACKUP_COMMAND):
+    """Both guards: the signal guard (the arguments above) and the backup-secrets guard (the backup_ arguments)."""
+    return {"hooks": {event: [{"matcher": matcher, "hooks": [{"type": kind, "command": command, "timeout": 10}]},
+                              {"matcher": backup_matcher, "hooks": [{"type": kind, "command": backup_command, "timeout": 10}]}]}}
 
 
 def git(repo, *args):
@@ -64,6 +73,32 @@ class CheckRepoTests(unittest.TestCase):
             self.assertTrue(chk.matcher_covers_bash(matcher), matcher)
         for matcher in ("Edit", "Write|Read", "Bashful", "(unclosed"):
             self.assertFalse(chk.matcher_covers_bash(matcher), matcher)
+
+    def test_command_runs_and_matcher_covers(self):
+        self.assertTrue(chk.command_runs(BACKUP_COMMAND, chk.BACKUP_HOOK_SCRIPT))
+        self.assertFalse(chk.command_runs(GOOD_COMMAND, chk.BACKUP_HOOK_SCRIPT))
+        self.assertFalse(chk.command_runs("python3 tools/claude_hooks/guard_backup_secrets.py", chk.BACKUP_HOOK_SCRIPT), "relative")
+        self.assertFalse(chk.command_runs(None, chk.BACKUP_HOOK_SCRIPT))
+        self.assertTrue(chk.matcher_covers("Bash|Write|Edit", "Write"))
+        self.assertTrue(chk.matcher_covers(BACKUP_MATCHER, "NotebookEdit"))
+        self.assertFalse(chk.matcher_covers("Bash|Edit", "Write"))
+        self.assertFalse(chk.matcher_covers("Edit", "MultiEdit"))
+        self.assertTrue(chk.matcher_covers("*", "Grep"))
+
+    def test_the_backup_guard_must_cover_every_file_tool_and_bash(self):
+        self.write(settings())
+        self.assertEqual(chk.check_repo(self.repo), [])
+        for missing in ("Write", "Edit", "MultiEdit", "NotebookEdit", "Read", "Grep", "Artifact", "Bash"):
+            matcher = "|".join(t for t in BACKUP_MATCHER.split("|") if t != missing)
+            self.write(settings(backup_matcher=matcher))
+            problems = chk.check_repo(self.repo)
+            self.assertEqual(len(problems), 1 if missing != "Bash" else 1, missing)
+            self.assertIn(missing, problems[0])
+            self.assertIn("guard_backup_secrets.py", problems[0])
+        self.write(settings(backup_command="echo hi"))
+        self.assertIn("guard_backup_secrets.py", chk.check_repo(self.repo)[0])
+        self.write(settings(matcher="Edit", backup_matcher="Edit"))
+        self.assertEqual(len(chk.check_repo(self.repo)), 2, "both guards are missing")
 
     def test_a_registered_hook_passes(self):
         self.write(settings())
@@ -148,6 +183,24 @@ class RealCheckoutTests(unittest.TestCase):
         done = subprocess.run(["sh", "-c", command], input=payload, capture_output=True, text=True, env=env, cwd=home)
         self.assertEqual(done.returncode, 0)
         self.assertEqual(json.loads(done.stdout)["hookSpecificOutput"]["permissionDecision"], "deny")
+
+    def test_the_registered_backup_guard_command_denies_a_key_read_and_an_edit_of_the_key_file(self):
+        with open(os.path.join(THIS_REPO, ".claude", "settings.json"), encoding="utf-8") as handle:
+            entries = json.load(handle)["hooks"]["PreToolUse"]
+        entry = next(e for e in entries if "guard_backup_secrets.py" in e["hooks"][0]["command"])
+        for tool in chk.HOOKS[chk.BACKUP_HOOK_SCRIPT]:
+            self.assertTrue(chk.matcher_covers(entry["matcher"], tool), tool)
+        home = tempfile.mkdtemp(prefix="hook-home-")
+        self.addCleanup(shutil.rmtree, home, True)
+        os.makedirs(os.path.join(home, "workspace", "hams_open"))
+        os.symlink(THIS_REPO, os.path.join(home, "workspace", "hams_open", "hams_shared"))
+        env = dict(os.environ, HOME=home, HAMS_JOBS_DIR=os.path.join(home, "jobs"))
+        for payload in ({"tool_name": "Bash", "tool_input": {"command": "cat /var/lib/odoo/hams_crypto.secret"}},
+                        {"tool_name": "Edit", "tool_input": {"file_path": "/etc/pgbackrest/pgbackrest.conf"}},
+                        {"tool_name": "Write", "tool_input": {"file_path": "/var/lib/odoo/hams_crypto.secret"}}):
+            done = subprocess.run(["sh", "-c", entry["hooks"][0]["command"]], input=json.dumps(payload), capture_output=True, text=True, env=env, cwd=home)
+            self.assertEqual(done.returncode, 0)
+            self.assertEqual(json.loads(done.stdout)["hookSpecificOutput"]["permissionDecision"], "deny", payload)
 
     def test_every_checkout_found_beside_this_one_registers_the_guard(self):
         found = checkouts()
