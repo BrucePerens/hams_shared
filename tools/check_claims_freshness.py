@@ -36,10 +36,12 @@ every claim ever committed should have an accurate hash from the moment it's add
 import argparse
 import ast
 import hashlib
+import io
 import os
 import re
 import subprocess
 import sys
+import tokenize
 
 import verify_anchors as va  # noqa: E402
 from check_function_test_anchors import (  # noqa: E402
@@ -169,44 +171,157 @@ def _resolve_superseded_by(claim_path, value, search_roots):
     return None, tried
 
 
-def compute_function_hash(filepath):
-    """Returns {anchor_name: sha256_hex} for every function in `filepath` carrying a real BASE
-    anchor declaration (not a Tests/Verified-by/Triggers link to one) within its own span."""
+def _comment_columns(content):
+    """Returns {1-based line number: column where a real `#` COMMENT token starts}, found with
+    `tokenize` so a `#` inside a string literal is never mistaken for a comment."""
+    columns = {}
+    for tok in tokenize.generate_tokens(io.StringIO(content).readline):
+        if tok.type == tokenize.COMMENT:
+            columns[tok.start[0]] = tok.start[1]
+    return columns
+
+
+def _docstring_line_ranges(node):
+    """Returns [(first_line, last_line)] for the docstring of `node` and of every function and
+    class nested in it. A docstring that shares its line with other code is left alone (it is not
+    removable as whole lines), which only ever makes the hash more sensitive, never less."""
+    ranges = []
+    for sub in ast.walk(node):
+        if not isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        first = sub.body[0] if sub.body else None
+        if (
+            isinstance(first, ast.Expr)
+            and isinstance(first.value, ast.Constant)
+            and isinstance(first.value.value, str)
+        ):
+            ranges.append((first.lineno, first.end_lineno))
+    return ranges
+
+
+def normalized_span_text(span_start, span_end, lines, comment_columns, docstring_ranges):
+    """The text `code_hash` is computed from: lines `span_start..span_end` (1-based, inclusive)
+    with every `#` comment removed, every docstring of the function (and of nested functions and
+    classes) removed, trailing whitespace stripped and blank lines dropped.
+
+    WHY: a claim is stale when the function's behaviour may have changed. A reworded comment or
+    docstring cannot change behaviour, yet hashing the raw text made all 27 user_websites claims
+    stale after one night of comment-rewording pull requests (2026-11-09). Indentation and every
+    code token are kept, so any real edit (including a changed string literal, which can carry
+    behaviour) still changes the hash. Text-based on purpose: unlike hashing `ast.dump`, the
+    result does not depend on the Python version that parses it, so the same hash comes out on
+    the dev box and on every remote lint host."""
+    dropped = set()
+    for first, last in docstring_ranges:
+        if span_start <= first and last <= span_end:
+            dropped.update(range(first, last + 1))
+    out = []
+    for number in range(span_start, min(span_end, len(lines)) + 1):
+        if number in dropped:
+            continue
+        line = lines[number - 1]
+        column = comment_columns.get(number)
+        if column is not None:
+            line = line[:column]
+        line = line.rstrip()
+        if line:
+            out.append(line)
+    return "\n".join(out)
+
+
+def function_hashes_from_text(content, filename="<string>"):
+    """Returns `{anchor_name: (normalized_hash, legacy_hash)}` for every function in `content`
+    carrying a real BASE anchor declaration (not a Tests/Verified-by/Triggers link to one) within
+    its own span. `normalized_hash` is the current `code_hash` definition (comments and
+    docstrings ignored, see `normalized_span_text`); `legacy_hash` is the pre-2026-11-09
+    definition, the sha256 of the raw span text, kept only so claims written before the change
+    can be recognised and migrated (see `migrate_claim_hashes.py`). A file that does not parse
+    yields `{}`."""
     try:
-        with open(filepath, "r", encoding="utf-8") as f:
-            content = f.read()
-    except (OSError, UnicodeDecodeError):
-        return {}
-    try:
-        tree = ast.parse(content, filename=filepath)
+        tree = ast.parse(content, filename=filename)
     except SyntaxError:
         return {}
 
     lines = content.splitlines()
+    comment_columns = None
     hashes = {}
     for _qualname, node in _direct_functions(tree.body, []):
         start, end = _function_span(node, lines)
         span_lines = lines[start - 1 : min(end, len(lines))]
-        span = "\n".join(span_lines)
+        names = []
         for i, line in enumerate(span_lines):
             prev_line = span_lines[i - 1] if i > 0 else ""
             for anchor_match in va.ANCHOR_PATTERN.finditer(line):
-                if not _is_base_anchor_declaration(line, anchor_match, prev_line):
-                    continue
-                name = va._clean(anchor_match.group(1))
-                hashes[name] = hashlib.sha256(span.encode("utf-8")).hexdigest()
+                if _is_base_anchor_declaration(line, anchor_match, prev_line):
+                    names.append(va._clean(anchor_match.group(1)))
+        if not names:
+            continue
+        if comment_columns is None:
+            comment_columns = _comment_columns(content)
+        legacy = hashlib.sha256("\n".join(span_lines).encode("utf-8")).hexdigest()
+        normalized = hashlib.sha256(
+            normalized_span_text(
+                start, end, lines, comment_columns, _docstring_line_ranges(node)
+            ).encode("utf-8")
+        ).hexdigest()
+        for name in names:
+            hashes[name] = (normalized, legacy)
     return hashes
 
 
-def build_anchor_hash_index(repo_root):
-    """Returns {anchor_name: sha256_hex} across every git-tracked .py file in repo_root. A
-    duplicate anchor name across files is a pre-existing verify_anchors.py-level problem, not
-    this script's to resolve -- last one scanned wins, matching dict-update semantics elsewhere
-    in this same tool family."""
+def _read_python(filepath):
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            return f.read()
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def compute_function_hash(filepath):
+    """Returns {anchor_name: sha256_hex} for every function in `filepath` carrying a real BASE
+    anchor declaration, hashed with the current comment- and docstring-insensitive definition."""
+    content = _read_python(filepath)
+    if content is None:
+        return {}
+    return {
+        name: pair[0] for name, pair in function_hashes_from_text(content, filepath).items()
+    }
+
+
+def compute_legacy_function_hash(filepath):
+    """Same as `compute_function_hash`, but with the legacy raw-text definition (see
+    `function_hashes_from_text`)."""
+    content = _read_python(filepath)
+    if content is None:
+        return {}
+    return {
+        name: pair[1] for name, pair in function_hashes_from_text(content, filepath).items()
+    }
+
+
+def build_anchor_hash_index(repo_root, legacy=False):
+    """Returns {anchor_name: sha256_hex} across every git-tracked .py file in repo_root (the
+    legacy raw-text hashes when `legacy` is true). A duplicate anchor name across files is a
+    pre-existing verify_anchors.py-level problem, not this script's to resolve -- last one
+    scanned wins, matching dict-update semantics elsewhere in this same tool family."""
     index = {}
+    compute = compute_legacy_function_hash if legacy else compute_function_hash
     for filepath in _git_tracked_files(repo_root, ".py"):
-        index.update(compute_function_hash(filepath))
+        index.update(compute(filepath))
     return index
+
+
+def recorded_hash_matches(recorded, current, legacy_current):
+    """True when a claim's recorded `code_hash` value is fresh for an anchor whose current hashes
+    are `current` (normalized) and `legacy_current` (raw text, may be None).
+
+    A claim written before 2026-11-09 carries the legacy hash. It is accepted while the function's
+    raw text is byte-for-byte what it was (so nothing in flight breaks the moment this lands), and
+    `migrate_claim_hashes.py` rewrites it to the normalized form; once the migration has run, the
+    legacy branch can be deleted. A legacy hash that no longer matches is stale like any other,
+    including after a comment-only edit, which is what the migration's history search resolves."""
+    expected = recorded[len("sha256:") :] if recorded.startswith("sha256:") else recorded
+    return expected == current or (legacy_current is not None and expected == legacy_current)
 
 
 def check_claims(repo_root):
@@ -226,6 +341,7 @@ def scan_claims(repo_root):
     problems = []
     retired = []
     anchor_hashes = None  # computed lazily, only if a claim file actually exists
+    legacy_hashes = None
 
     for claim_path in _git_tracked_files(repo_root, ".md"):
         if f"{os.sep}claims{os.sep}" not in claim_path:
@@ -296,6 +412,7 @@ def scan_claims(repo_root):
 
         if anchor_hashes is None:
             anchor_hashes = build_anchor_hash_index(repo_root)
+            legacy_hashes = build_anchor_hash_index(repo_root, legacy=True)
 
         anchor = fields["anchor"]
         current = anchor_hashes.get(va._clean(anchor))
@@ -306,12 +423,12 @@ def scan_claims(repo_root):
             continue
 
         expected = recorded[len("sha256:") :] if recorded.startswith("sha256:") else recorded
-        if expected != current:
+        if not recorded_hash_matches(recorded, current, legacy_hashes.get(va._clean(anchor))):
             problems.append(
                 (
                     claim_path,
-                    f"code_hash mismatch for anchor '{anchor}' -- the function changed since this "
-                    f"claim was last confirmed (recorded sha256:{expected[:12]}..., current "
+                    f"code_hash mismatch for anchor '{anchor}' -- the function's code changed since this "
+                    f"claim was last confirmed (comment and docstring edits do not count; recorded sha256:{expected[:12]}..., current "
                     f"sha256:{current[:12]}...); review the claim's own prose against the current "
                     "code and update code_hash once confirmed accurate (or fix the code, if the "
                     "claim was right and the change broke it)",
