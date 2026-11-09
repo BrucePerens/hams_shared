@@ -72,6 +72,18 @@ EXCLUDE_DIRS = {
 DEFAULT_BASELINE_FILENAME = "function_test_anchor_baseline.json"
 
 
+_TRAILING_ANCHOR_REF_RE = re.compile(r"\s*\[@ANCHOR:[^\]]*\]\s*[,;+]?\s*$")
+
+
+def _without_trailing_anchor_refs(text):
+    """`text` with every `[@ANCHOR: ...]` token (and the separator after it) removed from its end."""
+    previous = None
+    while previous != text:
+        previous = text
+        text = _TRAILING_ANCHOR_REF_RE.sub("", text)
+    return text
+
+
 def _is_base_anchor_declaration(line, match, prev_line=""):
     """True if `match` (an ANCHOR_PATTERN match within `line`) is a base anchor declaration --
     e.g. `# [@ANCHOR: name]` -- rather than a reference TO that anchor from elsewhere: a
@@ -116,14 +128,19 @@ def _is_base_anchor_declaration(line, match, prev_line=""):
     `doc_inject_*` anchors in `ham_satellite`/`ham_testing`'s `__manifest__.py` sit in a
     plain module-level dict, outside any function span `_direct_functions` ever walks) -- handled
     anyway, to close the gap before a function like that is ever written."""
-    first_prefix = line[: match.start()].strip()
+    # A reference list, "Tests [@ANCHOR: a] [@ANCHOR: b]" (or the same list wrapped onto the next
+    # line), refers to EVERY anchor in it: the words before the first one decide for all. Without
+    # this, the second and later anchors of such a list in a test's docstring counted as base
+    # declarations, and the claim hash index (last file scanned wins) attributed anchors such as
+    # lint_lock:gate and guard_signals:check_kill to a test function instead of the real one.
+    first_prefix = _without_trailing_anchor_refs(line[: match.start()].strip())
     # A bare comment marker with nothing else before the anchor (e.g. just "#" or "//") carries no
     # same-line signal at all -- exactly the case a wrapped-from-the-previous-line reference needs
     # this fallback for. `first_prefix` itself stays exactly as-is for the same-line checks below
     # (a real "#" prefix must never satisfy `.endswith("Tests")` etc. on its own).
     bare_comment_marker = bool(re.fullmatch(r"(#|//|/\*|\*)+", first_prefix))
     if (not first_prefix or bare_comment_marker) and prev_line:
-        prev_prefix = re.sub(r"^\s*(#|//|/\*|\*)+", "", prev_line).strip()
+        prev_prefix = _without_trailing_anchor_refs(re.sub(r"^\s*(#|//|/\*|\*)+", "", prev_line).strip())
         if prev_prefix.endswith("Tests"):
             return False
         if prev_prefix.endswith("Verified by") or prev_prefix.endswith("Tested by"):
