@@ -27,6 +27,7 @@ import sys
 
 import lint_cache
 import lint_exec
+import rust_impact
 
 # "site-packages" matches any virtualenv by its structurally-guaranteed lib/pythonX.Y/
 # site-packages/ subdirectory regardless of the venv's own outer directory name (".venv"/"venv"
@@ -339,16 +340,30 @@ def find_cargo_crates(repo_root):
     return sorted(found)
 
 
+def narrow_to_changed(crate_dirs, changed, label):
+    """`crate_dirs` ((repo_root, crate_dir) pairs) without the crates `rust_impact.select_crates` skips for the changed paths; prints each skipped crate and how many were kept."""
+    if changed is None:
+        return crate_dirs
+    selected, skipped = rust_impact.select_crates([crate for _root, crate in crate_dirs], changed)
+    for crate, why in skipped:
+        print(f"{label}: skipped {os.path.relpath(crate, os.path.dirname(os.path.dirname(crate)))}: {why}")
+    print(f"{label}: {len(selected)} of {len(crate_dirs)} crates checked ({len(skipped)} skipped)")
+    keep = set(selected)
+    return [(root, crate) for root, crate in crate_dirs if crate in keep]
+
+
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: check_cargo_clippy.py <repo_root>")
+    positional, changed = rust_impact.split_argv(sys.argv[1:])
+    if not positional:
+        print("Usage: check_cargo_clippy.py <repo_root> [--changed-files PATH...]")
         sys.exit(1)
 
     crate_dirs = [
         (repo_root, crate_dir)
-        for repo_root in _resolve_repo_roots(sys.argv[1])
+        for repo_root in _resolve_repo_roots(positional[0])
         for crate_dir in find_cargo_crates(repo_root)
     ]
+    crate_dirs = narrow_to_changed(crate_dirs, changed, "clippy")
     if not crate_dirs:
         sys.exit(0)
 

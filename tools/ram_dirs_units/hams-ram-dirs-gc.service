@@ -1,0 +1,8 @@
+[Unit]
+Description=Remove idle, ownerless RAM build directories (/dev/shm/hams-cargo-target-*) and trim the lint cache
+
+[Service]
+Type=oneshot
+Nice=10
+# The path is the dev box's checkout; change it if hams_shared lives elsewhere.
+ExecStart=/usr/bin/python3 %h/workspace/hams_open/hams_shared/tools/ram_dirs.py gc

@@ -619,6 +619,8 @@ Purpose: the settings every decision reads; built by `policy`. A frozen dataclas
 | `hard_free_gb` | float | The free space of `root` under which `run_job` stops a RAM job; default 5. |
 | `min_ram_gb` | float | Memory size below which `auto` keeps the disk quietly; default 64. |
 | `lint_budget_gb` | float | Total size of `hams-lint-cargo` in RAM; `prune_lint_cache` removes least recently used unused directories above it; default 24 (`HAMS_RAM_LINT_GB`). |
+| `idle_hours` | float | `gc` removes an ownerless job directory idle this long; default 3 (`HAMS_RAM_IDLE_HOURS`). |
+| `keep_hours` | float | The same for a directory of a job that ran with `--keep`; default 6 (`HAMS_RAM_KEEP_HOURS`). |
 | `require_tmpfs` | bool | `root` must be a tmpfs; default True, False when `HAMS_RAM_ROOT` names the root. |
 
 Invariants: a policy never changes after it is built. The settings are read from the environment only by `policy`.
@@ -709,10 +711,43 @@ Purpose: says by name whether `path` is below the RAM root, without touching the
 
 Purpose: the process start time that makes an owner marker immune to pid reuse. Returns field 22 of `/proc/<pid>/stat` (clock ticks since boot, read after the last `)` so a name with spaces or parentheses is safe), or `None` when the process is gone or the file is unreadable.
 
-### `[@ANCHOR: ram_dirs:claim]` `claim(path, pid=None, now=time.time)`
+### `[@ANCHOR: ram_dirs:claim]` `claim(path, pid=None, now=time.time, keep=False, job=None)`
 
-Purpose: marks `path` as owned by a process. Creates the directory (mode 0700) if it is missing and writes `.hams-ram-owner` in it (atomically, through a temporary file): JSON `{"pid": int, "start": int or null, "created": int}`, `start` being
-`_start_ticks(pid)`. Arguments: `pid` (default this process; `ram_dirs.py path` passes the caller's) and `now` (clock, for tests). Returns `path`. Raises `OSError` when the marker cannot be written.
+Purpose: marks `path` as owned by a process. Creates the directory (mode 0700) if it is missing and writes `.hams-ram-owner` in it (atomically, through a temporary file): JSON `{"pid": int, "start": int or null, "created": int, "name": str or null, "job": str or null, "keep": bool}`, `start` being
+`_start_ticks(pid)` and `name` the owner's program name (`process_name`). Arguments: `pid` (default this process; `ram_dirs.py path` passes the caller's), `now` (clock, for tests), `keep` (the job ran with `--keep`, so `gc` waits `keep_hours`) and `job` (the job name). Returns `path`. Raises `OSError` when the marker cannot be written.
+
+### `[@ANCHOR: ram_dirs:process_name]` `process_name(pid, proc_root="/proc")`
+
+Purpose: the program name of a process (`/proc/<pid>/comm`) for the owner marker and for `status`; None when the process is gone.
+
+### `[@ANCHOR: ram_dirs:owner_record]` `owner_record(path)`
+
+Purpose: the marker of a directory as a dict `pid, start, created, name, job, keep` (fields an older marker lacks are None, `keep` False); None without a readable marker. Reads one file; never raises.
+
+### `[@ANCHOR: ram_dirs:newest_activity]` `newest_activity(path, depth=3, per_directory=2000)`
+
+Purpose: the newest modification or access time in a tree, sampled cheaply: three levels down (`debug/deps/<file>`) and at most `per_directory` entries of each directory. Reading a build's files counts, so a directory something still reads is not idle. Never raises.
+
+### `[@ANCHOR: ram_dirs:references]` `references(path, proc_root="/proc")`
+
+Purpose: which live processes refer to a directory, so `gc` never removes one in use: `CARGO_TARGET_DIR` or `TMPDIR` in the environment at or below `path`, a working directory below it, or an open file below it. Sorted pids; unreadable processes (other users') are not examined; this process is not listed; `proc_root` is for tests.
+
+### `[@ANCHOR: ram_dirs:gc_log_path]` `gc_log_path(pol=None, environ=None)`
+
+Purpose: the removal log, `hams-ram-gc.log` in the RAM root.
+
+### `[@ANCHOR: ram_dirs:log_removal]` `log_removal(pol, name, size_bytes, idle_seconds, reason, now=time.time, owner=None)`
+
+Purpose: appends `time removed NAME SIZE GB idle H h owner pid P (program): reason` to the removal log and keeps the last 2000 lines. Called for every removal by `sweep` and `gc`. Returns the line; never raises.
+
+### `[@ANCHOR: ram_dirs:gc]` `gc(pol=None, environ=None, say=None, now=time.time, remove=None, proc_root="/proc", dry_run=False)`
+
+Purpose: garbage collection of the RAM root, run at the start of every `run` and by `status`, by `ram_dirs.py gc [--dry-run]` and, when someone enables it, by the user timer `ram_dirs_units/hams-ram-dirs-gc.timer` (every 30 minutes; the files are not installed or enabled by anything: `mkdir -p ~/.config/systemd/user && cp tools/ram_dirs_units/hams-ram-dirs-gc.* ~/.config/systemd/user/ && systemctl --user daemon-reload && systemctl --user enable --now hams-ram-dirs-gc.timer`; adjust the path in the service).
+A `hams-cargo-target-*` directory is removed when its owner is not running AND (its job ended without `--keep`, or nothing in it was modified or read for `idle_hours` (default 3, `HAMS_RAM_IDLE_HOURS`), `keep_hours` (default 6, `HAMS_RAM_KEEP_HOURS`) for a `--keep` job) AND no process refers to it (`references`). A directory whose owner is alive is never touched. The lint cache `hams-lint-cargo` has no age limit; when over `lint_budget_gb` it is trimmed by `prune_lint_cache`. Every removal is said and logged (`log_removal`) with name, size, idle time, owner and reason. Returns `[(name, bytes, reason)]`; with `dry_run` nothing is removed or logged. Never raises.
+
+### `[@ANCHOR: ram_dirs:describe_owner]` `describe_owner(path, now=time.time, proc_root="/proc")`
+
+Purpose: the owner phrase `status` prints: `owner pid 123 (cargo) alive, started 2.0 h ago, idle 5 min, job t1, kept`, or `unmarked, idle 4.0 h` with the pids that refer to the directory.
 
 ### `[@ANCHOR: ram_dirs:owner_state]` `owner_state(path)`
 
@@ -836,7 +871,7 @@ Purpose: the text of `ram_dirs.py status`. Returns a list of lines: the root's f
 
 Purpose: the command line. Subcommands `run JOB [--keep] [--ssd] -- COMMAND...` (exit status of the command, 75 if the job name is in use), `path JOB [--owner-pid PID]` (sweeps, creates and claims the directory for `PID`, default the parent
 process, and prints the path; for a shell that cannot wrap its command: `export CARGO_TARGET_DIR=$(python3 hams_shared/tools/ram_dirs.py path myjob --owner-pid $$)` and `trap 'python3 hams_shared/tools/ram_dirs.py release myjob' EXIT`),
-`release JOB` (removes the job's directory from either place), `sweep`, `status`. Returns the exit status; 2 for a bad job name.
+`release JOB` (removes the job's directory from either place), `sweep`, `gc [--dry-run]`, `status` (runs `gc` first, then lists each directory with its owner). Returns the exit status; 2 for a bad job name.
 
 ### `[@ANCHOR: lint_cache:disk_cargo_base]` `disk_cargo_base(environ=None)`
 
@@ -1031,6 +1066,37 @@ The entry also uses the existing `nice`, `max_concurrent` and `max_load_ratio` (
 | `jobs` | int | The entry's worker count before the policy. |
 
 Returns `(probe, jobs, skip_reason)`: the probe with the hidden capabilities removed, the limited job count, and a non-empty reason when the machine must be skipped. Pure. Tests: `ReserveTests` in `test_lint_remote.py`.
+
+### `[@ANCHOR: lint_remote:expected_blobs]` `expected_blobs(repo, sha, sub_exclude=())`
+
+Purpose: the exact file set a machine's mirror of `repo` must hold to equal what the local run reads, as `{path: git blob id}`: the files tracked in commit `sha`, minus secrets and build output
+(`excluded`) and `sub_exclude` (a nested repository mirrored on its own, hams_open's `hams_shared`), with the working tree's uncommitted regular files at their present content and its deleted files
+gone. A blob id is the SHA-1 of `blob <size>\0<content>`, the same on every machine. Paths with a newline or a tab are left out. Reads `repo` through git only. Used by `mirror_problems()`.
+Tests: `test_a_mirror_at_an_older_commit_than_its_manifest_says_is_rebuilt_before_any_step_runs` and `test_uncommitted_files_of_the_branch_under_test_are_part_of_the_exact_tree` in `test_lint_remote.py`.
+
+### `[@ANCHOR: lint_remote:mirror_problems]` `mirror_problems(transport, repo, sha, dest, sub_exclude=(), log=print)`
+
+Purpose: proves a remote mirror equals the local tree before any step reads it (2026-11-08: steps on a remote machine linted a stale sibling hams_open and failed a branch against commits main had already
+fixed; the same staleness could pass one). It hashes every expected file on the machine (`BLOB_SCRIPT`, standard-library Python, paths on stdin) and compares with `expected_blobs()`. Returns the problems
+left, `missing: <path>` and `differs: <path>`; empty means the mirror is exact. Files in the mirror that the local tree does not have are removed (logged) unless they are caches or build output
+(`MIRROR_JUNK_DIRS`, `MIRROR_JUNK_FILES`). `run_on_machine()` calls it for hams_com, hams_open and hams_shared (`verify_mirrors`) after the sync; a mirror with problems is rebuilt in full once, and when it
+still differs the machine returns `infra`: nothing runs there, the steps run on this machine and the run says why. Does not trust the mirror's own manifest.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `transport` | SshTransport or ShellTransport | How to run commands on the machine. |
+| `repo`, `sha` | str | The local repository and the commit its HEAD names. |
+| `dest` | str | Absolute mirror path on the machine. |
+| `sub_exclude` | tuple of str | Paths mirrored separately (skipped here). |
+
+Tests: `EndToEndTests.test_a_mirror_at_an_older_commit_than_its_manifest_says_is_rebuilt_before_any_step_runs`, `test_a_mirror_that_cannot_be_brought_to_the_local_commits_runs_nothing_there`,
+`test_files_left_behind_by_an_earlier_sync_are_removed_and_caches_are_ignored`.
+
+### `[@ANCHOR: lint_remote:siblings_text]` `siblings_text(info)`
+
+Purpose: names the commits a remote run read: `hams_com@<12 hex> hams_open@<12 hex> hams_shared@<12 hex>`, `+dirty` after a commit whose uncommitted files were shipped too. `run_on_machine()` prints it as the
+first line of the machine's log (`[host] siblings: ...`) and `collect()` returns it for the pass stamp (`siblings=<host>/<role>@<sha>/...`, `run_linters.stamp_text`). Pure. Test:
+`test_a_mirror_at_an_older_commit_than_its_manifest_says_is_rebuilt_before_any_step_runs`; the stamp field is in `test_stamp_metadata_names_the_host_and_the_gate_still_parses_it` (`test_lint_remote.py`).
 
 ### `[@ANCHOR: lint_lock:held_locks]` `HeldLocks`
 
@@ -2209,9 +2275,13 @@ so this in-step retry covers that case. Cache files: `~/.cache/hams-lint/pip-aud
 
 Returns the reuse window in hours: `HAMS_PIP_AUDIT_CACHE_HOURS` as a float of at least 0 (0 means off), else 6.0 for an unset, non-numeric, infinite, NaN or negative value. Pure.
 
+### `[@ANCHOR: check_pip_audit:included_requirement_files]` `included_requirement_files(req_file)`
+
+Returns the real paths of every file `req_file` includes through `-r`, `--requirement`, `-c` or `--constraint` lines (`-r x`, `-rx`, `--requirement x`, `--requirement=x`; a ` #` comment is dropped), directly or through other included files, in first-seen order, each once; a cycle ends where it closes. A relative path is taken from the including file's directory, as pip does. Raises `OSError` for an included file that cannot be read, an include that names a URL, or nesting deeper than `MAX_INCLUDE_DEPTH` (8): an input the key cannot cover must never be answered from the cache.
+
 ### `[@ANCHOR: check_pip_audit:cache_key]` `cache_key(req_file, version_text)`
 
-Returns 64 hex digits: SHA-256 over the real path of `req_file`, its content and the stripped `version_text` (the `pip-audit --version` output), each length-prefixed. Another checkout path, an edit or another pip-audit version gives another key. Raises `OSError` for an unreadable file.
+Returns 64 hex digits: SHA-256 over the real path of `req_file`, its content, the path and content of every file in `included_requirement_files(req_file)`, and the stripped `version_text` (the `pip-audit --version` output), each length-prefixed. Another checkout path, an edit to the file or to an included file, or another pip-audit version gives another key. Raises `OSError` for an unreadable file or included file (the audit then runs and nothing is cached).
 
 ### `[@ANCHOR: check_pip_audit:cached_pass_age_hours]` `cached_pass_age_hours(key, now=None, environ=None)`
 
@@ -3921,3 +3991,117 @@ Purpose: the whole decision of `dispatch_ok.py`, separated from printing so it c
 Returns `(state, lines)`: `"OK"` or `"HOLD"` and the reasons, plus, on HOLD, one line naming free overflow machines. Never raises: a missing,
 unreadable, non-object, undated, stale or verdict-less file is HOLD with its own reason. Read-only, no locks, safe to call in a loop.
 `main` wraps it: prints the state and reasons (not with `--quiet`) and exits 0 for OK, 1 for HOLD.
+
+## Pass stamps that carry over to a commit of records (`lint_stamp_gate.py`)
+
+Written 2026-11-08. Every branch ends with a night-shift record (a history entry, a to-do claim or its notes, a claim file). The record is a new commit, so the
+tip changed and the pass stamp of the run on the code was lost: a full re-lint (4 to 20 minutes queued) for a branch whose code had not moved. `devbox_tools/prmerge.sh`
+now asks `lint_stamp_gate.py --inherit TIP PASSED_DIR origin/main` before it refuses a tip that has no stamp. The merge queue merges through `prmerge.sh`, so it follows.
+
+### `[@ANCHOR: lint_stamp_gate:exempt_path]` `exempt_path(path)`
+
+Purpose: the one list of paths whose change cannot alter what the linters concluded (`EXEMPT_PREFIXES`: `night_shift_history/`, `night_shift_todo/`, `claims/`, markdown files only). Argument `path`:
+repository-relative, `/`-separated str. Returns bool. A path with `..`, a leading `/`, another directory, another suffix, or any other markdown file (`verify_anchors`, `check_skill_integrity` and the
+documentation checkers read those) is not exempt. Pure. Tests: `InheritTests` in `test_lint_stamp_gate.py`.
+
+### `[@ANCHOR: lint_stamp_gate:inherit_stamp]` `inherit_stamp(repo, tip, passed_dir, base="origin/main", log=print)`
+
+Purpose: give `tip` the stamp of the nearest stamped commit below it when only exempt paths differ. Arguments: `repo` git directory; `tip` full commit id; `passed_dir` the stamp directory
+(`~/.cache/hams-lint/passed`); `base` the ref the branch started from; `log` receives one line per refusal reason. Walks `base..tip` newest first (at most 60 commits), stops at the first commit with a
+stamp. Returns the new stamp text (the old line plus ` inherited-from=<old commit>`; the old step list is still judged by `refusal` against the whole branch diff) or None when: no commit has a stamp,
+any non-exempt file differs between the stamped commit and `tip` (a merge of main included), or `night_shift_history.check_tree` rejects the history of `tip` (the one checker that reads these
+files). A stamp that already exists for `tip` is returned as it is, never replaced. Writes `passed_dir/<tip>` atomically; runs `git diff`, `git archive` and `tar`. Tests: `InheritTests`.
+
+### `[@ANCHOR: lint_stamp_gate:inherited_note]` `inherited_note(stamp_text)`
+
+Purpose: the loud line the gate prints for an inherited stamp, so the merge output says what the pass rests on. Returns a str naming the first 12 characters of the source commit, or None. Pure. Tests: `InheritTests`.
+## Rust crates checked by what changed (`rust_impact.py`)
+
+Written 2026-11-08. `check_cargo_clippy.py` and `check_cargo_fmt.py` checked every crate of both repositories whenever any `.rs`, `.toml` or `.lock` file changed: 17 crates one after another, 139 s on average
+and 1,329 s at worst for clippy, the longest step of 25 of 142 measured runs. Under `--changed` the runner passes them the changed paths (`<repo_root> --changed-files PATH...`; no list for a full run, a run of
+the checker tooling itself, or more than 5,000 paths) and they check only the crates with a changed file and the crates that depend on one by `path = ...`. Each skipped crate is printed with its reason and the
+step prints `N of M crates checked`, so a skip is never silent. Cargo's build-directory lock still makes the crates take turns; the saving is the crates not built.
+
+### `[@ANCHOR: rust_impact:split_argv]` `split_argv(argv)`
+
+Purpose: read a checker's command line. `argv` is a list of str (without the program name). Returns `(positional, changed)`: the arguments before `--changed-files`, and the paths after it made absolute and resolved
+(an empty list when the flag has no paths: nothing changed), or None when the flag is absent (check every crate). Pure. Tests: `DependencyTests` in `test_rust_impact.py`.
+
+### `[@ANCHOR: rust_impact:path_dependencies]` `path_dependencies(crate_dir)`
+
+Purpose: the directories a crate depends on by path. Reads `crate_dir/Cargo.toml` and returns the resolved absolute directories named by `path = ...` in `[dependencies]`, `[dev-dependencies]`,
+`[build-dependencies]`, their `[target.*]` forms, `[workspace.dependencies]` and `[patch.*]`. Returns None when the file cannot be read or parsed, or the Python has no `tomllib` (before 3.11): the caller checks the
+crate. Reads one file; no side effects. Tests: `DependencyTests`.
+
+### `[@ANCHOR: rust_impact:select_crates]` `select_crates(crate_dirs, changed)`
+
+Purpose: decide which crates to check. `crate_dirs`: list of crate directories; `changed`: resolved changed paths or None. Returns `(selected, skipped)`: `selected` is a list of the given directories, `skipped` a list of
+`(directory, reason)`. A crate is selected when a changed path lies under it or under a directory it depends on by path (followed through those directories' manifests; cycles end), when a manifest cannot be read, or
+for every crate when a changed `.rs` file, `rust-toolchain*` file or `.cargo/` file lies outside every crate (it may be `include!`d or pin the toolchain). `changed` None selects all. Reads manifests only. Tests:
+`SelectionTests` and `EndToEndTests` (a fake `cargo` records where it was started) in `test_rust_impact.py`.
+
+## Pytest steps run by what changed (`pytest_impact.py`)
+
+Written 2026-11-08 (Bruce: "not checking unmodified files"). The `pytest tools/[NofM]`, `pytest tools/[host-bound]`, `pytest scripts/` and `pytest daemons/*` steps ran every test file under their root whenever any file under
+it changed: the four `tools/` chunks took 80 to 180 s each with 600 s of pytest in a 700 s run (a hams_shared `--changed` run, 2026-11-08). Under `--changed` the runner now keeps the test files that depend on a changed file
+(`run_linters._impact_select`) and balances the chunks over those. The base commit passes, so a test whose inputs did not change still passes: the premise of the step selection of `--changed`. A full run, a run scoped by module
+names, `HAMS_LINT_TEST_IMPACT=0` and a change list longer than 5,000 paths keep every file. The run prints one line per narrowed step (`[*] pytest impact, tools/: 57 of 145 ...`) and the skipped file names, and the pass stamp
+carries `impact=tools:57of145,...`. The dependency is generous: a file depends on a changed file when its code (comments and docstrings removed) holds the changed file's name, module name or top directory; after that first step
+only imports and `x.py` script names pass the dependency on. A test that scans a directory from `__file__`, `HERE` or a tree root always runs. Everything runs when a `conftest.py`, `__init__.py`, `requirements*` or pytest
+configuration file changed, when a changed file is mentioned by no file under the root (a new script, a deleted one, a data file no test names) and when a changed input of the step lies outside the root.
+
+### `[@ANCHOR: pytest_impact:select_tests]` `select_tests(root, test_files, changed, also=())`
+
+Purpose: split a pytest step's test files into the ones a change can alter and the rest. `root`: the step's directory; `test_files`: its test files (list of paths); `changed`: absolute changed paths (those under `root` or
+`also` count); `also`: the step's other input paths (a daemon's loose files). Returns `(selected, skipped, why)`, the first two in the order of `test_files`, `why` one line for the step output. Selects every file, saying why,
+for the cases above. Reads every `.py` file under `root` once (about 5 s for `tools/` with its 1,500 stub files). Tests: `SelectionTests` in `test_pytest_impact.py`.
+
+## The relay's structural tests in lint (`relay_structural.py`)
+
+Written 2026-11-08. Lint ran a pytest wrapper for `daemons/hams_local_relay` and none of the relay's cargo tests, so three relay merges turned relay main red that day: the demo_lock route table (#3474), the ELAD
+fixture compiled in with `include_str!` (#3502) and the SNTP server (#3626: `sntp_service` missing from `docs/privilege_inventory.json`, `local_api.json` read by a bare name; two scan tests failed until #3654).
+The step `relay structural tests` runs the fast group of source-scanning tests (`STRUCTURAL_FILTERS`, one list) with `cargo test --locked --features radioctl,shared_receiver --bin hams_local_relay`. It is selected when a file of the relay,
+of a directory it depends on by path, or of a crate that depends on it (`watched_dirs`: `shack_console`, `relay_signer`) changes, so the merge queue's combined run, which is an ordinary `--changed` run, runs it for any such
+branch; it is never cached, and the stamp lists it by name. Measured on the dev box (2026-11-08): cold build of all relay test binaries 2 min 6 s; the group warm, 139 tests, 17 s; the same sources under a new
+checkout path rebuild the relay crate (2 min 13 s, the cost of the per-path fingerprint), the dependencies stay warm. At `3213a910d` (#3626) the group fails with exactly the two scan tests that failed on main. The whole suite
+(`cargo test` of every target) runs nightly in the canary (`gate_canary.py`, `run_relay_suite`) and its failures make the night red.
+
+### `[@ANCHOR: relay_structural:watched_dirs]` `watched_dirs(repo_root)`
+
+Purpose: the directories whose change selects the step. Argument `repo_root`: str. Returns a sorted list of resolved absolute paths: the relay crate, every directory it depends on by `path = ...` (transitively) and
+every crate in the repository that depends on it by path (`rust_impact.select_crates`); `[]` when the repository has no `daemons/hams_local_relay/Cargo.toml` (no step). Reads manifests only. Tests: `WatchedDirsTests` in `test_relay_structural.py`.
+
+### `[@ANCHOR: relay_structural:cargo_command]` `cargo_command(filters=STRUCTURAL_FILTERS, list_only=False)`
+
+Purpose: the command line. Returns a list: `cargo test --locked --features radioctl,shared_receiver --bin hams_local_relay -- [--list] <filter>...`. Each filter is a substring of a test path, as `cargo test` filters work. Pure. Tests: `PureTests`.
+
+### `[@ANCHOR: relay_structural:listed_tests]` `listed_tests(text)`
+
+Purpose: the test paths of `cargo test -- --list` output (`path: test` lines). Argument `text`: str. Returns a list of str. Pure. Tests: `PureTests`.
+
+### `[@ANCHOR: relay_structural:unmatched_filters]` `unmatched_filters(tests, filters=STRUCTURAL_FILTERS)`
+
+Purpose: keep the group from shrinking silently. Returns the filters that no test path of `tests` contains. The step lists the tests first and FAILS (exit 1, naming them) when this is not empty, before running anything: a renamed or deleted
+module must be fixed in the list. Pure. Tests: `PureTests`, `MainTests`.
+
+### `[@ANCHOR: relay_structural:passed_count]` `passed_count(text)`
+
+Purpose: the number of tests that passed. Returns the sum of the `N passed` of every `test result:` line of `cargo test` output, 0 when there is none. Pure. Tests: `PureTests`.
+
+The step's build goes to `lint_cache.named_cargo_session("relay-structural")`: one warm Cargo directory per lint slot (`-sK`), in RAM when `/dev/shm` has room, under the machine's disk budget, locked while it builds. Exit 0 and `relay structural tests: N tests of M filters
+passed` on success; 1 and the test output on failure, on a build failure, or on a shrunken group; 0 and a line saying so when the repository has no relay crate.
+
+### `[@ANCHOR: gate_canary:parse_cargo_failures]` `parse_cargo_failures(text)`
+
+Purpose: read the nightly relay run. Returns `{"failed": [paths], "passed": N}`: each `test <path> ... FAILED` line (sorted, unique) and the sum of the `N passed` counts. Pure. Tests: `RelaySuiteTests` in `test_gate_canary.py`.
+
+### `[@ANCHOR: gate_canary:relay_command]` `relay_command(relay_dir, target_dir)`
+
+Purpose: the shell line of the nightly full suite: `cd <relay> && CARGO_TARGET_DIR=<target> CARGO_INCREMENTAL=0 cargo test --locked --features radioctl,shared_receiver --no-fail-fast` (every test of every target, all failures listed). Paths are shell-quoted. Pure. Tests: `RelaySuiteTests`.
+
+### `[@ANCHOR: gate_canary:run_relay_suite]` `run_relay_suite(com_tree, log_directory, runner=None, now=time.time)`
+
+Purpose: the nightly full relay suite of the canary, run on the snapshot's hams_com tree after the shards (`gate_canary.py run --no-relay` skips it). Returns `{"status", "failed", "passed", "exit_status", "seconds", "log"}`: `green` (exit 0), `red`
+(non-zero and at least one `FAILED` test, named in `failed`), `error` (non-zero and none: it did not build or died; never green) or `skipped` with a `reason` (no tree or no relay crate; the note says `NOT RUN`). The build uses the budgeted directory
+`lint_cache.named_cargo_session("relay-nightly")`. `aggregate(..., relay=)` records it as `status["relay"]`, adds each failed test as the new failure `relay cargo test: <path>` (so the night is red and the note names it; such ids are not proposed for
+the Odoo known-red baseline and are not bisected) and a relay `error` as a shard error. Blocks until cargo ends (a cold build is a few minutes, the suite more); no process is signalled. Tests: `RelaySuiteTests`.

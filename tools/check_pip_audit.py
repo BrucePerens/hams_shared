@@ -104,15 +104,68 @@ def _cache_directory(environ):
     return os.path.join(base, "hams-lint", "pip-audit")
 
 
+MAX_INCLUDE_DEPTH = 8
+_INCLUDE_OPTIONS = ("--requirement", "--constraint", "-r", "-c")
+
+
+def _include_target(line):
+    """The file named by one `-r`/`--requirement`/`-c`/`--constraint` line of a requirements file (`-r x`, `-rx`, `--requirement=x`, `--requirement x`),
+    or None for any other line. A trailing ` #` comment is dropped."""
+    text = line.split(" #", 1)[0].strip()
+    for option in _INCLUDE_OPTIONS:
+        if not text.startswith(option):
+            continue
+        rest = text[len(option):]
+        if option.startswith("--"):
+            if not rest or rest[0] not in " \t=":
+                continue
+            rest = rest.lstrip(" \t=")
+        else:
+            rest = rest.strip()
+        return rest or None
+    return None
+
+
+# [@ANCHOR: check_pip_audit:included_requirement_files]
+def included_requirement_files(req_file, _seen=None, _depth=0, _root=None):
+    """Every file `req_file` pulls in through `-r`/`--requirement`/`-c`/`--constraint` lines, directly or through other included files, as real paths
+    in first-seen order (each once, a cycle ends where it closes). A relative path is taken from the including file's directory, as pip does.
+    Raises OSError when an included file cannot be read, names a URL, or the chain is deeper than `MAX_INCLUDE_DEPTH`: the caller must then not
+    trust a cached pass (an unreadable input cannot be part of the key)."""
+    seen = [] if _seen is None else _seen
+    root = os.path.realpath(req_file) if _root is None else _root
+    if _depth > MAX_INCLUDE_DEPTH:
+        raise OSError("requirements includes nested deeper than %d: %s" % (MAX_INCLUDE_DEPTH, req_file))
+    with open(req_file, encoding="utf-8", errors="replace") as handle:
+        lines = handle.read().splitlines()
+    for line in lines:
+        target = _include_target(line)
+        if target is None:
+            continue
+        if "://" in target:
+            raise OSError("requirements include a URL, which the cache key cannot cover: %s" % target)
+        path = os.path.realpath(os.path.join(os.path.dirname(os.path.realpath(req_file)), target))
+        if path in seen or path == root:
+            continue
+        seen.append(path)
+        included_requirement_files(path, seen, _depth + 1, root)
+    return seen
+
+
 # [@ANCHOR: check_pip_audit:cache_key]
 def cache_key(req_file, version_text):
-    """The cache key of one requirements file: the SHA-256 of its real path, its content and the pip-audit version text, as 64 hex
-    digits. Another path (another checkout), an edited file or another pip-audit version is another key. Raises OSError when the
-    file cannot be read."""
+    """The cache key of one requirements file: the SHA-256 of its real path, its content, the content of every file it includes (`-r`, `-c`, see
+    `included_requirement_files`) and the pip-audit version text, as 64 hex digits. Another path (another checkout), an edit to the file or to
+    anything it includes, or another pip-audit version is another key. Raises OSError when the file or an included file cannot be read."""
     with open(req_file, "rb") as handle:
         content = handle.read()
+    parts = [os.path.realpath(req_file).encode(), content]
+    for included in included_requirement_files(req_file):
+        with open(included, "rb") as handle:
+            parts += [included.encode(), handle.read()]
+    parts.append(str(version_text).strip().encode())
     digest = hashlib.sha256()
-    for part in (os.path.realpath(req_file).encode(), content, str(version_text).strip().encode()):
+    for part in parts:
         digest.update(len(part).to_bytes(8, "big") + part)
     return digest.hexdigest()
 

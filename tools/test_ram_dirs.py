@@ -42,6 +42,8 @@ Tests [@ANCHOR: ram_dirs:write_usage]
 import fcntl
 import json
 import os
+import io
+import dataclasses
 import shutil
 import signal
 import subprocess
@@ -684,7 +686,7 @@ class CommandLineTest(RamTestCase):
     def test_release_removes_a_dead_jobs_directory_and_status_lists_it(self):
         finished = subprocess.Popen([sys.executable, "-c", "pass"])
         finished.wait()
-        target = ram_dirs.claim(os.path.join(self.root, "hams-cargo-target-gone"), pid=finished.pid)
+        target = ram_dirs.claim(os.path.join(self.root, "hams-cargo-target-gone"), pid=finished.pid, keep=True)  # a kept job waits for gc
         self.assertIn("hams-cargo-target-gone", self.cli("status").stdout)
         self.cli("release", "gone")
         self.assertFalse(os.path.exists(target))
@@ -692,6 +694,232 @@ class CommandLineTest(RamTestCase):
     # Tests [@ANCHOR: ram_dirs:cargo_target_dir]
     def test_a_bad_job_name_exits_2(self):
         self.assertEqual(self.cli("path", "../x").returncode, 2)
+
+
+DEAD_PID = 2 ** 22 - 3  # above the kernel's default pid_max of 4194304 minus a little: no such process
+
+
+class GarbageCollectionTest(RamTestCase):
+    """Fake directory trees, a fake /proc and fake owners: no real process or timing is involved."""
+
+    def make_job(self, name, pid=DEAD_PID, keep=False, age_hours=0.0, files=1, job="t"):
+        path = os.path.join(self.root, ram_dirs.CARGO_PREFIX + name)
+        ram_dirs.claim(path, pid, keep=keep, job=job)
+        os.makedirs(os.path.join(path, "debug", "deps"))
+        for index in range(files):
+            with open(os.path.join(path, "debug", "deps", f"f{index}"), "w") as handle:
+                handle.write("x" * 1000)
+        past = time.time() - age_hours * 3600
+        for base, dirs, names in os.walk(path):
+            for entry in dirs + names:
+                os.utime(os.path.join(base, entry), (past, past), follow_symlinks=False)
+            os.utime(base, (past, past))
+        return path
+
+    def fake_proc(self, **processes):
+        """A fake /proc: pid -> {"environ": {...}, "cwd": path, "fds": [paths]}."""
+        proc = os.path.join(self._tmp.name, "proc")
+        shutil.rmtree(proc, ignore_errors=True)
+        os.makedirs(proc)
+        for pid, info in processes.items():
+            base = os.path.join(proc, str(pid))
+            os.makedirs(os.path.join(base, "fd"))
+            with open(os.path.join(base, "environ"), "wb") as handle:
+                handle.write(b"\0".join(f"{k}={v}".encode() for k, v in info.get("environ", {}).items()) + b"\0")
+            if "cwd" in info:
+                os.symlink(info["cwd"], os.path.join(base, "cwd"))
+            for number, target in enumerate(info.get("fds", [])):
+                os.symlink(target, os.path.join(base, "fd", str(number)))
+        return proc
+
+    # Tests [@ANCHOR: ram_dirs:claim]
+    # Tests [@ANCHOR: ram_dirs:owner_record]
+    # Tests [@ANCHOR: ram_dirs:process_name]
+    def test_the_marker_records_who_owns_the_directory_and_whether_it_is_kept(self):
+        path = self.make_job("a", pid=os.getpid(), keep=True, job="gate")
+        record = ram_dirs.owner_record(path)
+        self.assertEqual((record["pid"], record["job"], record["keep"]), (os.getpid(), "gate", True))
+        self.assertEqual(record["name"], ram_dirs.process_name(os.getpid()))
+        self.assertTrue(record["name"])
+        self.assertIsNone(ram_dirs.process_name(DEAD_PID))
+        self.assertIsNone(ram_dirs.owner_record(os.path.join(self.root, "nothing")))
+        with open(os.path.join(path, ram_dirs.OWNER_FILE), "w") as handle:
+            json.dump({"pid": 7}, handle)  # a marker written before the extra fields existed
+        self.assertEqual(ram_dirs.owner_record(path), {"pid": 7, "start": None, "created": None, "name": None, "job": None, "keep": False})
+
+    # Tests [@ANCHOR: ram_dirs:newest_activity]
+    def test_activity_is_the_newest_of_modification_and_access_a_level_or_two_down(self):
+        old = self.make_job("old", age_hours=10)
+        self.assertGreater(time.time() - ram_dirs.newest_activity(old), 9 * 3600)
+        ram_dirs.claim(old, DEAD_PID)  # rewriting the marker changes the directory itself
+        self.assertLess(time.time() - ram_dirs.newest_activity(old), 60)
+        deep = self.make_job("deep", age_hours=10)
+        os.utime(os.path.join(deep, "debug", "deps", "f0"), None)  # a file one level further down was just read or written
+        self.assertLess(time.time() - ram_dirs.newest_activity(deep), 60)
+
+    # Tests [@ANCHOR: ram_dirs:references]
+    def test_a_process_refers_to_a_directory_by_its_environment_its_cwd_or_an_open_file(self):
+        path = self.make_job("busy")
+        other = self.make_job("other")
+        proc = self.fake_proc(**{
+            "101": {"environ": {"CARGO_TARGET_DIR": path}},
+            "102": {"environ": {"HOME": "/x", "TMPDIR": os.path.join(path, "tmp")}},
+            "103": {"cwd": os.path.join(path, "debug")},
+            "104": {"fds": [os.path.join(path, "debug", "deps", "f0")]},
+            "105": {"environ": {"CARGO_TARGET_DIR": other + "-not"}, "cwd": "/"},
+            "106": {"environ": {"CARGO_TARGET_DIR": "/somewhere/else"}},
+        })
+        self.assertEqual(ram_dirs.references(path, proc), [101, 102, 103, 104])
+        self.assertEqual(ram_dirs.references(other, proc), [])
+        self.assertEqual(ram_dirs.references(path, os.path.join(proc, "missing")), [])
+
+    # Tests [@ANCHOR: ram_dirs:gc]
+    # Tests [@ANCHOR: ram_dirs:log_removal]
+    # Tests [@ANCHOR: ram_dirs:gc_log_path]
+    def test_gc_removes_an_idle_unreferenced_ownerless_directory_and_logs_it(self):
+        gone = self.make_job("gone", keep=True, age_hours=4, files=5)
+        said = []
+        done = ram_dirs.gc(ram_dirs.policy(self.environ), say=said.append, proc_root=self.fake_proc())
+        self.assertEqual(done, [])  # a kept job waits 6 hours, not 3
+        self.assertTrue(os.path.isdir(gone))
+        os.utime(os.path.join(gone, "debug"), (time.time() - 7 * 3600,) * 2)
+        for base, dirs, names in os.walk(gone):
+            for entry in dirs + names:
+                os.utime(os.path.join(base, entry), (time.time() - 7 * 3600,) * 2)
+            os.utime(base, (time.time() - 7 * 3600,) * 2)
+        done = ram_dirs.gc(ram_dirs.policy(self.environ), say=said.append, proc_root=self.fake_proc())
+        self.assertEqual([(name, reason.split(" (")[0]) for name, _size, reason in done], [(ram_dirs.CARGO_PREFIX + "gone", "idle for 7.0 h")])
+        self.assertFalse(os.path.exists(gone))
+        log = open(ram_dirs.gc_log_path(ram_dirs.policy(self.environ))).read()
+        self.assertIn(f"removed {ram_dirs.CARGO_PREFIX}gone", log)
+        self.assertIn("idle 7.0 h", log)
+        self.assertIn(f"owner pid {DEAD_PID}", log)
+        self.assertIn("a kept job", log)
+        self.assertTrue([line for line in said if "removed" in line and "hams-ram-gc.log" in line])
+
+    # Tests [@ANCHOR: ram_dirs:gc]
+    def test_gc_keeps_a_live_owners_directory_a_referenced_one_a_fresh_one_and_the_lint_cache(self):
+        pol = ram_dirs.policy(self.environ)
+        live = self.make_job("live", pid=os.getpid(), age_hours=50)
+        referenced = self.make_job("referenced", keep=True, age_hours=50)
+        fresh_kept = self.make_job("freshkept", keep=True, age_hours=1)
+        lint = os.path.join(self.root, ram_dirs.LINT_CARGO_NAME, "d1")
+        os.makedirs(lint)
+        open(os.path.join(lint, "blob"), "w").write("y" * 5000)
+        os.utime(lint, (time.time() - 99 * 3600,) * 2)
+        proc = self.fake_proc(**{"77": {"cwd": referenced}})
+        said = []
+        self.assertEqual(ram_dirs.gc(pol, say=said.append, proc_root=proc), [])
+        for path in (live, referenced, fresh_kept, lint):
+            self.assertTrue(os.path.exists(path), path)
+        self.assertTrue([line for line in said if "process 77 still refers" in line])
+
+    # Tests [@ANCHOR: ram_dirs:gc]
+    def test_gc_removes_a_finished_job_at_once_but_not_a_marked_job_that_is_still_running(self):
+        pol = ram_dirs.policy(self.environ)
+        finished = self.make_job("finished", age_hours=0)
+        running = self.make_job("running", pid=os.getpid(), age_hours=0)
+        done = ram_dirs.gc(pol, say=lambda text: None, proc_root=self.fake_proc())
+        self.assertEqual([name for name, _s, _r in done], [ram_dirs.CARGO_PREFIX + "finished"])
+        self.assertFalse(os.path.exists(finished))
+        self.assertTrue(os.path.exists(running))
+
+    # Tests [@ANCHOR: ram_dirs:gc]
+    def test_gc_treats_an_unmarked_directory_by_its_idle_time_and_dry_run_removes_nothing(self):
+        path = os.path.join(self.root, ram_dirs.CARGO_PREFIX + "byhand")
+        os.makedirs(os.path.join(path, "debug"))
+        past = time.time() - 5 * 3600
+        for entry in (os.path.join(path, "debug"), path):
+            os.utime(entry, (past, past))
+        pol = ram_dirs.policy(dict(self.environ, HAMS_RAM_IDLE_HOURS="3"))
+        self.assertEqual(pol.idle_hours, 3.0)
+        would = ram_dirs.gc(pol, say=lambda text: None, proc_root=self.fake_proc(), dry_run=True)
+        self.assertEqual(len(would), 1)
+        self.assertTrue(os.path.isdir(path))
+        self.assertFalse(os.path.exists(ram_dirs.gc_log_path(pol)))
+        self.assertEqual(len(ram_dirs.gc(pol, say=lambda text: None, proc_root=self.fake_proc())), 1)
+        self.assertFalse(os.path.exists(path))
+        longer = ram_dirs.policy(dict(self.environ, HAMS_RAM_IDLE_HOURS="9", HAMS_RAM_KEEP_HOURS="bad"))
+        self.assertEqual((longer.idle_hours, longer.keep_hours), (9.0, 6.0))
+
+    # Tests [@ANCHOR: ram_dirs:gc]
+    def test_gc_trims_the_lint_cache_when_it_is_over_its_budget_oldest_first_and_logs_it(self):
+        pol = dataclasses.replace(ram_dirs.policy(self.environ), lint_budget_gb=0.000004)  # 4 KB
+        base = os.path.join(self.root, ram_dirs.LINT_CARGO_NAME)
+        for name, age in (("old", 5), ("new", 1)):
+            os.makedirs(os.path.join(base, name))
+            open(os.path.join(base, name, "blob"), "w").write("z" * 3000)
+            past = time.time() - age * 3600
+            os.utime(os.path.join(base, name), (past, past))
+        done = ram_dirs.gc(pol, say=lambda text: None, proc_root=self.fake_proc())
+        self.assertEqual([name for name, _s, _r in done], [f"{ram_dirs.LINT_CARGO_NAME}/old"])
+        self.assertTrue(os.path.isdir(os.path.join(base, "new")))
+        self.assertIn("lint cache budget", open(ram_dirs.gc_log_path(pol)).read())
+
+    # Tests [@ANCHOR: ram_dirs:sweep]
+    def test_sweep_leaves_a_dead_kept_job_to_gc_and_logs_what_it_removes(self):
+        kept = self.make_job("kept", keep=True)
+        plain = self.make_job("plain")
+        removed = ram_dirs.sweep(ram_dirs.policy(self.environ), say=lambda text: None)
+        self.assertEqual(removed, [ram_dirs.CARGO_PREFIX + "plain"])
+        self.assertTrue(os.path.isdir(kept))
+        self.assertFalse(os.path.exists(plain))
+        self.assertIn("its job is gone", open(ram_dirs.gc_log_path(ram_dirs.policy(self.environ))).read())
+
+    # Tests [@ANCHOR: ram_dirs:describe_owner]
+    # Tests [@ANCHOR: ram_dirs:status_lines]
+    def test_status_names_the_owner_pid_program_job_and_age_instead_of_unmarked(self):
+        self.make_job("mine", pid=os.getpid(), job="gate")
+        self.make_job("dead", keep=True, job="old", age_hours=1)
+        os.makedirs(os.path.join(self.root, ram_dirs.CARGO_PREFIX + "byhand"))
+        lines = ram_dirs.status_lines(ram_dirs.policy(self.environ))
+        text = "\n".join(lines)
+        self.assertIn(f"owner pid {os.getpid()} (", text)
+        self.assertIn("alive, started", text)
+        self.assertIn("job gate", text)
+        self.assertIn(f"owner pid {DEAD_PID}", text)
+        self.assertIn("dead", text)
+        self.assertIn(", kept", text)
+        self.assertRegex(text, r"hams-cargo-target-byhand: [0-9.]+ GB, unmarked, idle")
+        self.assertIn("idle limit 3 h, kept jobs 6 h", lines[0])
+
+    # Tests [@ANCHOR: ram_dirs:run_job]
+    def test_a_running_job_warns_once_at_eighty_percent_of_its_limit_naming_its_owner(self):
+        said = []
+        environ = dict(self.environ, HAMS_RAM_JOB_MAX_GB="0.00001")  # about 10 KB
+        code = ("import os,time; t=os.environ['CARGO_TARGET_DIR']; open(os.path.join(t,'big'),'w').write('x'*9000); time.sleep(0.6)")
+        with self.free(60):
+            ram_dirs.run_job("w1", [sys.executable, "-c", code], environ=environ, say=said.append, interval=0.2, keep=True)
+        warnings = [line for line in said if line.startswith("WARNING job w1")]
+        self.assertEqual(len(warnings), 1, said)
+        self.assertIn(f"pid {os.getpid()}", warnings[0])
+        record = ram_dirs.owner_record(os.path.join(self.root, ram_dirs.CARGO_PREFIX + "w1"))
+        self.assertEqual((record["job"], record["keep"]), ("w1", True))
+
+    # Tests [@ANCHOR: ram_dirs:main]
+    def test_the_gc_command_has_a_dry_run_and_status_runs_gc_first(self):
+        old = self.make_job("old", keep=True, age_hours=9)
+        with mock.patch.dict(os.environ, self.environ), mock.patch.object(ram_dirs, "references", return_value=[]):
+            with mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+                self.assertEqual(ram_dirs.main(["gc", "--dry-run"]), 0)
+            self.assertIn("would remove " + ram_dirs.CARGO_PREFIX + "old", err.getvalue())
+            self.assertTrue(os.path.isdir(old))
+            with mock.patch("sys.stdout", new_callable=io.StringIO), mock.patch("sys.stderr", new_callable=io.StringIO):
+                self.assertEqual(ram_dirs.main(["status"]), 0)
+            self.assertFalse(os.path.exists(old))
+
+
+class GcUnitFilesTest(unittest.TestCase):
+    # Tests [@ANCHOR: ram_dirs:gc]
+    def test_the_user_timer_runs_the_gc_command_and_is_only_a_file_until_someone_enables_it(self):
+        directory = os.path.join(_HERE, "ram_dirs_units")
+        service = open(os.path.join(directory, "hams-ram-dirs-gc.service"), encoding="utf-8").read()
+        timer = open(os.path.join(directory, "hams-ram-dirs-gc.timer"), encoding="utf-8").read()
+        self.assertIn("ram_dirs.py gc", service)
+        self.assertIn("Type=oneshot", service)
+        self.assertIn("OnUnitActiveSec=30min", timer)
+        self.assertNotIn("[Install]", service, "the service is started by the timer, not enabled itself")
+        self.assertIn("WantedBy=timers.target", timer)
 
 
 if __name__ == "__main__":

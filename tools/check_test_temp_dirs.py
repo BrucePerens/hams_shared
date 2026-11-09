@@ -30,6 +30,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 
 SKIP_DIRS = {
@@ -42,9 +43,32 @@ _CFG_TEST = re.compile(r"^\s*#\[cfg\(test\)\]")
 _MARK = re.compile(r"temp-dir-(?:helper|ignore)\s*:\s*\S")
 
 
+def _tracked_rust_files(root):
+    """The `.rs` files git tracks under `root` (submodules included), or None when `root` is not inside a git work tree.
+
+    Only tracked files belong to the tree being linted. A raw directory walk also visits whatever else sits in the
+    directory: another agent's worktree made with a relative path under the checkout (`tmp/<name>/hams_open`), an
+    untracked scratch copy, a build output. Those are not part of this tree and fail it with someone else's findings."""
+    try:
+        done = subprocess.run(
+            ["git", "-C", root, "ls-files", "-z", "--cached", "--recurse-submodules", "--", "*.rs"],
+            capture_output=True, check=True, timeout=120,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return [os.path.join(root, rel) for rel in done.stdout.decode("utf-8", "replace").split("\0") if rel]
+
+
 def find_rust_files(root):
+    tracked = _tracked_rust_files(root)
+    if tracked is not None:
+        for path in sorted(tracked):
+            if not any(part in SKIP_DIRS for part in os.path.relpath(path, root).split(os.sep)[:-1]):
+                yield path
+        return
     for base, dirs, files in os.walk(root):
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not (d.startswith("hams_") and False)]
+        # Not a git tree: skip other checkouts nested inside it (a directory with its own `.git`).
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not os.path.exists(os.path.join(base, d, ".git"))]
         for name in files:
             if name.endswith(".rs"):
                 yield os.path.join(base, name)

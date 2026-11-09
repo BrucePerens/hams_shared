@@ -658,7 +658,7 @@ class EndToEndTests(unittest.TestCase):
         make_repo(self.shared, {"README": "shared\n"})
         os.makedirs(os.path.join(self.shared, "tools"))
         for name in ("run_linters.py", "lint_layout.py", "lint_exec.py", "lint_lock.py", "lock_queue.py", "lint_remote.py", "lint_cache.py", "lint_test_durations.py",
-                     "lint_batch.py", "batch_queue.py", "runner_slots.py"):
+                     "lint_batch.py", "batch_queue.py", "runner_slots.py", "rust_impact.py", "relay_structural.py", "pytest_impact.py"):
             shutil.copy(os.path.join(TOOLS, name), os.path.join(self.shared, "tools", name))
         git(self.shared, "add", "-A")
         git(self.shared, "commit", "-q", "-m", "tools")
@@ -704,6 +704,80 @@ class EndToEndTests(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(self.remote_home, "mirror", "hams_com", "c.txt")))
         manifest = json.load(open(os.path.join(self.remote_home, "mirror", "hams_com", ".hams_lint_sync"), encoding="utf-8"))
         self.assertEqual(manifest["sha"], lr.head_sha(self.com))
+
+    def stale_sibling(self):
+        """The 2026-11-08 failure: the mirror of hams_open is at an OLDER commit while its manifest claims the current one."""
+        status, _problems, _seconds = self.run_remote(self.bundle(("say", ["/usr/bin/python3", "-c", "pass"])))
+        self.assertEqual(status, "ok", "\n".join(self.lines))
+        mirror = os.path.join(self.remote_home, "mirror", "hams_open")
+        write(os.path.join(self.open, "o.txt"), "fixed on main\n")
+        write(os.path.join(self.open, "added.txt"), "new\n")
+        git(self.open, "add", "-A")
+        git(self.open, "commit", "-q", "-m", "fix")
+        manifest_path = os.path.join(mirror, ".hams_lint_sync")
+        manifest = json.load(open(manifest_path, encoding="utf-8"))
+        manifest["sha"] = lr.head_sha(self.open)  # the lie: the mirror still holds the old tree
+        json.dump(manifest, open(manifest_path, "w", encoding="utf-8"))
+        self.lines.clear()
+        return mirror
+
+    def test_a_mirror_at_an_older_commit_than_its_manifest_says_is_rebuilt_before_any_step_runs(self):
+        """Tests [@ANCHOR: lint_remote:mirror_problems] and [@ANCHOR: lint_remote:siblings_text]"""
+        mirror = self.stale_sibling()
+        info = {}
+        status, problems, _seconds = lr.run_on_machine(
+            "fake", self.machine, self.transport, self.roots, "hams_com", self.bundle(("say", ["/usr/bin/python3", "-c", "pass"])),
+            self.lines.append, log=self.lines.append, siblings_out=info)
+        text = "\n".join(self.lines)
+        self.assertEqual((status, problems), ("ok", []), text)
+        self.assertIn("the mirror differs from the local trees", text)
+        self.assertEqual(open(os.path.join(mirror, "o.txt"), encoding="utf-8").read(), "fixed on main\n")
+        self.assertTrue(os.path.isfile(os.path.join(mirror, "added.txt")))
+        expected = "siblings: hams_com@%s hams_open@%s hams_shared@%s" % tuple(lr.head_sha(self.roots[r])[:12] for r in ("hams_com", "hams_open", "hams_shared"))
+        self.assertIn(expected, self.lines[[i for i, line in enumerate(self.lines) if "siblings:" in line][0]])
+        self.assertEqual(info["hams_open"]["sha"], lr.head_sha(self.open))
+
+    def test_a_mirror_that_cannot_be_brought_to_the_local_commits_runs_nothing_there(self):
+        self.stale_sibling()
+        real = lr.sync_repo
+        calls = []
+
+        def broken_sync(transport, repo, dest, **kw):  # a rebuild that leaves the old files in place
+            calls.append(dest)
+            return {"sha": lr.head_sha(repo), "dirty": False}
+
+        with mock.patch.object(lr, "sync_repo", broken_sync):
+            status, problems, _seconds = lr.run_on_machine(
+                "fake", self.machine, self.transport, self.roots, "hams_com",
+                self.bundle(("say", ["/usr/bin/python3", "-c", "print('RAN-ON-STALE-TREE')"])), self.lines.append, log=self.lines.append)
+        self.assertIs(real, lr.sync_repo)
+        self.assertEqual(status, "infra", "\n".join(self.lines))
+        self.assertIn("not at the local commits", problems[0])
+        self.assertIn("hams_open differs: o.txt", problems[0])
+        self.assertFalse(any("RAN-ON-STALE-TREE" in line for line in self.lines), "no step may run against a stale mirror")
+
+    def test_files_left_behind_by_an_earlier_sync_are_removed_and_caches_are_ignored(self):
+        self.run_remote(self.bundle(("say", ["/usr/bin/python3", "-c", "pass"])))
+        mirror = os.path.join(self.remote_home, "mirror", "hams_com")
+        write(os.path.join(mirror, "deleted_upstream.py"), "stale\n")
+        write(os.path.join(mirror, "pkg", "__pycache__", "x.pyc"), "cache\n")
+        write(os.path.join(mirror, ".hams_lint_sync"), open(os.path.join(mirror, ".hams_lint_sync"), encoding="utf-8").read())  # the manifest is never "stale"
+        self.lines.clear()
+        found = lr.mirror_problems(self.transport, self.com, lr.head_sha(self.com), mirror, log=self.lines.append)
+        self.assertEqual(found, [])
+        self.assertFalse(os.path.exists(os.path.join(mirror, "deleted_upstream.py")))
+        self.assertTrue(os.path.exists(os.path.join(mirror, "pkg", "__pycache__", "x.pyc")))
+        self.assertTrue(any("removing 1 stale file" in line for line in self.lines), self.lines)
+
+    def test_uncommitted_files_of_the_branch_under_test_are_part_of_the_exact_tree(self):
+        self.run_remote(self.bundle(("say", ["/usr/bin/python3", "-c", "pass"])))
+        mirror = os.path.join(self.remote_home, "mirror", "hams_com")
+        write(os.path.join(self.com, "c.txt"), "edited, not committed\n")
+        self.assertIn("differs: c.txt", lr.mirror_problems(self.transport, self.com, lr.head_sha(self.com), mirror))
+        status, _problems, _seconds = self.run_remote(self.bundle(("say", ["/usr/bin/python3", "-c", "pass"])))
+        self.assertEqual(status, "ok", "\n".join(self.lines))
+        self.assertEqual(open(os.path.join(mirror, "c.txt"), encoding="utf-8").read(), "edited, not committed\n")
+        self.assertIn("hams_com@%s+dirty" % lr.head_sha(self.com)[:12], "\n".join(self.lines))
 
     def test_a_machine_whose_run_lock_is_stuck_does_not_hang_the_run_it_falls_back(self):
         holder = subprocess.Popen(
@@ -778,6 +852,9 @@ class EndToEndTests(unittest.TestCase):
 
         text = run_linters.stamp_text("changed", ["flake8", "pytest tools/[1of4]"], ["mac1-vm", "bruce-yoga"])
         self.assertIn("hosts=bruce-yoga,mac1-vm", text)
+        sibling = run_linters.stamp_text("changed", ["flake8"], ["mac1-vm"], siblings=["mac1-vm/hams_open@abc/hams_shared@def"])
+        self.assertIn("siblings=mac1-vm/hams_open@abc/hams_shared@def", sibling)
+        self.assertNotIn("siblings=", run_linters.stamp_text("changed", ["flake8"], ["mac1-vm"]))
         mode, count, names = lint_stamp_gate.parse_stamp(text)
         self.assertEqual((mode, count), ("changed", 2))
         self.assertEqual(names, {"flake8", "pytest"})

@@ -22,6 +22,9 @@ import batch_queue
 import lint_cache
 import lint_exec
 import lint_batch
+import relay_structural
+import pytest_impact
+import rust_impact
 import lint_layout
 import lint_lock
 import lint_remote
@@ -489,13 +492,15 @@ def stamp_repos(repo_root, tools_dir, dir_path, layout=None):
     return repos
 
 
-def stamp_text(mode, step_names, hosts=(), known_red=""):
+def stamp_text(mode, step_names, hosts=(), known_red="", siblings=(), impact=()):
     """One line: mode, time, how many steps were selected and their names (the part of a name
     before `[`). prmerge.sh reads it to refuse a stamp that selected nothing for a code change."""
     bases = sorted({name.split("[")[0].split(" ")[0] for name in step_names})
     stamp_time = time.strftime("%Y-%m-%dT%H:%M:%S")
     host_field = f" hosts={','.join(sorted(set(hosts)))}" if hosts else ""
-    return f"{mode} {stamp_time} steps={len(step_names)} names={','.join(bases)}{host_field}{known_red}\n"
+    sibling_field = f" siblings={','.join(sorted(set(siblings)))}" if siblings else ""  # the commits a remote machine's mirrors held
+    impact_field = f" impact={','.join(impact)}" if impact else ""  # pytest steps run on a selection of their test files (pytest_impact.py)
+    return f"{mode} {stamp_time} steps={len(step_names)} names={','.join(bases)}{host_field}{sibling_field}{impact_field}{known_red}\n"
 
 
 def write_batch_stamp(tip, step_names, batch_id, with_tips=(), known_red=""):
@@ -522,7 +527,7 @@ def stamped_head_repo(repo_root, dir_path, layout=None):
     return dir_path if layout is not None else repo_root
 
 
-def _write_pass_stamps(repos, mode, step_names=(), hosts=(), known_red=""):
+def _write_pass_stamps(repos, mode, step_names=(), hosts=(), known_red="", siblings=(), impact=()):
     """Record "run_linters.py passed (mode) with a clean tree at commit <sha>" for each repo
     involved. devbox_tools/prmerge.sh refuses to merge a branch whose tip has no stamp, so a
     PR cannot land without the full or `--changed` run having passed on exactly that code.
@@ -536,7 +541,7 @@ def _write_pass_stamps(repos, mode, step_names=(), hosts=(), known_red=""):
         try:
             os.makedirs(pass_stamp_dir(), exist_ok=True)
             with open(os.path.join(pass_stamp_dir(), head[0]), "w", encoding="utf-8") as handle:
-                handle.write(stamp_text(mode, step_names, hosts, known_red))
+                handle.write(stamp_text(mode, step_names, hosts, known_red, siblings, impact))
         except OSError as error:
             print(f"(pass stamp not written: {error})", file=sys.stderr)
 
@@ -1320,6 +1325,20 @@ def main():
     def _fail_now(name, message):
         steps.append(lint_exec.Step(name=name, static_output=message, always=True))
 
+    impact_counts = []  # `tools:57of145`, one per narrowed step: the stamp's `impact=` field
+    impact_notes = []  # one line per pytest step whose test files were narrowed; printed with the run and counted in the stamp
+
+    def _impact_select(step_name, root, files, also=()):
+        """`files` of a pytest step, narrowed under `--changed` to the test files that depend on a changed file (pytest_impact.py); all of them for a full
+        run, a run scoped by module names or more changed files than a list can carry. Prints which files were skipped (once the steps are known to run)."""
+        if changed_set is None or target_modules_str or len(changed_set) > rust_impact.MAX_PATHS or not files:
+            return list(files)
+        chosen, skipped_files, why = pytest_impact.select_tests(root, files, changed_set, also)
+        if skipped_files:
+            impact_notes.append(pytest_impact.describe(step_name, root, chosen, skipped_files, why))
+            impact_counts.append(f"{step_name.strip('/').replace('/', '-')}:{len(chosen)}of{len(files)}")
+        return chosen
+
     # 5. Modules Discovery
     target_modules_str = options.modules
     changed_set = None
@@ -1510,6 +1529,13 @@ def main():
     # zero_sudo/docs/stories, outside the scope (2026-10-29, #957, merged with PRMERGE_SKIP_LINT).
     # The sibling repository is named explicitly: verify_anchors would otherwise look for it
     # beside the directory it was started from, and a worktree has no sibling there.
+    # Under --changed the Rust checkers check the crates with a changed file and their dependents only (rust_impact.py); a full run, a run of
+    # the checker tooling itself, or a list too long to pass checks every crate.
+    rust_changed_args = (
+        [rust_impact.CHANGED_FLAG] + sorted(changed_set)
+        if changed_set is not None and not run_all and len(changed_set) <= rust_impact.MAX_PATHS
+        else []
+    )
     anchor_targets = [repo_root] if (changed_set is not None and not target_modules_str) else targets
     if anchor_targets == [repo_root] and sibling_dir and os.path.isdir(sibling_dir):
         # Both repositories are scanned as primary, as `verify_anchors.py . ../hams_open` does. Handed one
@@ -1806,6 +1832,7 @@ def main():
     # directory, the user's systemd bus, the dev box's Odoo/ldap3/Chrome versions): they stay on the
     # machine that started the run, in a step of their own that --remote never sends away
     # (lint_remote.requirements_for). Measured 2026-11-02 on the Odoo test VM: 17 failures, all of them these.
+    tool_test_files = _impact_select("tools/", os.path.join(dir_path, "tools"), tool_test_files)
     host_bound = sorted(f for f in tool_test_files if os.path.basename(f) in HOST_BOUND_TOOL_TESTS)
     tool_test_files = [f for f in tool_test_files if f not in host_bound]
     if host_bound:
@@ -1864,7 +1891,9 @@ def main():
     # this step, nothing would ever run it (or any future scripts/test_*.py
     # suite) automatically either, the exact gap step 27 already closed for
     # tools/.
-    scripts_test_files = sorted(glob.glob(os.path.join(dir_path, "scripts", "test_*.py")))
+    scripts_test_files = _impact_select(
+        "scripts/", os.path.join(dir_path, "scripts"), sorted(glob.glob(os.path.join(dir_path, "scripts", "test_*.py")))
+    )
     if scripts_test_files:
         _add(
             "pytest scripts/",
@@ -1977,6 +2006,11 @@ def main():
         for dirs in _group_dirs(dirs_of_daemon):
             merged = len(dirs) > 1
             files_here = sorted(f for f in daemon_test_files if os.path.dirname(f) in dirs)
+            files_here = _impact_select(
+                f"daemons/{os.path.relpath(daemon_dir, daemons_root)}", daemon_dir, files_here, also=loose_daemon_files
+            )
+            if not files_here:
+                continue
             # A test_dir one level below its daemon (tools/, tests/) imports its
             # daemon's own main module by bare name (e.g. hams_simulated_bots/
             # tests/test_main.py's `from main import ...`) -- that only
@@ -2137,7 +2171,7 @@ def main():
     # the full repo, not a possibly-scoped `targets` list.
     _add(
         "check_cargo_clippy",
-        [python_exec, os.path.join(dir_path, "tools", "check_cargo_clippy.py"), dir_path],
+        [python_exec, os.path.join(dir_path, "tools", "check_cargo_clippy.py"), dir_path] + rust_changed_args,
     )
 
     # 37. check_binary_manifest_consistency -- catches a real drift class found 2026-08-27
@@ -2433,6 +2467,20 @@ def main():
     ],
     )
 
+    # 51b. relay structural tests -- the relay's fast group of source-scanning `cargo test` tests (relay_structural.py): the privilege inventory, the
+    # exposure audit, the keying and key-material scans, the demo-lock route table, the manuals rules. Lint ran none of the relay's cargo tests, and three
+    # relay merges on 2026-11-08 turned relay main red with tests of exactly this kind. Selected when a file of the relay, of a crate it depends on or of a
+    # crate that depends on it changes (`watched_dirs`); the merge queue's combined run selects it the same way. Not cached: the tests read the sources
+    # and tables of the whole crate, and a recorded pass would hide a rename.
+    relay_dirs = relay_structural.watched_dirs(repo_root)
+    if relay_dirs:
+        _add(
+            "relay structural tests",
+            [python_exec, os.path.join(dir_path, "tools", "relay_structural.py"), repo_root],
+            inputs=(tuple(relay_dirs), None),
+            cacheable=False,
+        )
+
     # 52. check_cargo_fmt -- `cargo fmt -- --check` over the same crates step 36 lints. CI runs
     # this check on only one relay leg, which can start hours after a push; on 2026-09-15 three
     # rustfmt-only fix commits followed tested, clippy-clean relay feature commits. Check only,
@@ -2440,7 +2488,7 @@ def main():
     # always scans the full repo, not a possibly-scoped `targets` list.
     _add(
         "check_cargo_fmt",
-        [python_exec, os.path.join(dir_path, "tools", "check_cargo_fmt.py"), dir_path],
+        [python_exec, os.path.join(dir_path, "tools", "check_cargo_fmt.py"), dir_path] + rust_changed_args,
     )
 
     # 53. check_claims_freshness -- ADR 0091's own real, named follow-on ("not yet wired into
@@ -2526,6 +2574,8 @@ def main():
             )
             if skipped:
                 print("   skipped: " + ", ".join(step.name for step, _reason in skipped))
+            for note in impact_notes:
+                print(note)
     if options.list_json:
         print(json.dumps([lint_exec.step_to_dict(step) for step in steps], indent=1))
         sys.exit(0)
@@ -2686,8 +2736,9 @@ def main():
                 fallback_lock[0] = taken
         return lint_exec.execute(wanted, options.jobs)
 
+    remote_siblings = []
     extra_results, remote_hosts = lint_remote.collect(
-        remote_jobs, all_steps, execute_here, lint_exec.Result, on_unfit=lint_remote.record_unfit
+        remote_jobs, all_steps, execute_here, lint_exec.Result, on_unfit=lint_remote.record_unfit, siblings_out=remote_siblings
     )
     results += extra_results
     results, timeout_retried = retry_timed_out_steps(results, all_steps)
@@ -2740,6 +2791,8 @@ def main():
                 [step.name for step in all_steps],
                 remote_hosts,
                 known_red,
+                remote_siblings,
+                impact_counts,
             )
 
     if linters_failed:
