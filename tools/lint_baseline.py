@@ -18,6 +18,7 @@ run of the linters on a clean main tree. The reasons it is not a file in the rep
 import fcntl
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -110,7 +111,7 @@ def max_age_days(environ=None):
         value = float(text)
     except ValueError:
         value = float("nan")
-    if not value > 0 or value == float("inf"):
+    if not math.isfinite(value) or value <= 0:
         raise ValueError("%s=%r is not a finite number of days above 0" % (MAX_AGE_ENV, text))
     return value
 
