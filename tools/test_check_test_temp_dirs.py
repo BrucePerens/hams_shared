@@ -11,6 +11,7 @@ import tempfile
 import unittest
 
 import check_test_temp_dirs as chk  # noqa: E402
+import tree_files_testkit as kit  # noqa: E402
 
 HAND_BUILT = 'let d = std::env::temp_dir().join(format!("x_{}", std::process::id()));\n'
 
@@ -92,6 +93,21 @@ class CheckTestTempDirs(unittest.TestCase):
         self.write("nested/.git", "gitdir: /nowhere\n")
         self.write("nested/tests/theirs.rs", bad)
         self.assertEqual(list(chk.scan([self.tmp])), [os.path.join("daemons", "a", "tests", "mine.rs")])
+
+
+class NestedForeignWorktreeTests(unittest.TestCase):
+    """A second worktree nested under the checkout (another agent's `tmp/<name>`) is not part of this tree."""
+
+    def setUp(self):
+        self.tmp = os.path.realpath(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_a_nested_foreign_worktree_is_not_scanned(self):
+        kit.checkout_with_nested_worktree(self.tmp, 'daemons/a/tests/mine.rs', 'fn t() {}\n')
+        found = list(chk.find_rust_files(self.tmp))
+        self.assertEqual([os.path.relpath(p, self.tmp) for p in found], [os.path.join(*['daemons', 'a', 'tests', 'mine.rs'])])
 
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@ import tempfile
 import unittest
 
 import check_window_fetch_reassignment as chk  # noqa: E402
+import tree_files_testkit as kit  # noqa: E402
 
 
 def _write(path, content):
@@ -143,6 +144,22 @@ class CheckWindowFetchReassignmentTests(unittest.TestCase):
         _write(os.path.join(self.tmp, "b.test.js"), "window.fetch = b;\n")
         violations = chk.check_window_fetch_reassignment(self.tmp)
         self.assertEqual(len(violations), 2)
+
+
+class NestedForeignWorktreeTests(unittest.TestCase):
+    """A second worktree nested under the checkout (another agent's `tmp/<name>`) is not part of this tree."""
+
+    def setUp(self):
+        self.tmp = os.path.realpath(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_a_nested_foreign_worktree_is_not_scanned(self):
+        kit.checkout_with_nested_worktree(self.tmp, 'web/a.test.js', 'window.fetch = () => 1;\n')
+        findings = chk.check_window_fetch_reassignment(self.tmp)
+        self.assertEqual(len(findings), 1, findings)
+        self.assertTrue(findings[0].startswith('web/a.test.js' + ":"), findings)
 
 
 if __name__ == "__main__":

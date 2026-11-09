@@ -15,6 +15,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 import check_float_isfinite as chk  # noqa: E402
+import tree_files_testkit as kit  # noqa: E402
 
 
 def _write_py(tmp, content):
@@ -353,6 +354,21 @@ class ResultCacheMainTests(unittest.TestCase):
             with open(path, "w") as handle:
                 handle.write(self.BAD)
             self.assertEqual(self.run_main(root, cache_home), first)
+
+
+class NestedForeignWorktreeTests(unittest.TestCase):
+    """A second worktree nested under the checkout (another agent's `tmp/<name>`) is not part of this tree."""
+
+    def setUp(self):
+        self.tmp = os.path.realpath(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_a_nested_foreign_worktree_is_not_scanned(self):
+        kit.checkout_with_nested_worktree(self.tmp, 'pkg/mod.py', 'x = 1\n')
+        found = chk.find_python_files(self.tmp)
+        self.assertEqual([os.path.relpath(p, self.tmp) for p in found], [os.path.join(*['pkg', 'mod.py'])])
 
 
 if __name__ == "__main__":
