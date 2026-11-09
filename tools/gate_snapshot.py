@@ -414,6 +414,9 @@ def create_snapshot(workspace=DEFAULT_WORKSPACE, parent=None, shards=DEFAULT_SHA
         if not (isinstance(previous, list) and all(isinstance(s, list) for s in previous)):
             raise SnapshotError("%s: expected a JSON list of lists of module names" % shards_file)
     shard_lists = make_shards(discover_modules(trees), shards, previous)
+    if not shard_lists:
+        # No module found in either tree (a wrong checkout, an empty sparse tree): a snapshot with nothing to test would give the canary a vacuous green.
+        raise SnapshotError("no Odoo module (no __manifest__.py at the root of %s or %s): there is nothing to test" % (trees.com, trees.open))
     relay = artifact_output(ARTIFACTS[1], trees, cargo_target_dir)
     commands = []
     for number, shard in enumerate(shard_lists, 1):
