@@ -6,6 +6,9 @@ Tests for dispatch_ok.py. Every test writes its own stats file in a temporary di
 
 Tests [@ANCHOR: dispatch_ok:evaluate]
 Tests [@ANCHOR: dispatch_ok:stats_format]
+Tests [@ANCHOR: dispatch_ok:landing_limits]
+Tests [@ANCHOR: dispatch_ok:landing_verdict]
+Tests [@ANCHOR: dispatch_ok:landing]
 """
 
 import io
@@ -102,6 +105,93 @@ class EvaluateTests(unittest.TestCase):
         with redirect_stdout(buffer):
             self.assertEqual(dispatch_ok.main(["--file", self.path, "--quiet"]), 1)
         self.assertEqual(buffer.getvalue(), "")
+
+
+def entry(state, age_minutes=1, slug="BrucePerens/hams_com"):
+    return {"repo": "/home/bruce/workspace/" + slug.split("/")[1], "slug": slug, "pr": 1, "state": state, "enqueued": NOW - age_minutes * 60}
+
+
+class LandingTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.queue = os.path.join(self.tmp.name, "queue.json")
+        self.stats = os.path.join(self.tmp.name, "stats.json")
+
+    def verdict(self, entries):
+        return dispatch_ok.landing_verdict(entries, now=lambda: NOW)
+
+    def write_queue(self, entries):
+        with open(self.queue, "w") as handle:
+            json.dump({"version": 1, "entries": entries}, handle)
+
+    def test_empty_and_short_queue_is_ok(self):
+        self.assertEqual(self.verdict([])[0], "LANDING_OK")
+        state, reasons, summary = self.verdict([entry("queued", 5), entry("testing", 9, "BrucePerens/hams_open"), entry("merged", 500)])
+        self.assertEqual((state, reasons), ("LANDING_OK", []))
+        self.assertIn("1 queued, 1 testing", summary)
+        self.assertIn("hams_com 1q/0t", summary)
+        self.assertIn("hams_open 0q/1t", summary)
+
+    def test_depth_limit_is_more_than_25(self):
+        self.assertEqual(self.verdict([entry("queued")] * 20 + [entry("testing")] * 5)[0], "LANDING_OK")
+        state, reasons, _ = self.verdict([entry("queued")] * 20 + [entry("testing")] * 6)
+        self.assertEqual(state, "LANDING_HOLD")
+        self.assertIn("26", reasons[0])
+
+    def test_oldest_queued_wait_limit_is_over_60_minutes(self):
+        self.assertEqual(self.verdict([entry("queued", 60)])[0], "LANDING_OK")
+        state, reasons, _ = self.verdict([entry("queued", 61)])
+        self.assertEqual(state, "LANDING_HOLD")
+        self.assertIn("61 min", reasons[0])
+
+    def test_old_testing_or_finished_entries_do_not_trip_the_age_limit(self):
+        self.assertEqual(self.verdict([entry("testing", 300), entry("failed", 900), entry("merged", 900)])[0], "LANDING_OK")
+
+    def test_malformed_entries_are_ignored(self):
+        self.assertEqual(self.verdict(["x", None, {"state": "queued"}, {"state": "queued", "enqueued": "no"}])[0], "LANDING_OK")
+
+    def test_landing_reads_the_file(self):
+        self.assertEqual(dispatch_ok.landing(os.path.join(self.tmp.name, "absent.json"), now=lambda: NOW)[0], "LANDING_OK")
+        self.write_queue([entry("queued", 90)])
+        self.assertEqual(dispatch_ok.landing(self.queue, now=lambda: NOW)[0], "LANDING_HOLD")
+
+    def test_unreadable_or_malformed_queue_file_is_hold(self):
+        with open(self.queue, "w") as handle:
+            handle.write("{nope")
+        self.assertEqual(dispatch_ok.landing(self.queue)[0], "LANDING_HOLD")
+        with open(self.queue, "w") as handle:
+            json.dump({"entries": "x"}, handle)
+        self.assertEqual(dispatch_ok.landing(self.queue)[0], "LANDING_HOLD")
+
+    def run_main(self, *args):
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = dispatch_ok.main(["--file", self.stats, "--queue-file", self.queue, *args])
+        return code, buffer.getvalue()
+
+    def test_landing_hold_does_not_change_the_agent_start_exit_status(self):
+        with open(self.stats, "w") as handle:
+            json.dump({"written_epoch": __import__("time").time(), "dispatch": {"state": "OK", "reasons": ["ok"]}}, handle)
+        self.write_queue([dict(entry("queued"), enqueued=0)])
+        code, text = self.run_main()
+        self.assertEqual(code, 0)
+        lines = text.splitlines()
+        self.assertEqual(lines[0], "OK")
+        self.assertIn("LANDING_HOLD", lines)
+        self.assertNotIn("\nHOLD\n", text)
+        code, _ = self.run_main("--landing")
+        self.assertEqual(code, dispatch_ok.EXIT_LANDING_HOLD)
+        self.assertEqual(self.run_main("--quiet", "--landing")[1], "")
+
+    def test_agent_hold_does_not_change_the_landing_exit_status(self):
+        with open(self.stats, "w") as handle:
+            json.dump({"written_epoch": __import__("time").time(), "dispatch": {"state": "HOLD", "reasons": ["memory"]}}, handle)
+        self.write_queue([])
+        self.assertEqual(self.run_main()[0], 1)
+        code, text = self.run_main("--landing")
+        self.assertEqual(code, 0)
+        self.assertIn("LANDING_OK", text.splitlines())
 
 
 if __name__ == "__main__":
