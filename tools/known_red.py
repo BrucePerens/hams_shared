@@ -496,7 +496,9 @@ def decide(first, baseline, rerun, flake_path, commit, threshold, modules=None, 
             again = rerun(list(cls.new))
             rerun_ran = True
             after = again.failed_ids()
-            verdict = bool(again.odoo_result_lines)
+            # A verdict needs a result line AND every failure Odoo counted in the rerun named: an unnamed one could be the very test
+            # that is absent from `after`, and calling it a flake would turn the run green.
+            verdict = bool(again.odoo_result_lines) and again.counted() <= len(again.failures)
             passed = [i for i in cls.new if verdict and i in again.started and i not in after]
             failed_again = [i for i in cls.new if i not in passed]
             if passed:

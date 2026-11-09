@@ -381,6 +381,44 @@ class PruneAndCommandTests(SnapshotTestBase):
         self.assertTrue(os.path.isdir(second) and os.path.isdir(keep_me) and not os.path.exists(first))
         self.assertNotIn(first, git(self.ws.path("hams_com"), "worktree", "list"))
 
+    # Tests [@ANCHOR: gate_snapshot:prune_snapshots]
+    def test_prune_unregisters_a_worktree_whose_repository_keeps_its_git_directory_elsewhere(self):
+        # hams_shared is a submodule: its common directory is not `<repo>/.git`, so dirname(common dir) is not the repository.
+        parent = os.path.join(self.tmp.name, "prune_parent")
+        repo = os.path.join(parent, "repo")
+        os.makedirs(repo)
+        os.makedirs(os.path.join(parent, "modules"))
+        separate = os.path.join(parent, "modules", "repo.git")
+        git(repo, "init", "-q", "--separate-git-dir", separate)
+        git(repo, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", "x")
+        gate = os.path.join(parent, "gate_old")
+        os.makedirs(os.path.join(gate, "hams_open"))
+        git(repo, "worktree", "add", "-q", "--detach", os.path.join(gate, "hams_open", "hams_shared"))
+        os.utime(gate, (time.time() - 1000, time.time() - 1000))
+        newer = os.path.join(parent, "gate_new")
+        write(os.path.join(newer, gs.MANIFEST_NAME), "{}")
+        self.assertEqual(gs.prune_snapshots(parent, keep=1, out=lambda *_: None), [gate])
+        self.assertNotIn("gate_old", git(repo, "worktree", "list"))
+
+    # Tests [@ANCHOR: gate_snapshot:prune_snapshots]
+    def test_prune_leaves_a_gate_named_directory_that_is_not_a_snapshot(self):
+        parent = os.path.join(self.tmp.name, "prune_parent2")
+        notes = os.path.join(parent, "gate_notes")
+        write(os.path.join(notes, "keep.txt"), "mine")
+        os.utime(notes, (time.time() - 1000, time.time() - 1000))
+        write(os.path.join(parent, "gate_new", gs.MANIFEST_NAME), "{}")
+        messages = []
+        self.assertEqual(gs.prune_snapshots(parent, keep=1, out=messages.append), [])
+        self.assertTrue(os.path.exists(os.path.join(notes, "keep.txt")))
+        self.assertTrue(any("not touching" in m for m in messages))
+
+    # Tests [@ANCHOR: gate_snapshot:create_snapshot]
+    def test_the_shard_log_directories_are_not_world_writable(self):
+        manifest = self.create()
+        for number in range(1, len(manifest["shards"]) + 1):
+            mode = os.stat(os.path.join(manifest["trees"]["parent"], "logs", "shard%d" % number)).st_mode & 0o777
+            self.assertEqual(mode, 0o755)
+
     # Tests [@ANCHOR: gate_snapshot:main]
     def test_main_creates_verifies_refuses_and_lists_commands(self):
         out = []
