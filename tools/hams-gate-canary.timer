@@ -1,0 +1,11 @@
+# Timer of hams-gate-canary.service (ADR 0118). Provided and NOT enabled; see the service file for the install commands.
+[Unit]
+Description=Run the whole-system test canary nightly
+
+[Timer]
+OnCalendar=*-*-* 01:30:00
+Persistent=true
+RandomizedDelaySec=15min
+
+[Install]
+WantedBy=timers.target

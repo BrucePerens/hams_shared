@@ -1,0 +1,19 @@
+# User unit for the nightly whole-system canary (ADR 0118). Provided and NOT enabled: Bruce decides when it starts.
+# Install (as the user that owns the checkout; it runs `sudo -n -u odoo` inside, like every test run on this box):
+#   mkdir -p ~/.config/systemd/user
+#   sed "s|@HAMS_SHARED_TOOLS@|$HOME/workspace/hams_open/hams_shared/tools|" hams-gate-canary.service > ~/.config/systemd/user/hams-gate-canary.service
+#   install -m 644 hams-gate-canary.timer ~/.config/systemd/user/ && systemctl --user daemon-reload
+# On demand, without the timer:   systemctl --user start hams-gate-canary.service    (or: python3 gate_canary.py run)
+# To start the nightly run:       systemctl --user enable --now hams-gate-canary.timer    (not done by this file)
+# Runs on the machine that holds the checkouts only; gate_canary.py refuses on the production host.
+[Unit]
+Description=Nightly whole-system test canary on a clean origin/main snapshot (dev box only)
+
+[Service]
+Type=oneshot
+Nice=10
+IOSchedulingClass=idle
+WorkingDirectory=@HAMS_SHARED_TOOLS@
+ExecStart=/usr/bin/env python3 gate_canary.py run --only-if-new-commit
+# A whole-system run is about 75 minutes per shard set; a run that exceeds this is stopped by systemd with SIGTERM.
+TimeoutStartSec=12h
