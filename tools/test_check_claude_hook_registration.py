@@ -51,7 +51,7 @@ class CheckRepoTests(unittest.TestCase):
 
     def test_command_is_guard_needs_an_anchored_path(self):
         self.assertTrue(chk.command_is_guard(GOOD_COMMAND))
-        self.assertTrue(chk.command_is_guard("python3 /home/bruce/workspace/hams_open/hams_shared/tools/claude_hooks/guard_signals.py"))
+        self.assertTrue(chk.command_is_guard("python3 /srv/work/hams_open/hams_shared/tools/claude_hooks/guard_signals.py"))
         self.assertTrue(chk.command_is_guard('python3 "$CLAUDE_PROJECT_DIR/hams_shared/tools/claude_hooks/guard_signals.py"'))
         self.assertTrue(chk.command_is_guard("python3 ~/workspace/hams_open/hams_shared/tools/claude_hooks/guard_signals.py"))
         self.assertFalse(chk.command_is_guard("python3 hams_shared/tools/claude_hooks/guard_signals.py"), "relative: breaks in a worktree")
