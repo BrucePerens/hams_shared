@@ -619,6 +619,8 @@ Purpose: the settings every decision reads; built by `policy`. A frozen dataclas
 | `hard_free_gb` | float | The free space of `root` under which `run_job` stops a RAM job; default 5. |
 | `min_ram_gb` | float | Memory size below which `auto` keeps the disk quietly; default 64. |
 | `lint_budget_gb` | float | Total size of `hams-lint-cargo` in RAM; `prune_lint_cache` removes least recently used unused directories above it; default 24 (`HAMS_RAM_LINT_GB`). |
+| `idle_hours` | float | `gc` removes an ownerless job directory idle this long; default 3 (`HAMS_RAM_IDLE_HOURS`). |
+| `keep_hours` | float | The same for a directory of a job that ran with `--keep`; default 6 (`HAMS_RAM_KEEP_HOURS`). |
 | `require_tmpfs` | bool | `root` must be a tmpfs; default True, False when `HAMS_RAM_ROOT` names the root. |
 
 Invariants: a policy never changes after it is built. The settings are read from the environment only by `policy`.
@@ -709,10 +711,43 @@ Purpose: says by name whether `path` is below the RAM root, without touching the
 
 Purpose: the process start time that makes an owner marker immune to pid reuse. Returns field 22 of `/proc/<pid>/stat` (clock ticks since boot, read after the last `)` so a name with spaces or parentheses is safe), or `None` when the process is gone or the file is unreadable.
 
-### `[@ANCHOR: ram_dirs:claim]` `claim(path, pid=None, now=time.time)`
+### `[@ANCHOR: ram_dirs:claim]` `claim(path, pid=None, now=time.time, keep=False, job=None)`
 
-Purpose: marks `path` as owned by a process. Creates the directory (mode 0700) if it is missing and writes `.hams-ram-owner` in it (atomically, through a temporary file): JSON `{"pid": int, "start": int or null, "created": int}`, `start` being
-`_start_ticks(pid)`. Arguments: `pid` (default this process; `ram_dirs.py path` passes the caller's) and `now` (clock, for tests). Returns `path`. Raises `OSError` when the marker cannot be written.
+Purpose: marks `path` as owned by a process. Creates the directory (mode 0700) if it is missing and writes `.hams-ram-owner` in it (atomically, through a temporary file): JSON `{"pid": int, "start": int or null, "created": int, "name": str or null, "job": str or null, "keep": bool}`, `start` being
+`_start_ticks(pid)` and `name` the owner's program name (`process_name`). Arguments: `pid` (default this process; `ram_dirs.py path` passes the caller's), `now` (clock, for tests), `keep` (the job ran with `--keep`, so `gc` waits `keep_hours`) and `job` (the job name). Returns `path`. Raises `OSError` when the marker cannot be written.
+
+### `[@ANCHOR: ram_dirs:process_name]` `process_name(pid, proc_root="/proc")`
+
+Purpose: the program name of a process (`/proc/<pid>/comm`) for the owner marker and for `status`; None when the process is gone.
+
+### `[@ANCHOR: ram_dirs:owner_record]` `owner_record(path)`
+
+Purpose: the marker of a directory as a dict `pid, start, created, name, job, keep` (fields an older marker lacks are None, `keep` False); None without a readable marker. Reads one file; never raises.
+
+### `[@ANCHOR: ram_dirs:newest_activity]` `newest_activity(path, depth=3, per_directory=2000)`
+
+Purpose: the newest modification or access time in a tree, sampled cheaply: three levels down (`debug/deps/<file>`) and at most `per_directory` entries of each directory. Reading a build's files counts, so a directory something still reads is not idle. Never raises.
+
+### `[@ANCHOR: ram_dirs:references]` `references(path, proc_root="/proc")`
+
+Purpose: which live processes refer to a directory, so `gc` never removes one in use: `CARGO_TARGET_DIR` or `TMPDIR` in the environment at or below `path`, a working directory below it, or an open file below it. Sorted pids; unreadable processes (other users') are not examined; this process is not listed; `proc_root` is for tests.
+
+### `[@ANCHOR: ram_dirs:gc_log_path]` `gc_log_path(pol=None, environ=None)`
+
+Purpose: the removal log, `hams-ram-gc.log` in the RAM root.
+
+### `[@ANCHOR: ram_dirs:log_removal]` `log_removal(pol, name, size_bytes, idle_seconds, reason, now=time.time, owner=None)`
+
+Purpose: appends `time removed NAME SIZE GB idle H h owner pid P (program): reason` to the removal log and keeps the last 2000 lines. Called for every removal by `sweep` and `gc`. Returns the line; never raises.
+
+### `[@ANCHOR: ram_dirs:gc]` `gc(pol=None, environ=None, say=None, now=time.time, remove=None, proc_root="/proc", dry_run=False)`
+
+Purpose: garbage collection of the RAM root, run at the start of every `run` and by `status`, by `ram_dirs.py gc [--dry-run]` and, when someone enables it, by the user timer `ram_dirs_units/hams-ram-dirs-gc.timer` (every 30 minutes; the files are not installed or enabled by anything: `mkdir -p ~/.config/systemd/user && cp tools/ram_dirs_units/hams-ram-dirs-gc.* ~/.config/systemd/user/ && systemctl --user daemon-reload && systemctl --user enable --now hams-ram-dirs-gc.timer`; adjust the path in the service).
+A `hams-cargo-target-*` directory is removed when its owner is not running AND (its job ended without `--keep`, or nothing in it was modified or read for `idle_hours` (default 3, `HAMS_RAM_IDLE_HOURS`), `keep_hours` (default 6, `HAMS_RAM_KEEP_HOURS`) for a `--keep` job) AND no process refers to it (`references`). A directory whose owner is alive is never touched. The lint cache `hams-lint-cargo` has no age limit; when over `lint_budget_gb` it is trimmed by `prune_lint_cache`. Every removal is said and logged (`log_removal`) with name, size, idle time, owner and reason. Returns `[(name, bytes, reason)]`; with `dry_run` nothing is removed or logged. Never raises.
+
+### `[@ANCHOR: ram_dirs:describe_owner]` `describe_owner(path, now=time.time, proc_root="/proc")`
+
+Purpose: the owner phrase `status` prints: `owner pid 123 (cargo) alive, started 2.0 h ago, idle 5 min, job t1, kept`, or `unmarked, idle 4.0 h` with the pids that refer to the directory.
 
 ### `[@ANCHOR: ram_dirs:owner_state]` `owner_state(path)`
 
@@ -836,7 +871,7 @@ Purpose: the text of `ram_dirs.py status`. Returns a list of lines: the root's f
 
 Purpose: the command line. Subcommands `run JOB [--keep] [--ssd] -- COMMAND...` (exit status of the command, 75 if the job name is in use), `path JOB [--owner-pid PID]` (sweeps, creates and claims the directory for `PID`, default the parent
 process, and prints the path; for a shell that cannot wrap its command: `export CARGO_TARGET_DIR=$(python3 hams_shared/tools/ram_dirs.py path myjob --owner-pid $$)` and `trap 'python3 hams_shared/tools/ram_dirs.py release myjob' EXIT`),
-`release JOB` (removes the job's directory from either place), `sweep`, `status`. Returns the exit status; 2 for a bad job name.
+`release JOB` (removes the job's directory from either place), `sweep`, `gc [--dry-run]`, `status` (runs `gc` first, then lists each directory with its owner). Returns the exit status; 2 for a bad job name.
 
 ### `[@ANCHOR: lint_cache:disk_cargo_base]` `disk_cargo_base(environ=None)`
 
