@@ -113,6 +113,7 @@ class MainTests(Fixture):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(len(calls), 2)
         self.assertIn("--list", calls[0])
+        self.assertNotIn("exposure_tests::", calls[0], "the listing is of every test, so a filter that matches nothing shows")
         self.assertNotIn("--list", calls[1])
         self.assertIn("relay-structural", calls[1])
         self.assertIn("-s2", calls[1], "one Cargo directory per lint slot")

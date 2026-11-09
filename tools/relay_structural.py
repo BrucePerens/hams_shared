@@ -113,7 +113,7 @@ def main(argv):
         env = dict(os.environ, CARGO_INCREMENTAL="0")
         if target:
             env["CARGO_TARGET_DIR"] = target
-        listing = _run(cargo_command(list_only=True), relay, env)
+        listing = _run(cargo_command(filters=(), list_only=True), relay, env)  # every test of the binary: the filters are checked against it
         if listing.returncode != 0:
             print("❌ the relay's tests did not build:\n" + listing.stdout + listing.stderr)
             return 1
