@@ -108,7 +108,7 @@ class EvaluateTests(unittest.TestCase):
 
 
 def entry(state, age_minutes=1, slug="BrucePerens/hams_com"):
-    return {"repo": "/home/bruce/workspace/" + slug.split("/")[1], "slug": slug, "pr": 1, "state": state, "enqueued": NOW - age_minutes * 60}
+    return {"repo": "/srv/checkouts/" + slug.split("/")[1], "slug": slug, "pr": 1, "state": state, "enqueued": NOW - age_minutes * 60}
 
 
 class LandingTests(unittest.TestCase):

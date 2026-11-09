@@ -101,9 +101,11 @@ def landing_verdict(entries, now=time.time):
         if entry["state"] == "queued":
             queued_total += 1
             try:
-                oldest = max(oldest, now() - float(entry["enqueued"]))
+                enqueued = float(entry["enqueued"])
             except (KeyError, TypeError, ValueError):
-                pass
+                continue
+            if math.isfinite(enqueued):
+                oldest = max(oldest, now() - enqueued)
         else:
             testing_total += 1
     live = queued_total + testing_total
