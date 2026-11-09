@@ -24,6 +24,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 
 import batch_queue
@@ -161,6 +162,40 @@ def changed_anchors(repo, base, tip):
         elif not in_header and line[:1] in ("+", "-"):
             ids.update(ANCHOR_TAG.findall(line))
     return ids
+
+
+# [@ANCHOR: lint_batch:changed_function_anchors]
+def changed_function_anchors(repo, base, tip):
+    """Anchor ids of functions whose BODY a branch changed, even though the line carrying the anchor did not change.
+
+    `changed_anchors` reads only the anchors on added or removed lines. `check_claims_freshness` fails when a function with a claim
+    changed, and names the claim file and the anchor id, neither of which is on a changed line when only the body was edited: the
+    failure was unattributable, the batch split, and branches that never touched the function failed with it and passed alone
+    (night-shift/club-card-apply, 2026-11-08). Here the Python files the branch changed (`git diff --name-only base...tip`) are read
+    at the merge-base and at `tip`, hashed function by function with `check_claims_freshness.compute_function_hash` (the very
+    hash the claim check compares), and every anchor whose hash differs, appeared or vanished is returned. Returns an empty set
+    when git cannot say or the claim checker cannot be imported; never raises. It costs two parses per changed Python file."""
+    try:
+        import check_claims_freshness
+    except ImportError:
+        return set()
+    merge_base = subprocess.run(["git", "-C", repo, "merge-base", base, tip], capture_output=True, text=True)
+    names = subprocess.run(["git", "-C", repo, "diff", "--name-only", "--diff-filter=AMDR", "%s...%s" % (base, tip), "--", "*.py"],
+                           capture_output=True, text=True, errors="replace")
+    if merge_base.returncode != 0 or names.returncode != 0:
+        return set()
+    found = set()
+    with tempfile.TemporaryDirectory() as scratch:
+        for number, path in enumerate(line for line in names.stdout.splitlines() if line):
+            hashes = []
+            for label, revision in (("base", merge_base.stdout.strip()), ("tip", tip)):
+                shown = subprocess.run(["git", "-C", repo, "show", "%s:%s" % (revision, path)], capture_output=True)
+                target = os.path.join(scratch, "%s_%d.py" % (label, number))
+                with open(target, "wb") as handle:
+                    handle.write(shown.stdout if shown.returncode == 0 else b"")
+                hashes.append(check_claims_freshness.compute_function_hash(target))
+            found.update(name for name in set(hashes[0]) | set(hashes[1]) if hashes[0].get(name) != hashes[1].get(name))
+    return found
 
 
 # [@ANCHOR: lint_batch:anchor_finder]
@@ -356,7 +391,8 @@ class LintBatch:
             if member["tip"] not in files:
                 files[member["tip"]] = changed_paths(self.repo, self.base, member["tip"])
         owners = owners_of(files)
-        anchors = owners_of({tip: sorted(changed_anchors(self.repo, self.base, tip)) for tip in files})
+        anchors = owners_of({tip: sorted(changed_anchors(self.repo, self.base, tip) | changed_function_anchors(self.repo, self.base, tip))
+                            for tip in files})
         # Some checkers name a file by its base name and its directory separately (`File 'x.py' in '<dir>'`):
         # a base name that only one changed path has is a token of its own.
         names = {}
