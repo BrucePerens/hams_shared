@@ -4042,6 +4042,32 @@ Returns `(state, lines)`: `"OK"` or `"HOLD"` and the reasons, plus, on HOLD, one
 unreadable, non-object, undated, stale or verdict-less file is HOLD with its own reason. Read-only, no locks, safe to call in a loop.
 `main` wraps it: prints the state and reasons (not with `--quiet`) and exits 0 for OK, 1 for HOLD.
 
+### Landing throttle: merge queue depth (Bruce, 2026-11-09)
+
+The merge queue and the combined lint gate are the bottleneck, not agent slots, so a second signal throttles PR **landing** and never agent starts.
+`dispatch_ok.py` prints it after the agent-start verdict, as separate lines: `LANDING_OK` or `LANDING_HOLD`, its reasons, and a one-line count. The
+agent-start verdict (`OK`/`HOLD`, exit 0/1) is unchanged and is never made HOLD by queue depth; it stays HOLD only for the load display's reasons.
+`LANDING_HOLD` means: keep the agent running, finish and commit, but fold new PRs into an open one or hold them and do gate-free work (whole-system
+runs, property/fuzz/mutation tests, soaks, benchmarks, builds, audits); start no mass edits. Exit status: default is the agent-start verdict; with
+`--landing` it is the landing verdict (0 LANDING_OK, 2 LANDING_HOLD). One-line form for agents: `python3 devbox_tools/queue_depth.py` (hams_com).
+
+### `[@ANCHOR: dispatch_ok:landing_limits]` `DEFAULT_QUEUE_FILE`, `MAX_LIVE_PRS`, `MAX_OLDEST_QUEUED_SECONDS`, `EXIT_LANDING_HOLD`
+
+Purpose: the limits of the landing verdict, in one place. `LANDING_HOLD` when more than 25 PRs are `queued` or `testing` (all repositories together) or the
+oldest `queued` PR has waited more than 60 minutes. The file is `~/.cache/hams-merge-queue/queue.json`, written by `devbox_tools/merge_queue.py`; this tool
+only reads it, holds no lock, writes nothing. Tests: `LandingTests` in `test_dispatch_ok.py`.
+
+### `[@ANCHOR: dispatch_ok:landing_verdict]` `landing_verdict(entries, now=time.time)`
+
+Purpose: the whole landing decision from a list of queue entries, separated from file reading. Arguments: `entries` list of dicts (`state`, `enqueued`, `slug` or
+`repo`); `now` clock. Returns `(state, reasons, summary)`: `"LANDING_OK"`/`"LANDING_HOLD"`, one reason per tripped limit, and `queue: N queued, M testing (repo Nq/Mt, ...), oldest queued wait K min`.
+Pure; ignores malformed entries and non-live states; only `queued` entries count toward the age limit. Also used by `devbox_tools/queue_depth.py`.
+
+### `[@ANCHOR: dispatch_ok:landing]` `landing(path=DEFAULT_QUEUE_FILE, now=time.time)`
+
+Purpose: `landing_verdict` for the queue file. Returns the same triple. A missing file is an empty queue (LANDING_OK: the queue is not in use); an unreadable
+or malformed file is LANDING_HOLD (unknown depth is not a go-ahead). Never raises.
+
 ## Pass stamps that carry over to a commit of records (`lint_stamp_gate.py`)
 
 Written 2026-11-08. Every branch ends with a night-shift record (a history entry, a to-do claim or its notes, a claim file). The record is a new commit, so the
