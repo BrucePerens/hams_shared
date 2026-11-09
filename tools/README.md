@@ -865,7 +865,7 @@ Purpose: what `run_job` returns. A dataclass in `ram_dirs.py`, created once per 
 
 | Field | Type | Meaning |
 |---|---|---|
-| `returncode` | int | The command's exit status; `128 + n` when signal `n` ended it; 75 (`EX_TEMPFAIL`) when a live job already owns the directory and nothing ran. |
+| `returncode` | int | The command's exit status; `128 + n` when signal `n` ended it; 75 (`EX_TEMPFAIL`) when a live job already owns the directory and nothing ran, or when the guard stopped the command and it still exited 0 (a truncated run is not a pass). |
 | `target` | str | The job's directory. |
 | `in_ram` | bool | Whether it was in RAM. |
 | `stopped` | str or `None` | The guard's reason when it stopped the job. |
