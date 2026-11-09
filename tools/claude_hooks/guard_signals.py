@@ -10,7 +10,13 @@ data or a `grep` pattern is NOT a command):
   * `pkill`, `killall`, `skill`, `fuser -k`, `systemctl kill`.
   * `pgrep -f` / `pgrep --full` (the pattern is matched against every command line, including the shell that holds it; the
     `[x]yz` bracket trick does not help: it matched a PostgreSQL backend). `pgrep` without -f (name only) is allowed.
-  * `kill` whose pids are not literal numbers (from `$(...)`, backticks, variables, a pipe): `kill $(pgrep ...)`, `... | xargs kill`.
+  * `kill` whose pids are not literal numbers (from `$(...)`, backticks, variables, a pipe): `kill $(pgrep ...)`, `... | xargs kill`;
+    a pid derived from `ps`/`ppid` is such a case, and `$PPID`, `$$`, `0`, `-1`, `-- -PGID` (parents and process groups) are named.
+  * `kill` of a literal pid that, looked up in /proc when the hook runs, is the hook's own ancestry (the agent, its shell, the
+    systemd --user that started it), pid 1, another user's or root's process, or a protected program (agent_procs.PROTECTED_WORDS:
+    postgres, systemd, sshd, redis-server, rabbitmq, ...); and a `kill` word that itself names such a program.
+(2026-11-09: an agent ran `kill $pp` on its own parent, `pp=$(ps -o ppid= -p N)`, because this hook was not active in a hams_shared
+worktree; the repository now tracks .claude/settings.json in all three checkouts and `check_claude_hook_registration.py` enforces it.)
 It allows `kill -TERM 123`, `kill 123`, `kill -0 123`, `kill -l`, and everything else (grep, ps, cargo, git, sleep loops, and
 `agent_procs.py wait`). A literal-pid kill is allowed with a reminder to print the ps line first.
 
@@ -29,6 +35,14 @@ import os
 import re
 import sys
 import time
+
+TOOLS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if TOOLS_DIR not in sys.path:
+    sys.path.insert(0, TOOLS_DIR)
+try:
+    import agent_procs  # the one list of protected programs (PROTECTED_WORDS) and the /proc reader
+except Exception:  # a broken import must not break the hook: the textual rules still apply
+    agent_procs = None
 
 MAX_DEPTH = 8
 ESCAPE_VARIABLE = "HAMS_ALLOW_SIGNALS"
@@ -313,11 +327,38 @@ def signal_is_kill(spec):
     return spec == "KILL" or (spec.isascii() and spec.isdigit() and int(spec) == 9)
 
 
+# [@ANCHOR: guard_signals:protected_words]
+def protected_words():
+    """`agent_procs.PROTECTED_WORDS` (lower case tuple), or a built-in copy when agent_procs cannot be imported."""
+    if agent_procs is not None:
+        return tuple(agent_procs.PROTECTED_WORDS)
+    return ("postgres", "postmaster", "redis-server", "rabbitmq", "beam.smp", "epmd", "systemd", "sshd", "gdm", "gnome",
+            "claude-desktop")
+
+
+# [@ANCHOR: guard_signals:literal_pid_reason]
+def literal_pid_reason(pid, table=None):
+    """Why signalling the literal `pid` is forbidden, looked up in /proc now, or `None` (also when the pid does not exist,
+    when agent_procs cannot be imported or /proc cannot be read: this check only adds to the textual rules). Forbidden: the
+    hook's own ancestry (the agent and the shells above it), pid 1, another user's or root's process, a protected program.
+    `table` is a pid -> ProcInfo snapshot (default: read now)."""
+    if agent_procs is None or pid <= 0:
+        return None
+    try:
+        table = agent_procs.snapshot() if table is None else table
+        info = table.get(pid)
+        if info is None:
+            return None
+        family = set(agent_procs.ancestry(table, os.getpid())) | {os.getpid()}
+        return agent_procs.protected_reason(info, family=family)
+    except Exception:
+        return None
+
+
 # [@ANCHOR: guard_signals:check_kill]
-def check_kill(words, via_xargs, verdict):
-    """Judge a `kill` command (`words[0]` is kill): SIGKILL is denied (also as `-sKILL`, `-n9`, `-09`), every pid must be a
-    literal number (or `%job`, or `$!`) other than 0, 1 and -1 (the caller's own group, init, every process), and pids supplied
-    by an `xargs` pipe are denied. `kill -l` and a `kill` with no pid are allowed. A literal pid
+def check_kill(words, via_xargs, verdict, table=None):
+    """Judge a `kill` command (`words[0]` is kill): SIGKILL is denied, every pid must be a literal number (or `%job`, or
+    `$!`), and pids supplied by an `xargs` pipe are denied. `kill -l` and a `kill` with no pid are allowed. A literal pid
     adds a reminder note to print its ps line first."""
     pids, i, listing = [], 1, False
     while i < len(words):
@@ -348,12 +389,23 @@ def check_kill(words, via_xargs, verdict):
         verdict.reasons.append("`xargs kill`: the pids come from a pipe and cannot be verified")
     for word in pids:
         literal = re.fullmatch(r"-?\d+|%\d+", word.text) and not word.expands
-        if literal and word.text[:1] != "%" and int(word.text) in (0, 1, -1):
-            verdict.reasons.append(f"kill {word.text} signals the caller's own process group, init or every process of the user")
+        if word.text in ("$PPID", "${PPID}", "$$", "${$}") or re.fullmatch(r"-?0|1|-\d+", word.text):
+            verdict.reasons.append(f"kill of {word.text!r} signals a parent, init, a process group or every process: never signal "
+                                   "parents or groups (stop a job with `agent_procs.py stop NAME`)")
+        elif not literal and word.text != "$!":
+            verdict.reasons.append(f"kill needs literal pid numbers, not {word.text!r}: a pid from `$(...)`, a variable, "
+                                   "`ps`/`ppid` or a pipe can name the wrong process, even your own parent")
             break
-        if not literal and word.text != "$!":
-            verdict.reasons.append(f"kill needs literal pid numbers, not {word.text!r}: a pid from `$(...)`, a variable or a pipe "
-                                   "can name the wrong process")
+        elif literal and word.text.isdigit():
+            reason = literal_pid_reason(int(word.text), table)
+            if reason:
+                verdict.reasons.append(f"kill of pid {word.text} is refused: {reason}")
+    names = [w.text for w in words[1:] if not w.text.startswith("-")]
+    protected = protected_words()
+    for text in names:
+        hit = next((p for p in protected if p in text.lower()), None)
+        if hit:
+            verdict.reasons.append(f"kill names a shared service ({hit!r}): a signal can crash everyone's work")
             break
     if pids and not verdict.reasons:
         verdict.notes.append("kill of a literal pid: print its ps line first (`ps -o pid,user,lstart,args -p PID`); prefer "

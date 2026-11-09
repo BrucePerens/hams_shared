@@ -360,6 +360,12 @@ also `test_x (...)`, `tearDownClass`). A failure is listed twice in the file and
 error). Pure. Used by `RemoteTestBatch` to compare a host's failures with its origin/main baseline and to blame the module of each new failure.
 Test: `test_failing_tests_reads_both_line_forms_and_counts_a_failure_once`.
 
+### `odoo_test_batch:odoo_failure_count`
+`odoo_failure_count(text) -> int | None` sums `failed + error(s)` over every `odoo.tests.result: N failed, M error(s) of T tests` line of a `filtered_test.txt`; None when
+the text holds no such line (the extractor keeps it only sometimes). Pure. `OdooTestBatch.collect` compares it with the number of failing tests the report names: more counted
+than named means a failure nobody can name, so the batch is split instead of passing the branches that own only the unnamed failing module.
+Test: `test_collect_blames_the_module_of_a_named_failing_test_the_extractor_did_not_implicate`.
+
 ### `odoo_test_batch:module_finder`
 `module_finder(modules)` returns `find(line)` listing which of `modules` a line names as whole words (`ham_a` is not found in
 `ham_ab`). The `find_tokens` argument of `blame_by_tokens` for tests.

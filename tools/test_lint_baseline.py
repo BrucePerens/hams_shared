@@ -100,6 +100,16 @@ class ItemTests(Env):
         merged = lb.items_from_failures({"flake8": out1, "pytest tools/[1of2]": PYTEST_OUT})
         self.assertEqual(len(merged), 3)
 
+    def test_shards_with_different_failures_do_not_hide_one_another(self):
+        known, fresh = "x.py:1: E1 bad\n", "z.py:7: E9 something else\n"
+        recorded = lb.items_from_failures({"step [1of2]": known})["step"]
+        both = lb.items_from_failures({"step [1of2]": known, "step [2of2]": fresh})["step"]
+        reverse = lb.items_from_failures({"step [2of2]": fresh, "step [1of2]": known})["step"]
+        self.assertNotEqual(both["signature"], recorded["signature"])
+        self.assertEqual(both["signature"], reverse["signature"])
+        same = lb.items_from_failures({"step [1of2]": known, "step [2of2]": known})["step"]
+        self.assertEqual(same["signature"], recorded["signature"])
+
 
 class BaselineFileTests(Env):
     def test_write_read_and_since_is_carried_over(self):

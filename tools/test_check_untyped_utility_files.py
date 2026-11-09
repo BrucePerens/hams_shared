@@ -152,8 +152,8 @@ class CollectCandidatesTests(unittest.TestCase):
     def test_ignores_site_packages_under_a_directory_scan_root_regardless_of_the_venvs_own_name(self):
         """A venv's own outer directory can be named anything ("whisper_venv", not just "venv" or
         ".venv") -- matches check_float_isfinite.py's own real-bug regression test, and the
-        original real incident (an untracked daemons/hams_local_relay/test_run/whisper_venv/ this
-        whole exclusion-sweep campaign started from) was genuinely nested under "daemons", a real
+        original real incident (an untracked daemons/hams_local_relay/test_run/whisper_venv/ the
+        exclusion sweep started from) was genuinely nested under "daemons", a real
         SCAN_ROOTS directory this checker walks recursively."""
         _write(
             os.path.join(
@@ -272,7 +272,7 @@ class MainIntegrationTests(unittest.TestCase):
         self.assertEqual(code, 0, out)
 
     def test_a_real_wrong_arg_count_call_is_caught(self):
-        # Mirrors the proposal doc's own motivating bug class.
+        # Mirrors the proposal doc's own motivating case.
         _write(
             os.path.join(self.tmp, "daemons", "bug.py"),
             "def notify(a, b):\n"
@@ -321,10 +321,10 @@ class ResolveRepoRootTests(unittest.TestCase):
 
 
 class ResolveRepoRootsTests(unittest.TestCase):
-    # Regression test for the second half of the same bug class as ResolveRepoRootTests above,
-    # found 2026-08-27: _resolve_repo_root's redirect only ever lands on ONE repo (hams_shared's
+    # Regression test for the second half of the same repo-root problem as ResolveRepoRootTests above:
+    # _resolve_repo_root's redirect only ever lands on ONE repo (hams_shared's
     # literal parent), but real SCAN_ROOTS entries (ham_com/, ham_base/, daemons, ingest) live
-    # only under the OTHER, sibling repo -- confirmed directly, run_linters.py's own real
+    # only under the OTHER, sibling repo -- run_linters.py's own real
     # invocation was silently scanning just 2 distributed_redis_cache files and missing 5 real
     # files with real mypy findings that only exist on the sibling side.
     def setUp(self):

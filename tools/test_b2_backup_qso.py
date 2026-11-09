@@ -84,16 +84,18 @@ class QsoRecordingsBackupTests(_Env):
             self.assertNotIn(name, out + err)
 
     def test_a_restored_recording_that_differs_from_the_live_file_fails(self):
-        live = os.path.join(self.rec, "cccc.opus")  # the newest by mtime is aaaa? make cccc newest and altered
-        past = os.path.getmtime(live)
+        live = os.path.join(self.rec, "cccc.opus")
         with open(live, "r+b") as f:
-            f.write(b"X")
-        os.utime(live, (past, past))
-        os.utime(live, (past, past))
-        newest = datetime.datetime.now().timestamp() - 600
-        os.utime(live, (newest, newest))
+            f.write(b"X")  # same size, other content
+        # The altered file must read as finalised BEFORE the snapshot started and as the newest recording: its mtime is set relative to the
+        # recorded snapshot start, not to the wall clock, so a slow machine (the snapshot and this test minutes apart) cannot change which it is.
+        entry = [r for r in _load(self.cfg.status_path)["sources"] if r["source"] == "qso_recordings"][0]
+        started = datetime.datetime.fromisoformat(entry["snapshot_time"].replace("Z", "+00:00")).timestamp()
+        before_start = started - 600
+        self.assertGreater(before_start, max(os.path.getmtime(os.path.join(self.rec, n + ext)) for n in ("aaaa", "bbbb") for ext in (".opus", ".json")))
+        os.utime(live, (before_start, before_start))
         code, out, err = self.run_main(self.cfg_path, "restore-test")
-        self.assertEqual(code, 1)
+        self.assertEqual(code, 1, out + err)
         self.assertIn("sha256 mismatch", err)
 
     def test_a_deleted_live_recording_is_counted_not_failed(self):

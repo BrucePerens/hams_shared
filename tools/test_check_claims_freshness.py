@@ -16,6 +16,7 @@ import unittest
 from unittest import mock
 
 import check_claims_freshness as ccf  # noqa: E402
+import migrate_claim_hashes as mch  # noqa: E402
 
 
 def _write(path, content):
@@ -109,19 +110,17 @@ class CheckClaimsFreshnessTests(unittest.TestCase):
         self.assertIn("missing required frontmatter", problems[0][1])
 
     def test_a_centralized_store_claim_is_not_flagged_orphaned_it_belongs_to_check_claims_py(self):
-        """Real bug found running this checker against the actual hams_com repo for the first
-        time ever (it has never been wired into run_linters.py -- ADR 0091 itself names this as a
-        real, tracked follow-on, 'not yet wired... not forgotten'): a claim under
+        """A claim under
         docs/bug_hunt_claims/<repo>/... documents code that lives in a DIFFERENT git repo
         (hams_open/hams_shared), per this project's own centralized-claims-store policy (the
         skill's own docs: 'Verify a centralized claim with ... check_claims.py ... since the
         normal check_claims_freshness.py assumes the claim and its code share one repo root').
-        Before this fix, this checker's own `f'{os.sep}claims{os.sep}' in claim_path` test doesn't
+        This checker's own `f'{os.sep}claims{os.sep}' in claim_path` test doesn't
         distinguish a centralized-store claim from a co-located one -- it tries to verify the
         centralized claim's anchor against ITS OWN repo's Python files, never finds it (the real
         anchor lives in a different repo entirely), and reports it as 'orphaned claim' -- a false
-        positive on every single centralized claim, confirmed live: running this checker against
-        the real hams_com repo for the first time produced over 1100 'orphaned claim' false
+        positive on every single centralized claim: running this checker against
+        the real hams_com repo produced over 1100 'orphaned claim' false
         positives, the overwhelming majority under docs/bug_hunt_claims/, none of them real."""
         _write(os.path.join(self.tmp, "mod.py"), "def bar():\n    pass\n")
         _write(
@@ -135,15 +134,15 @@ class CheckClaimsFreshnessTests(unittest.TestCase):
     def test_a_not_computable_code_hash_is_skipped_not_flagged_orphaned(self):
         """The established, already-in-active-use convention (this checker's own predecessor
         claims across the real repo -- every Rust-anchored claim in daemons/hams_local_relay/
-        claims/, plus several written by this exact bug-hunt dispatch for un-anchored Python
+        claims/, plus several written for un-anchored Python
         functions) for a claim this checker structurally cannot hash yet (a Rust/JS anchor, or no
         real [@ANCHOR:] at all) is `code_hash: not computable -- <reason>`, not a real sha256.
-        Before this fix, this checker didn't recognize that convention at all: it still tried to
-        resolve the anchor against its own Python-only index, never found it (the real anchor, if
-        any, lives in a .rs/.js file this checker can't parse), and reported "orphaned claim" --
+        Without special handling, this checker would not recognize that convention: it would still try to
+        resolve the anchor against its own Python-only index, never find it (the real anchor, if
+        any, lives in a .rs/.js file this checker can't parse), and report "orphaned claim" --
         a false positive, and a misleading one (implying the anchor was deleted, when in fact it
-        was simply never Python). Confirmed live: running this checker against the real hams_com
-        repo, ALL 344 of its post-centralized-store-fix "orphaned claim" findings turned out to be
+        was simply never Python). In the real hams_com
+        repo, ALL 344 "orphaned claim" findings left once centralized-store claims are excluded were
         claims using this exact `not computable` convention, none of them genuinely orphaned."""
         _write(os.path.join(self.tmp, "mod.py"), "def bar():\n    pass\n")
         _write(
@@ -156,12 +155,12 @@ class CheckClaimsFreshnessTests(unittest.TestCase):
         self.assertEqual(problems, [])
 
     def test_a_readme_inside_a_claims_directory_is_not_treated_as_a_claim(self):
-        """Real, live false positive found against the real hams_com repo: hardware/claims/
+        """A real false positive against the real hams_com repo: hardware/claims/
         README.md is a real, deliberate index/explanation file for the directory ('hardware/ --
-        reviewed, out of scope for the bug-hunt campaign'), not a claim -- it carries no
-        frontmatter at all because it isn't one. Before this fix, this checker's own
+        reviewed, out of scope for claims'), not a claim -- it carries no
+        frontmatter at all because it isn't one. This checker's own
         `f'{os.sep}claims{os.sep}' in claim_path` test doesn't distinguish a README from a real
-        claim file, so it was reported as 'missing required frontmatter fields' -- a false
+        claim file, so it would be reported as 'missing required frontmatter fields' -- a false
         positive on a file that was never meant to have any."""
         _write(os.path.join(self.tmp, "mod.py"), "def bar():\n    pass\n")
         _write(
@@ -173,7 +172,7 @@ class CheckClaimsFreshnessTests(unittest.TestCase):
         self.assertEqual(problems, [])
 
     def test_a_tests_link_to_an_anchor_does_not_clobber_the_base_declarations_hash(self):
-        # Real bug found while prototyping this checker against hams_com: a test file's own
+        # A test file's own
         # "# Tests [@ANCHOR: name]" line matches the same ANCHOR_PATTERN as the base declaration,
         # so a naive "any function whose span contains this anchor text" scan hashes whichever
         # file/function is scanned LAST under that same anchor key -- silently hashing the test
@@ -539,6 +538,183 @@ class UnclaimedAnchorTests(unittest.TestCase):
             rc = ccf.main()
         self.assertEqual(rc, 2)
         self.assertIn("not a directory", out.getvalue())
+
+
+
+_COMMENTED = (
+    "# Doubles the input.\n"
+    "# [@ANCHOR: my_module:foo]\n"
+    "def foo(x):\n"
+    '    """Return x plus one."""\n'
+    "    # add one\n"
+    "    y = x + 1  # the sum\n"
+    '    return y, "# not a comment"\n'
+)
+
+
+class CodeHashIgnoresCommentsTests(unittest.TestCase):
+    """`code_hash` covers code, not prose: a comment-only change must not stale a claim, a code
+    change must (2026-11-09: comment-rewording pull requests staled 27 claims)."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.path = os.path.join(self.tmp, "mod.py")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _hash(self, source):
+        _write(self.path, source)
+        return ccf.compute_function_hash(self.path)["my_module:foo"]
+
+    def _claim_problems(self, source, recorded):
+        _write(self.path, source)
+        _write(
+            os.path.join(self.tmp, "claims", "foo.md"),
+            f"---\nanchor: my_module:foo\ncode_hash: sha256:{recorded}\n---\n\n1. Claim.\n",
+        )
+        _init_git_repo(self.tmp)
+        return ccf.check_claims(self.tmp)
+
+    def test_rewording_comments_and_docstring_keeps_the_hash(self):
+        reworded = (
+            "# [@ANCHOR: my_module:foo]\n"
+            "def foo(x):\n"
+            '    """Something else entirely,\n    over two lines."""\n'
+            "\n"
+            "    # a different comment\n"
+            "    y = x + 1\n"
+            '    return y, "# not a comment"   # trailing\n'
+        )
+        self.assertEqual(self._hash(_COMMENTED), self._hash(reworded))
+
+    def test_a_comment_only_change_does_not_stale_a_claim(self):
+        recorded = self._hash(_COMMENTED)
+        reworded = _COMMENTED.replace("add one", "increment").replace("the sum", "result")
+        self.assertEqual(self._claim_problems(reworded, recorded), [])
+
+    def test_a_code_change_stales_a_claim(self):
+        recorded = self._hash(_COMMENTED)
+        problems = self._claim_problems(_COMMENTED.replace("x + 1", "x + 2"), recorded)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("code_hash mismatch", problems[0][1])
+
+    def test_a_changed_string_literal_stales_a_claim(self):
+        """A `#` inside a string is code, and a string literal can carry behaviour."""
+        self.assertNotEqual(
+            self._hash(_COMMENTED), self._hash(_COMMENTED.replace("# not a comment", "# other"))
+        )
+
+    def test_a_changed_indentation_or_statement_order_changes_the_hash(self):
+        swapped = (
+            "# [@ANCHOR: my_module:foo]\n"
+            "def foo(x):\n"
+            "    y = x + 1\n"
+            "    if x:\n"
+            "        return y\n"
+            "    return None\n"
+        )
+        nested = swapped.replace("    return None\n", "        return None\n")
+        self.assertNotEqual(self._hash(swapped), self._hash(nested))
+
+    def test_nested_function_docstrings_are_ignored_too(self):
+        src = (
+            "# [@ANCHOR: my_module:foo]\n"
+            "def foo(x):\n"
+            "    def inner():\n"
+            '        """Inner docs."""\n'
+            "        return x\n"
+            "    return inner\n"
+        )
+        self.assertEqual(self._hash(src), self._hash(src.replace("Inner docs.", "Reworded.")))
+
+    def test_a_legacy_hash_of_unchanged_text_is_still_accepted(self):
+        """Claims written before the definition changed keep passing until migrated."""
+        _write(self.path, _COMMENTED)
+        legacy = ccf.compute_legacy_function_hash(self.path)["my_module:foo"]
+        self.assertNotEqual(legacy, ccf.compute_function_hash(self.path)["my_module:foo"])
+        self.assertEqual(self._claim_problems(_COMMENTED, legacy), [])
+
+    def test_a_legacy_hash_of_changed_text_is_stale(self):
+        _write(self.path, _COMMENTED)
+        legacy = ccf.compute_legacy_function_hash(self.path)["my_module:foo"]
+        problems = self._claim_problems(_COMMENTED.replace("add one", "increment"), legacy)
+        self.assertEqual(len(problems), 1)
+
+
+class MigrateClaimHashesTests(unittest.TestCase):
+    """The one-sweep migration to the comment-insensitive hash."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.path = os.path.join(self.tmp, "mod.py")
+        self.claim = os.path.join(self.tmp, "claims", "foo.md")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _git(self, *args):
+        subprocess.run(["git", *args], cwd=self.tmp, check=True, capture_output=True)
+
+    def _commit(self, message):
+        self._git("add", "-A")
+        self._git("commit", "-q", "-m", message)
+
+    def _claim_text(self):
+        with open(self.claim, encoding="utf-8") as f:
+            return f.read()
+
+    def _setup_history(self):
+        """Commit 1: the claim is written against _COMMENTED's raw hash. Commit 2: comments
+        reworded. Returns the legacy hash recorded in commit 1."""
+        _write(self.path, _COMMENTED)
+        legacy = ccf.compute_legacy_function_hash(self.path)["my_module:foo"]
+        _write(self.claim, f"---\nanchor: my_module:foo\ncode_hash: sha256:{legacy}\nreview_tier: 1\n---\n\nBody.\n")
+        _init_git_repo(self.tmp)
+        return legacy
+
+    def _run(self, apply):
+        return mch.migrate([self.tmp], [self.tmp], apply=apply, out=lambda *_: None)
+
+    def test_unchanged_code_legacy_hash_is_rewritten(self):
+        self._setup_history()
+        result = self._run(apply=True)
+        self.assertEqual(len(result["legacy"]), 1)
+        norm = ccf.compute_function_hash(self.path)["my_module:foo"]
+        self.assertIn(f"code_hash: sha256:{norm}\n", self._claim_text())
+        self.assertEqual(ccf.check_claims(self.tmp), [])
+
+    def test_comment_only_change_since_the_claim_is_rewritten_via_history(self):
+        self._setup_history()
+        _write(self.path, _COMMENTED.replace("add one", "increment"))
+        self._commit("reword comment")
+        result = self._run(apply=True)
+        self.assertEqual(len(result["comment-only"]), 1)
+        self.assertEqual(result["stale"], [])
+        self.assertEqual(ccf.check_claims(self.tmp), [])
+        self.assertIn("Body.\n", self._claim_text())
+
+    def test_a_real_code_change_since_the_claim_is_reported_and_not_rewritten(self):
+        self._setup_history()
+        before = self._claim_text()
+        _write(self.path, _COMMENTED.replace("x + 1", "x + 2"))
+        self._commit("change code")
+        result = self._run(apply=True)
+        self.assertEqual(len(result["stale"]), 1)
+        self.assertEqual(self._claim_text(), before)
+
+    def test_report_only_without_apply_and_orphans_are_listed(self):
+        self._setup_history()
+        before = self._claim_text()
+        _write(
+            os.path.join(self.tmp, "claims", "gone.md"),
+            "---\nanchor: my_module:gone\ncode_hash: sha256:00\n---\n",
+        )
+        self._commit("orphan")
+        result = self._run(apply=False)
+        self.assertEqual(len(result["legacy"]), 1)
+        self.assertEqual(len(result["orphan"]), 1)
+        self.assertEqual(self._claim_text(), before)
 
 
 if __name__ == "__main__":

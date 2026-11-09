@@ -157,12 +157,10 @@ class MainIntegrationTests(unittest.TestCase):
         self.assertEqual(code, 0, out)
 
     def test_a_claude_worktree_directory_is_never_walked(self):
-        # Real bug found 2026-09-12: this project's own standing convention runs concurrent
-        # bug-hunt dispatches in isolated git worktrees under .claude/worktrees/<session>/
-        # inside the repo root -- a real git worktree checkout (confirmed with a real
-        # `git worktree add`), not an empty directory -- which this set never excluded, despite
-        # its own comment claiming to match check_absolute_paths.py's ignore set (which already
-        # had .claude).
+        # Agent sessions run in isolated git worktrees under .claude/worktrees/<session>/
+        # inside the repo root -- real git worktree checkouts (verified with a real
+        # `git worktree add`), not empty directories -- which this set must exclude, as its
+        # own comment says it matches check_absolute_paths.py's ignore set (which has .claude).
         _write(
             os.path.join(
                 self.tmp, ".claude", "worktrees", "sess1", "mod_a", "tests", "test_foo.py"

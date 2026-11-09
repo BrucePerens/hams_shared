@@ -4,6 +4,7 @@
 import ast
 import os
 import sys
+from tree_files import tree_walk
 
 
 def _own_scope_nodes(node):
@@ -114,13 +115,13 @@ def check_file(filepath):
     return errors
 
 
-# Real bug found 2026-09-12: main()'s os.walk() below pruned nothing at all -- unlike every
-# sibling checker in this tree, it didn't even exclude .git/node_modules/venv, let alone this
-# project's own standing .claude/worktrees/<session>/ convention (a real git worktree checkout,
-# not an empty directory, per the identical fix applied the same night to check_shebang.py/
+# main()'s os.walk() below must prune these directories -- unlike every
+# sibling checker in this tree, an unpruned walk wouldn't even exclude .git/node_modules/venv,
+# let alone the standing .claude/worktrees/<session>/ location of agent sessions' worktrees (a
+# real git worktree checkout, not an empty directory, as in check_shebang.py/
 # check_rabbitmq_pool.py/check_pip_audit.py/check_cargo_deny.py). A `models/*.py` file
 # vendored inside a virtualenv, or living inside another session's own in-progress worktree,
-# was scanned as if it were real first-party source.
+# would be scanned as if it were real first-party source.
 IGNORE_DIR_NAMES = {
     ".git",
     "node_modules",
@@ -145,8 +146,7 @@ def main():
 
     all_errors = []
     for directory in search_dirs:
-        for root, dirs, files in os.walk(directory):
-            dirs[:] = [d for d in dirs if d not in IGNORE_DIR_NAMES]
+        for root, _dirs, files in tree_walk(directory, ".py", IGNORE_DIR_NAMES, untracked=True):
             for file in files:
                 if file.endswith(".py") and "models" in root:
                     filepath = os.path.join(root, file)

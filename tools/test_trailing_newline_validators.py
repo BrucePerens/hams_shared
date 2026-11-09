@@ -7,7 +7,7 @@ Validators that end in `\\Z`, not `$`.
 In Python `$` also matches just before a final newline, so a `^...$` pattern used with `.match()` lets
 exactly one trailing newline through. These patterns guard names that reach SQL, paths, tenant specs,
 backup directories and a command line, so each must refuse "<good value>\\n" and still accept the good
-value. Tests the patterns in b2_backup, tenant_lib, odoo_snapshot_source, provision, test.py,
+value. Tests the patterns in b2_backup, tenant_lib, odoo_snapshot_source, provision, test.py, benchmark_template_db,
 rmsgw_callsign_handoff_wrapper and mirror_relay_tool_releases.
 """
 
@@ -63,6 +63,12 @@ class TestTrailingNewlineRefused(unittest.TestCase):
     def test_test_runner_database_name_pattern(self):
         runner = _load("_hams_test_runner_for_newline_check", "test.py")
         self._pairs(runner._SAFE_DB_NAME_RE, "hams_test")
+
+    def test_template_benchmark_identifier_pattern(self):
+        benchmark = _load("_hams_template_benchmark_for_newline_check", "benchmark_template_db.py")
+        self._pairs(benchmark.SAFE_IDENTIFIER_RE, "hams_tpl_ab12")
+        with self.assertRaises(ValueError):
+            benchmark.check_identifier("hams_tpl_ab12\n")
 
     def test_rmsgw_callsign_pattern(self):
         wrapper = _load("_hams_rmsgw_wrapper_for_newline_check", "rmsgw_callsign_handoff_wrapper.py")

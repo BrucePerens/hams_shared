@@ -6,8 +6,8 @@ cargo-deny gate (see docs/proposals/CODE_REVIEW_PROCESS.md, "Formal verification
 -------------------------------------------------------------------------------------------
 The Rust supply-chain/license/advisory scan check_pip_audit.py's own docstring already
 describes as its "direct Python parallel" -- but was never actually wired into
-run_linters.py at all, a real gap found 2026-08-26 while running cargo-deny by hand for
-the first time in this codebase's history and finding 11 real, previously-unremediated
+run_linters.py at all, a real gap: running cargo-deny by hand for
+the first time in this codebase's history found 11 real, previously-unremediated
 advisory/license/unmaintained findings in hams_local_relay alone (an HTTP/2
 unbounded-DATA-frame DoS vector among them). Runs `cargo deny check` in every daemons/
 subdirectory that has both a Cargo.toml and a deny.toml -- a crate with no deny.toml is
@@ -24,6 +24,7 @@ import subprocess
 import sys
 
 import lint_exec
+from tree_files import tree_walk
 
 # "site-packages" matches any virtualenv by its structurally-guaranteed lib/pythonX.Y/
 # site-packages/ subdirectory regardless of the venv's own outer directory name (".venv"/"venv"
@@ -31,18 +32,16 @@ import lint_exec
 # for the full story).
 IGNORE_DIR_NAMES = {"__pycache__", "node_modules", ".venv", "venv", "target", ".git", ".claude", "site-packages"}
 
-# Real bug found 2026-09-12, same class and same real-worktree confirmation as
-# check_pip_audit.py's own fix (see its own comment): `.claude/worktrees/<session>/` is a real
-# `git worktree` checkout, not an empty directory -- confirmed directly, a real worktree created
+# Same exclusion and same real-worktree verification as
+# check_pip_audit.py (see its own comment): `.claude/worktrees/<session>/` is a real
+# `git worktree` checkout, not an empty directory -- a real worktree created
 # from this exact repo checked out all 4 real deny.toml-bearing crates
 # (hams_local_relay/hams_relay_bridge/hams_data_relay/hams_simulated_band), and
-# `find_deny_crates()` found all 4 again under the worktree path before this fix. A previous
-# review pass wrongly dismissed this checker as immune on the same never-actually-verified
-# reasoning already corrected in check_pip_audit.py -- retracted here too.
+# `find_deny_crates()` would find all 4 again under the worktree path without the exclusion.
 
-# Real gap found 2026-09-12, same class as check_pip_audit.py's own fix: `cargo deny check` can
+# Same as check_pip_audit.py: `cargo deny check` can
 # fetch a fresh advisory-db over the network (per cargo-deny's own documented behavior), and
-# neither subprocess.run() call below passed a `timeout=` -- a stalled network condition would
+# both subprocess.run() calls below need a `timeout=` -- a stalled network condition would
 # block this call, and everything downstream of it in a run_linters.py run, indefinitely.
 # check_dependency_releases.py's REQUEST_TIMEOUT_SECONDS convention, mirrored here as two
 # separate constants since the version-probe and the real per-crate check have very different
@@ -88,8 +87,7 @@ def _has_odoo_module(directory):
 
 def find_deny_crates(repo_root):
     found = []
-    for root, dirs, filenames in os.walk(repo_root):
-        dirs[:] = [d for d in dirs if d not in IGNORE_DIR_NAMES]
+    for root, _dirs, filenames in tree_walk(repo_root, (".toml",), IGNORE_DIR_NAMES, untracked=True):
         if "Cargo.toml" in filenames and "deny.toml" in filenames:
             found.append(root)
     return sorted(found)
@@ -116,7 +114,7 @@ def main():
             timeout=VERSION_CHECK_TIMEOUT_SECONDS,
         )
     except FileNotFoundError:
-        # Real bug found 2026-09-10: `subprocess.run(["cargo", ...])` raises FileNotFoundError,
+        # `subprocess.run(["cargo", ...])` raises FileNotFoundError,
         # uncaught, when the `cargo` binary itself isn't on PATH at all -- a materially
         # different, realistic condition from "cargo exists but the `deny` subcommand isn't
         # installed" (already handled below via a non-zero returncode). A Python-only

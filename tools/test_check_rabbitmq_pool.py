@@ -84,10 +84,9 @@ class CheckRabbitmqTests(unittest.TestCase):
         self.assertEqual(chk.check_rabbitmq(self.tmp), [])
 
     def test_a_claude_worktree_directory_is_never_walked(self):
-        # Real bug found 2026-09-12: this project's own standing convention runs concurrent
-        # bug-hunt dispatches in isolated git worktrees under .claude/worktrees/<session>/
-        # inside the repo root -- a real git worktree checkout (confirmed with a real
-        # `git worktree add`), not an empty directory -- which this set never excluded.
+        # Agent sessions run in isolated git worktrees under .claude/worktrees/<session>/
+        # inside the repo root -- real git worktree checkouts (verified with a real
+        # `git worktree add`), not empty directories -- which this set must exclude.
         _write(
             os.path.join(self.tmp, ".claude", "worktrees", "sess1", "foo.py"),
             "conn = pika.BlockingConnection(params)\n",
@@ -120,10 +119,10 @@ class CheckRabbitmqTests(unittest.TestCase):
         self.assertEqual(chk.check_rabbitmq(self.tmp), [])
 
     def test_a_broken_symlink_is_skipped_without_crashing(self):
-        # Real bug found 2026-09-10: a broken symlink (target doesn't exist) with a .py
-        # extension makes open() raise FileNotFoundError, not caught before this fix -- crashing
-        # the entire scan on one unreadable file. Real, reachable repo state (see
-        # check_absolute_paths.py's identical fix), not contrived.
+        # A broken symlink (target doesn't exist) with a .py extension makes open() raise
+        # FileNotFoundError, which must be caught -- otherwise the entire scan crashes on one
+        # unreadable file. Real, reachable repo state (see
+        # check_absolute_paths.py's identical handling), not contrived.
         os.symlink(
             os.path.join(self.tmp, "does_not_exist.py"),
             os.path.join(self.tmp, "broken.py"),

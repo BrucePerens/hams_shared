@@ -42,7 +42,7 @@ class FindOwlTemplateFilesTests(unittest.TestCase):
         self.assertEqual(found, [])
 
     def test_ignores_a_directory_whose_name_merely_contains_xml_as_a_substring(self):
-        """Real bug found reviewing this checker: the "cheap prefilter" computes
+        """The "cheap prefilter" computes
         os.path.join(os.sep, "static", os.sep, "src", os.sep, "xml"), intending "/static/src/xml"
         -- but os.path.join resets to the last absolute-path argument it sees, and every os.sep
         argument here IS itself absolute, so the actual value is just "/xml" (confirmed directly:
@@ -61,12 +61,10 @@ class FindOwlTemplateFilesTests(unittest.TestCase):
         self.assertEqual(found, [])
 
     def test_ignores_a_claude_worktree_directory(self):
-        """Real, live bug found reviewing this checker: the dirs-pruning tuple had no generic
-        dot-directory exclusion. This project's own standing convention runs concurrent bug-hunt
-        dispatches in isolated git worktrees under .claude/worktrees/<session>/ INSIDE the repo
-        root -- confirmed live: running this exact function against the real hams_com repo during
-        this review found 40 of 60 template files were duplicates from two other concurrently
-        active sessions' own worktrees, meaning this checker (which compiles every template via a
+        """The dirs-pruning tuple needs a generic dot-directory exclusion. Agent sessions run in
+        isolated git worktrees under .claude/worktrees/<session>/ INSIDE the repo root; in one
+        measured run against the hams_com repo, 40 of 60 template files found were duplicates
+        from other concurrently active sessions' worktrees, meaning this checker (which compiles every template via a
         real headless Chrome) was spending roughly two-thirds of its real compile work re-checking
         other sessions' own unrelated copies."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -148,7 +146,7 @@ class RealCompileCheckIntegrationTests(unittest.TestCase):
         self.assertIn("SUCCESS", stdout)
 
     def test_the_real_numeric_separator_bug_is_caught(self):
-        # The exact real bug found and fixed in ham_shack.WebShackTemplate, 2026-09-07.
+        # The exact real bug in ham_shack.WebShackTemplate.
         with tempfile.TemporaryDirectory() as tmpdir:
             self._write_template(tmpdir, "some_module.Broken", "(state.value / 1_000_000).toFixed(6)")
             returncode, stdout = _run_checker(tmpdir)

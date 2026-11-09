@@ -4,8 +4,7 @@
 """
 Flags direct `window.fetch = ...`/`globalThis.fetch = ...` reassignment in *.test.js files.
 
-Origin: found live during the 2026-09-08 patent-disclosure re-verification of disclosure 26
-(`ham_world_map_view.test.js`) -- two tests reassigned `window.fetch` directly to mock a network
+Origin: `ham_world_map_view.test.js` -- two tests reassigned `window.fetch` directly to mock a network
 call, which throws `TypeError: Cannot assign to read only property 'fetch'` under the real Odoo
 `@odoo/hoot` test harness, since hoot's mocked `window` makes `window.fetch` read-only. Both tests
 had silently never been run for real; the codebase's own sanctioned pattern is the `mockFetch()`
@@ -27,6 +26,8 @@ import os
 import re
 import sys
 
+from tree_files import tree_files
+
 _ASSIGNMENT_RE = re.compile(
     r"""(?:window|globalThis)(?:\.fetch|\[['"]fetch['"]\])\s*=(?!=)"""
 )
@@ -43,10 +44,9 @@ _IGNORE_DIRS = {
     "radae",
     # Stale `git worktree add` checkouts under .claude/worktrees/<hash>/ --
     # frozen, historical copies from past agent sessions, not live source.
-    # Found live wiring this check into run_linters.py: several already-
-    # fixed test.js files still had old, broken worktree copies lingering
-    # here, which this check flagged even though the real source was
-    # clean. Same reasoning as check_absolute_paths.py's own archive/
+    # Already-fixed test.js files can have old, broken worktree copies
+    # lingering here, which this check would flag even though the real
+    # source is clean. Same reasoning as check_absolute_paths.py's own archive/
     # exclusion and check_hoot_runner_coverage.py's own ignore_dirs.
     ".claude",
     # Matches any virtualenv by its structurally-guaranteed lib/pythonX.Y/site-packages/
@@ -59,32 +59,25 @@ _IGNORE_DIRS = {
 def check_window_fetch_reassignment(repo_dir):
     violations = []
 
-    for root, dirs, files in os.walk(repo_dir):
-        dirs[:] = [d for d in dirs if d not in _IGNORE_DIRS]
-
-        for file in files:
-            if not file.endswith(".test.js"):
-                continue
-
-            file_path = os.path.join(root, file)
-            try:
-                with open(file_path, "r", encoding="utf-8") as f:
-                    for i, line in enumerate(f, 1):
-                        if _ASSIGNMENT_RE.search(line):
-                            violations.append(
-                                f"{os.path.relpath(file_path, repo_dir)}:{i} Direct `window.fetch = "
-                                "...`/`globalThis.fetch = ...` reassignment -- this throws under the "
-                                "real @odoo/hoot test harness (hoot's mocked window makes fetch "
-                                "read-only). Use this repo's own mockFetch() helper instead (see "
-                                "ham_shack/static/tests/web_transceiver.test.js for the established "
-                                "pattern)."
-                            )
-            except (UnicodeDecodeError, OSError) as e:
-                # OSError added 2026-09-10: a broken symlink (target doesn't exist) with a
-                # .test.js name makes open() raise FileNotFoundError, not caught before this
-                # fix -- crashing the entire scan on one unreadable file. Real, reachable repo
-                # state (see check_absolute_paths.py's identical fix), not contrived.
-                print(f"Warning: could not read {file_path}: {e}")
+    for file_path in tree_files(repo_dir, ".test.js", _IGNORE_DIRS):
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                for i, line in enumerate(f, 1):
+                    if _ASSIGNMENT_RE.search(line):
+                        violations.append(
+                            f"{os.path.relpath(file_path, repo_dir)}:{i} Direct `window.fetch = "
+                            "...`/`globalThis.fetch = ...` reassignment -- this throws under the "
+                            "real @odoo/hoot test harness (hoot's mocked window makes fetch "
+                            "read-only). Use this repo's own mockFetch() helper instead (see "
+                            "ham_shack/static/tests/web_transceiver.test.js for the established "
+                            "pattern)."
+                        )
+        except (UnicodeDecodeError, OSError) as e:
+            # OSError added 2026-09-10: a broken symlink (target doesn't exist) with a
+            # .test.js name makes open() raise FileNotFoundError, not caught before this
+            # fix -- crashing the entire scan on one unreadable file. Real, reachable repo
+            # state (see check_absolute_paths.py's identical fix), not contrived.
+            print(f"Warning: could not read {file_path}: {e}")
 
     return violations
 

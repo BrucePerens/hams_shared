@@ -9,6 +9,7 @@ is only on the very first line of the file.
 import os
 import re
 import sys
+from tree_files import tree_files
 
 _HEREDOC_OPEN = re.compile(r"<<-?\s*(?:'([^']+)'|\"([^\"]+)\"|\\?([A-Za-z_][A-Za-z0-9_]*))")
 
@@ -25,10 +26,9 @@ def check_shebang(repo_dir):
         ".venv",
         "__pycache__",
         ".agents",
-        # Real bug found 2026-09-12: this project's own standing convention runs concurrent
-        # bug-hunt dispatches in isolated git worktrees under .claude/worktrees/<session>/
-        # inside the repo root -- a real git worktree checkout, not an empty directory --
-        # which this set never excluded.
+        # ".claude" holds agent sessions' isolated git worktrees under
+        # .claude/worktrees/<session>/ inside the repo root -- real git worktree checkouts, not
+        # empty directories -- so it is excluded.
         ".claude",
         "target",
         "radae",
@@ -46,52 +46,51 @@ def check_shebang(repo_dir):
         ".sh",
     }
 
-    for root, dirs, files in os.walk(repo_dir):
-        # Modify dirs in-place to ignore specified directories
-        dirs[:] = [d for d in dirs if d not in ignore_dirs]
+    # Every file git tracks (plus new ones not yet added), not whatever sits on disk: another agent's worktree nested under
+    # this checkout (tmp/<name>/...) is a different tree and its scripts are not ours to flag. Every name is listed here
+    # (suffix ""), and the extension rule below narrows it to scripts, because an extensionless file can be a script too.
+    for file_path in tree_files(repo_dir, "", ignore_dirs, untracked=True):
+        file = os.path.basename(file_path)
+        ext = os.path.splitext(file)[1]
+        if ext not in valid_exts and "." in file:
+            continue
 
-        for file in files:
-            ext = os.path.splitext(file)[1]
-            if ext not in valid_exts and "." in file:
-                continue
-
-            file_path = os.path.join(root, file)
-            # A dangling symlink (recorded sysfs trees such as bench_mcp's usb_fixtures hold
-            # `driver` links into the machine they were recorded on) has no content to scan.
-            if os.path.islink(file_path) and not os.path.exists(file_path):
-                continue
-            try:
-                with open(file_path, "r", encoding="utf-8") as f:
-                    heredoc_end = None
-                    for i, line in enumerate(f, 1):
-                        # A shell script that writes another script out with a here-document carries that
-                        # script's own `#!` line inside the body; that is data, not a misplaced shebang.
-                        if heredoc_end is not None:
-                            if line.strip() == heredoc_end:
-                                heredoc_end = None
+        # A dangling symlink (recorded sysfs trees such as bench_mcp's usb_fixtures hold
+        # `driver` links into the machine they were recorded on) has no content to scan.
+        if os.path.islink(file_path) and not os.path.exists(file_path):
+            continue
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                heredoc_end = None
+                for i, line in enumerate(f, 1):
+                    # A shell script that writes another script out with a here-document carries that
+                    # script's own `#!` line inside the body; that is data, not a misplaced shebang.
+                    if heredoc_end is not None:
+                        if line.strip() == heredoc_end:
+                            heredoc_end = None
+                        continue
+                    if ext != ".py" and not line.lstrip().startswith("#"):
+                        opener = _HEREDOC_OPEN.search(line)
+                        if opener:
+                            heredoc_end = next(g for g in opener.groups() if g)
                             continue
-                        if ext != ".py" and not line.lstrip().startswith("#"):
-                            opener = _HEREDOC_OPEN.search(line)
-                            if opener:
-                                heredoc_end = next(g for g in opener.groups() if g)
-                                continue
-                        if line.startswith("#!") and i != 1:
-                            violations.append(
-                                f"{os.path.relpath(file_path, repo_dir)}:{i} Contains shebang `#!` on a line other than line 1"
-                            )
-            except UnicodeDecodeError:
-                # Binary content (a recorded USB `descriptors` blob): not a script, so it
-                # cannot carry a misplaced shebang. Not a warning.
-                continue
-            except OSError as e:
-                # Skip binary files or files with weird encodings (UnicodeDecodeError), AND any
-                # other realistic filesystem condition open() can raise for a name os.walk()
-                # already handed us as a "file" -- most concretely a broken symlink
-                # (FileNotFoundError), a real, currently-reachable state in this exact repo
-                # (see check_absolute_paths.py's own identical fix/comment for the concrete
-                # AGENTS.md-in-a-fresh-worktree scenario this guards against). Before this fix,
-                # a single broken symlink to a .py/.sh file crashed the ENTIRE scan.
-                print(f"Warning: could not read {file_path}: {e}")
+                    if line.startswith("#!") and i != 1:
+                        violations.append(
+                            f"{os.path.relpath(file_path, repo_dir)}:{i} Contains shebang `#!` on a line other than line 1"
+                        )
+        except UnicodeDecodeError:
+            # Binary content (a recorded USB `descriptors` blob): not a script, so it
+            # cannot carry a misplaced shebang. Not a warning.
+            continue
+        except OSError as e:
+            # Skip binary files or files with weird encodings (UnicodeDecodeError), AND any
+            # other realistic filesystem condition open() can raise for a name os.walk()
+            # already handed us as a "file" -- most concretely a broken symlink
+            # (FileNotFoundError), a real, currently-reachable state in this exact repo
+            # (see check_absolute_paths.py's own identical fix/comment for the concrete
+            # AGENTS.md-in-a-fresh-worktree scenario this guards against). Without this,
+            # a single broken symlink to a .py/.sh file crashed the ENTIRE scan.
+            print(f"Warning: could not read {file_path}: {e}")
 
     return violations
 

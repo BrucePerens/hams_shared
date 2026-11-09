@@ -66,6 +66,7 @@ import os
 import lint_exec
 import re
 import sys
+from tree_files import tree_files
 
 SKIP_DIRS = {"node_modules", "__pycache__", ".git", "radae", "external"}
 EXCLUDE_TOP_LEVEL = {"archive", "scratch"}
@@ -114,11 +115,7 @@ def _iter_module_dirs(repo_root):
 
 
 def _iter_all_files(repo_root, extensions):
-    for root, dirs, files in os.walk(repo_root):
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".")]
-        for filename in files:
-            if filename.endswith(extensions):
-                yield os.path.join(root, filename)
+    yield from tree_files(repo_root, extensions, SKIP_DIRS, skip_hidden=True, untracked=True)
 
 
 TEMPLATE_ID_RE = re.compile(r'<template\s+[^>]*\bid="([^"]+)"')
@@ -129,7 +126,7 @@ VIEW_RECORD_RE = re.compile(
 
 def _find_template_declarations(path, module):
     """Skips any <template> that carries its own inherit_id attribute -- a real, systematic
-    false-positive source found live on the first real-repo run: a template that inherits
+    false-positive source seen on real repos: a template that inherits
     another (e.g. <template id="user_navbar_inherit_logbook"
     inherit_id="user_websites.user_navbar">) is auto-applied by Odoo whenever its base template
     loads. It needs no one to reference ITS OWN id to be reachable -- the reference relationship
@@ -183,12 +180,11 @@ def _find_js_files(module_dir, module):
     js_dir = os.path.join(module_dir, "static", "src", "js")
     if not os.path.isdir(js_dir):
         return declarations
-    for root, dirs, files in os.walk(js_dir):
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
-        for filename in files:
-            if not filename.endswith(".js") or filename.endswith(".test.js"):
-                continue
-            declarations.append((module, filename, os.path.join(root, filename), 1))
+    for path in tree_files(js_dir, ".js", SKIP_DIRS, untracked=True):
+        filename = os.path.basename(path)
+        if filename.endswith(".test.js"):
+            continue
+        declarations.append((module, filename, path, 1))
     return declarations
 
 
@@ -225,7 +221,7 @@ def _references(needle, reference_index, own_path, own_lineno):
     scoped to a specific XML attribute or Python call shape -- see the module docstring for why
     a loose, generous match is the intentional, safer failure direction for an advisory (not
     yet gating) check. Exact-token match (via the tokenized index), not plain substring: a real
-    false negative was found live while building this checker -- 'elmer_directory' (the real
+    false negative arises otherwise -- 'elmer_directory' (the real
     dead template's own id) is a plain substring of 'test_elmer_directory' (its own
     audit-ignore-view anchor comment, a few lines below the declaration), so a bare `needle in
     line` check treated the id as "referenced" by its own anchor comment and never flagged the
