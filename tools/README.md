@@ -3394,7 +3394,7 @@ Purpose: wait for an output file or exit marker. Code 0 when `path` exists and (
 
 ### `[@ANCHOR: agent_procs:group_members]` `group_members(table, pgid, sid)`
 
-Purpose: the verified membership of a job's group. Returns the live (not zombie) processes with that process group **and** session. A reused pid cannot be a member, because a process-group id cannot be reused while the group has members.
+Purpose: the verified membership of a job's group. Returns the live (not zombie) processes with that process group **and** session. While the group has members its id cannot be reused as a pid, but once it is empty a new session leader may get the same number, so `stop_job` also compares the start time of the process that has the recorded pid.
 
 ### `[@ANCHOR: agent_procs:stop_job]` `stop_job(name, grace=10, force=False, owner_checked=False, out=sys.stdout, directory=None, sleep=..., clock=...)`
 
@@ -3407,7 +3407,7 @@ Purpose: stop a NAMED job and nothing else.
 | `force` | bool | Send SIGKILL to the verified group if SIGTERM was not enough. |
 | `owner_checked` | bool | `--i-am-the-owner-and-checked`: skip the protected-process refusal for your own job. |
 
-Order: read the record; find members by group and session (none: "not running", return 0); refuse a group that holds the caller's own shell; print the ps line of every member; refuse (code 3) a member of another user or a protected one; `killpg(SIGTERM)`; wait up to `grace`; only with `force`, re-verify the members and `killpg(SIGKILL)`. Returns 0 when the group is gone, 1 when it is still running (the message says `--force`). The record gets `stopped = term/kill`. Side effects: signals, record write. Errors: `ProcError` code 2 for an unknown job, 3 for a refusal.
+Order: read the record; find members by group and session (none: "not running", return 0); refuse a group that holds the caller's own shell; when the process that now has the recorded pid has another start time (the pid was reused), report "not running" and return 0 without signalling; print the ps line of every member; refuse (code 3) a member of another user or a protected one; `killpg(SIGTERM)`; wait up to `grace`; only with `force`, re-verify the members and `killpg(SIGKILL)`. Returns 0 when the group is gone, 1 when it is still running (the message says `--force`). The record gets `stopped = term/kill`. Side effects: signals, record write. Errors: `ProcError` code 2 for an unknown job, 3 for a refusal.
 
 ### `[@ANCHOR: agent_procs:authorize_kill]` `authorize_kill(info, start_ticks, cwd_under, directory=None)`
 
