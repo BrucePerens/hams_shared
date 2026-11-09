@@ -1,0 +1,185 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# hams_lint rule file: every check the Rust engine runs. Embedded into the binary at build time
+# (`hams_lint --rules FILE` reads another one). A check here REPLACES the Python checker named in
+# `legacy` only after tools/lint_engine_parity.py shows both report the same findings on the whole
+# tree, on the examples below and on injected violations (the parity rule; see the design notes in
+# src/main.rs). Until then the Python checker stays the lint step and this definition is a candidate.
+#
+# Format (version 1), one [[check]] table per check:
+#   name          lint step name (pass stamps and run_linters.py use it)
+#   legacy        the Python checker this replaces
+#   roots         single (only the first argument) | multi (every argument, duplicates dropped)
+#                 | multi_shared_parent (every argument; a directory named hams_shared means its parent)
+#   report        list (`header`, then `  - rel:line message`) | inline (`❌ rel:line: message`)
+#   usage, what   the legacy usage line and require_scanned's "scanned 0 <what>" wording
+#   order         walk (files of a directory before its subdirectories) | path (sorted paths)
+#   scanned_check before | after: when the "scanned 0 files" refusal is checked
+#   read          lines_strict (Python line iteration, utf-8, findings before a decode error kept)
+#                 | text_replace (whole text, bad bytes replaced, str.splitlines() numbering)
+#   on_error      warn (`Warning: could not read PATH: ERROR`) | silent
+#   algorithm     a Rust algorithm (src/algos.rs) instead of rules
+#   cacheable     cache results by file content (for expensive algorithms; a pattern scan is cheaper than the hash)
+#   skip_file_if  regex: the whole file is clean when it matches anywhere
+#   [check.files] suffixes, skip_dirs, skip_hidden_dirs, skip_rel_dirs, untracked, exts, names,
+#                 keep_dotless, accept_any (path regexes), skip_names (`prefix*suffix`), skip_broken_links
+#   [[check.rule]] id, regex (Rust regex syntax) or literal, unless_line (regex exempting the line),
+#                 message (`{1}`..`{9}` = capture groups), post_filter (a Rust exception, src/algos.rs),
+#                 legacy_regex (the Python pattern when the Rust one had to be rewritten, e.g. no lookahead)
+#   inject        lines the parity harness appends to real files (an injected violation)
+#   [[check.example]] path, content, lines: an injected case and the line numbers it must report
+#                 (`hams_lint selftest`; the parity harness also runs the Python checker on it)
+
+version = 1
+
+[[check]]
+name = "check_absolute_paths"
+inject = ["injected = '/home/parity-injected'"]
+legacy = "check_absolute_paths.py"
+roots = "single"
+report = "list"
+header = "❌ Absolute Paths Violations:"
+usage = "Usage: check_absolute_paths.py <repo_dir>"
+what = "source, doc and data files"
+order = "walk"
+read = "lines_strict"
+on_error = "warn"
+[check.files]
+suffixes = [".csv", ".css", ".html", ".js", ".json", ".md", ".py", ".sh", ".txt", ".xml", "Makefile"]
+skip_dirs = [".git", "node_modules", "venv", "env", ".venv", "__pycache__", ".agents", "target", "radae", "agents",
+    "scratch", ".mypy_cache", "archive", ".claude", "ics_training", "ham_auxcomm_training",
+    "night_shift_history_archive", "night_shift_history", "site-packages"]
+skip_rel_dirs = ["daemons/cloudflared/vendor", "docs/handoff", "docs/reviews/relay_self_update_proof_evidence"]
+untracked = true
+exts = [".py", ".js", ".xml", ".csv", ".md", ".json", ".txt", ".sh", ".html", ".css"]
+names = ["Makefile"]
+skip_names = ["course_*.json", "orphaned-worktree-*.md", "night_shift_history.md", "check_absolute_paths.py",
+    "test_check_absolute_paths.py"]
+[[check.rule]]
+id = "home-path"
+literal = "/home/"
+message = "Contains hardcoded home path"
+[[check.example]]
+path = "pkg/run.sh"
+content = "cd /tmp\ncd /home/someone/x\r\necho ok\rls /home/\n"
+lines = [2, 4]
+[[check.example]]
+path = "agents/note.md"
+content = "/home/skipped because agents/ is a skipped directory\n"
+lines = []
+[[check.example]]
+path = "course_1.json"
+content = "\"/home/\"\n"
+lines = []
+[[check.example]]
+path = "pkg/Makefile"
+content = "all:\n\tcp x /home/y\n"
+lines = [2]
+
+[[check]]
+name = "check_shebang"
+inject = ['''#!/bin/sh parity-injected''']
+legacy = "check_shebang.py"
+roots = "single"
+report = "list"
+header = "❌ Shebang Violations:"
+usage = "Usage: check_shebang.py <repo_dir>"
+what = "script and source files"
+order = "path"
+read = "lines_strict"
+on_error = "silent"
+algorithm = "shebang"
+[check.files]
+suffixes = [""]
+skip_dirs = [".git", "node_modules", "venv", "env", ".venv", "__pycache__", ".agents", ".claude", "target", "radae",
+    "vendor", "site-packages"]
+untracked = true
+exts = [".py", ".sh"]
+keep_dotless = true
+skip_broken_links = true
+[[check.example]]
+path = "tool.sh"
+content = "#!/bin/sh\necho hi\n#!/bin/bash\n"
+lines = [3]
+[[check.example]]
+path = "gen.sh"
+content = "#!/bin/sh\ncat > x <<'EOF'\n#!/bin/sh\n  EOF  \n#!/again\n"
+lines = [5]
+[[check.example]]
+path = "mod.py"
+content = "x = 1\nprint(1) <<EOF\n#!/usr/bin/env python3\n"
+lines = [3]
+[[check.example]]
+path = "notes.txt"
+content = "a\n#!/bin/sh\n"
+lines = []
+
+[[check]]
+name = "check_window_fetch_reassignment"
+inject = ['''window.fetch = parityInjected;''']
+legacy = "check_window_fetch_reassignment.py"
+roots = "multi"
+report = "list"
+header = "❌ window.fetch Reassignment Violations:"
+usage = "Usage: check_window_fetch_reassignment.py <repo_dir> [<repo_dir> ...]"
+what = "*.test.js files"
+order = "path"
+scanned_check = "before"
+read = "lines_strict"
+on_error = "warn"
+[check.files]
+suffixes = [".test.js"]
+skip_dirs = [".git", "node_modules", "venv", "env", ".venv", "__pycache__", ".agents", "target", "radae", ".claude",
+    "site-packages"]
+[[check.rule]]
+id = "fetch-assignment"
+regex = '''(?:window|globalThis)(?:\.fetch|\[['"]fetch['"]\])\s*=(?:[^=]|$)'''
+legacy_regex = '''(?:window|globalThis)(?:\.fetch|\[['"]fetch['"]\])\s*=(?!=)'''
+message = "Direct `window.fetch = ...`/`globalThis.fetch = ...` reassignment -- this throws under the real @odoo/hoot test harness (hoot's mocked window makes fetch read-only). Use this repo's own mockFetch() helper instead (see ham_shack/static/tests/web_transceiver.test.js for the established pattern)."
+[[check.example]]
+path = "static/tests/a.test.js"
+content = "window.fetch = f;\nif (window.fetch == g) {}\nglobalThis['fetch']=h\nwindow.fetch ===x\nwindow.fetch ="
+lines = [1, 3, 5]
+
+[[check]]
+name = "check_fake_network_listener"
+inject = ['''struct FakeParityInjectedSocket;''']
+legacy = "check_fake_network_listener.py"
+roots = "multi_shared_parent"
+report = "inline"
+usage = "Usage: check_fake_network_listener.py <repo_root> [<repo_root> ...]"
+what = "Rust and Python files"
+order = "path"
+read = "text_replace"
+skip_file_if = '''TcpListener::bind|axum::serve|\.bind\(\s*["'(]|HTTPServer\(|socketserver\.|websockets\.serve\(|serve_forever\('''
+[check.files]
+suffixes = [".rs", ".py"]
+skip_dirs = ["__pycache__", "node_modules", ".venv", "venv", "target", ".git", "worktrees", "site-packages"]
+skip_hidden_dirs = true
+accept_any = ['\.rs$', '(?:^|/)tests?/|(?:^|/)test_[^/]*\.py$|_test\.py$']
+[[check.rule]]
+id = "fake-network-type"
+regex = '''\b(?:struct|class)\s+((?:Fake|Mock|Dummy|Stub)\w*(?:Socket|Listener|Stream|Connection|WebSocket|Ws|Channel|Transport))\b'''
+unless_line = '''fake-network-ignore\s*:\s*\S'''
+post_filter = "usb_trait_impl"
+message = '''`{1}` looks like a hand-rolled fake standing in for a network primitive, but this file contains no real bound listener anywhere (TcpListener::bind / axum::serve / websockets.serve / HTTPServer / socketserver / .bind() / serve_forever). Mocking a daemon's OWN network layer via a duck-typed object hides real wire-protocol bugs (framing, auth handshake ordering, JSON shape) that only a real bound listener plus a real connecting client can catch -- see hams_relay_bridge's own real_network_integration_tests / dx_firehose's RealWebsocketServerTests for the established pattern. If this fake genuinely isn't standing in for real wire traffic, add `// fake-network-ignore: <reason>` (or `#` in Python) on this line.'''
+[[check.example]]
+path = "src/lib.rs"
+content = "struct FakeSocket;\nstruct MockTransport; // fake-network-ignore: not wire traffic\nclass StubWs:\n"
+lines = [1, 3]
+[[check.example]]
+path = "src/real.rs"
+content = "struct FakeSocket;\nfn f() { TcpListener::bind(\"x\"); }\n"
+lines = []
+[[check.example]]
+path = "src/usb.rs"
+content = "/// USB serial port.\npub trait Port {}\nstruct FakeStream;\nimpl Port for FakeStream {}\n"
+lines = []
+[[check.example]]
+path = "pkg/helpers.py"
+content = "class FakeSocket:\n"
+lines = []
+[[check.example]]
+path = "pkg/tests/test_x.py"
+content = "x = 1\u000bclass FakeSocket:\n"
+lines = [2]
