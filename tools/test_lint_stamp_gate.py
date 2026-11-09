@@ -54,6 +54,20 @@ class GateTests(unittest.TestCase):
         text = stamp(70, "", mode="full")
         self.assertIsNone(lint_stamp_gate.refusal(text, ["daemons/x/src/a.rs", "m/a.js"]))
 
+    def test_a_full_stamp_that_ran_zero_steps_is_refused_for_a_code_change(self):
+        reason = lint_stamp_gate.refusal(stamp(0, "", mode="full"), ["tools/a.py"])
+        self.assertIn("zero steps", reason)
+
+    def test_a_truncated_step_list_is_refused_for_a_rust_change(self):
+        text = "changed 2026-10-30T10:00:00 steps=9 names=flake8,check_cargo_cl"
+        self.assertIn("check_cargo_clippy", lint_stamp_gate.refusal(text, ["daemons/x/src/a.rs"]))
+
+    def test_a_missing_stamp_file_exits_nonzero_on_the_command_line(self):
+        result = subprocess.run(
+            [sys.executable, os.path.join(HERE, "lint_stamp_gate.py"), "/nonexistent/stamp"],
+            input="tools/a.py\n", capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+
     def test_a_markdown_only_change_needs_no_steps(self):
         self.assertIsNone(lint_stamp_gate.refusal(stamp(0, ""), ["docs/a.md"]))
 
