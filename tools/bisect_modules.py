@@ -67,7 +67,10 @@ def find_needed(items, reproduces, jobs=1, max_runs=DEFAULT_MAX_RUNS, on_step=No
 
     needed, pool = [], list(items)
     while True:
-        if evaluate([needed])[0] or stopped[0]:
+        if evaluate([needed])[0]:
+            break
+        if stopped[0]:  # the budget ended before `needed` was tried: the unsearched prefix may still be needed
+            needed = pool + needed
             break
         if not pool:  # needed alone did not reproduce although the whole set did: the failure is not deterministic
             stopped[0] = True
