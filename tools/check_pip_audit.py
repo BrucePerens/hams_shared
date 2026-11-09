@@ -22,6 +22,7 @@ import hashlib
 import json
 import math
 import os
+import check_target
 import lint_exec
 import subprocess
 import sys
@@ -246,11 +247,13 @@ def main():
         print("Usage: check_pip_audit.py <repo_root>")
         sys.exit(1)
 
+    target = check_target.require_directory(sys.argv[1], "check_pip_audit")
     requirements_files = [
         (repo_root, req_file)
-        for repo_root in _resolve_repo_roots(sys.argv[1])
+        for repo_root in _resolve_repo_roots(target)
         for req_file in find_requirements_files(repo_root)
     ]
+    check_target.require_scanned(len(requirements_files), target, "check_pip_audit", "requirements*.txt files")
     if not requirements_files:
         sys.exit(0)
 

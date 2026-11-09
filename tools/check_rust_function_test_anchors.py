@@ -49,6 +49,7 @@ import re
 import subprocess
 import sys
 
+import check_target  # noqa: E402
 import verify_anchors as va  # noqa: E402
 from check_function_test_anchors import _is_base_anchor_declaration  # noqa: E402
 
@@ -272,7 +273,10 @@ def main():
     )
     args = parser.parse_args()
 
-    repo_root = os.path.abspath(args.directory)
+    repo_root = check_target.require_directory(args.directory, "check_rust_function_test_anchors")
+    check_target.require_scanned(
+        len(_git_tracked_rust_files(repo_root)), repo_root, "check_rust_function_test_anchors", "git-tracked Rust files"
+    )
     baseline_path = args.baseline or os.path.join(
         os.path.dirname(os.path.abspath(__file__)), DEFAULT_BASELINE_FILENAME
     )

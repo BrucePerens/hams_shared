@@ -57,6 +57,21 @@ def require_directory(path, checker):
     return absolute
 
 
+# [@ANCHOR: check_target:require_file]
+def require_file(path, checker):
+    """`path` as an absolute path, after proving it is an existing regular file (for a checker whose target is a manifest, not a
+    directory). Anything else exits 2 with the cause."""
+    absolute = os.path.abspath(path)
+    if not os.path.exists(absolute):
+        _refuse(
+            f"[!] {checker}: {path!r} does not exist (resolved to {absolute}); nothing was read, so this is not a pass. "
+            "Next: pass the manifest file's path."
+        )
+    if not os.path.isfile(absolute):
+        _refuse(f"[!] {checker}: {path!r} is not a file (resolved to {absolute}); nothing was read, so this is not a pass. Next: pass the manifest file's path.")
+    return absolute
+
+
 # [@ANCHOR: check_target:require_scanned]
 def require_scanned(count, root, checker, what, environ=None):
     """Return `count` when at least one file was scanned; otherwise exit 2 naming the cause and the next action.

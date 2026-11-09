@@ -6644,7 +6644,7 @@ def test_a_directory_that_does_not_exist_is_red_not_a_clean_scan_of_zero_files(t
     # Negative control: a mistyped or renamed module used to print "Checked 0 files" and exit 0.
     result = _run_burn_list(tmp_path / "no_such_module")
     assert result.returncode == 2, result.stdout
-    assert "not a directory" in result.stdout
+    assert "does not exist" in result.stdout + result.stderr
 
 
 def test_a_module_colon_test_class_target_is_still_accepted(tmp_path):

@@ -21,6 +21,7 @@ There is no baseline file: findings go to zero and stay at zero (ADR 0090). A re
 (hams_open) has nothing to scan in steps 1 to 3 and passes them.
 """
 
+import check_target
 import glob
 import json
 import os
@@ -332,7 +333,16 @@ def main(argv=None):
     if not adrs:
         print("[!] ADR 0114 not found beside hams_shared/tools", file=sys.stderr)
         return 2
-    findings = find_findings(argv[0], adrs[0], os.path.join(HERE, "dependency_watch.json"))
+    target = check_target.require_directory(argv[0], "check_external_programs_documented")
+    relay = os.path.join(target, RELAY_DIR)
+    # A repository that carries no relay (hams_shared) has nothing to scan here; run by hand on one, that is a failure, not a pass.
+    check_target.require_scanned(
+        len(list(_relay_rust_files(relay))) if os.path.isdir(os.path.join(relay, "src")) else 0,
+        relay,
+        "check_external_programs_documented",
+        "relay Rust source files",
+    )
+    findings = find_findings(target, adrs[0], os.path.join(HERE, "dependency_watch.json"))
     if findings:
         print("[!] ADR 0114: the external programs the relay uses are not all inventoried, pinned and watched:")
         for f in findings:

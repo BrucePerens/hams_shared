@@ -49,10 +49,19 @@ class MainTests(unittest.TestCase):
         printed = " ".join(str(c) for c in mock_print.call_args_list)
         return ctx.exception.code, mock_run, printed
 
+    @patch.dict(os.environ, {"HAMS_CHECK_ALLOW_EMPTY": "1"})  # a step that may legitimately see zero files (check_target.py)
     def test_no_crates_exits_0_without_calling_subprocess_at_all(self):
         code, mock_run, _ = self._run_main(side_effect=[])
         self.assertEqual(code, 0)
         mock_run.assert_not_called()
+
+    @patch.dict(os.environ)
+    def test_no_crates_is_exit_2_by_hand(self):
+        os.environ.pop("HAMS_CHECK_ALLOW_EMPTY", None)
+        code, mock_run, _ = self._run_main(side_effect=[])
+        self.assertEqual(code, 2)
+        mock_run.assert_not_called()
+
 
     def test_rustfmt_not_installed_exits_1_with_a_clear_message(self):
         self._make_crate()

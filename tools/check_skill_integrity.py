@@ -12,6 +12,8 @@ import sys
 import glob
 import subprocess
 
+import check_target
+
 def check_skill_file(filepath, workspace_root):
     with open(filepath, "r", encoding="utf-8") as f:
         content = f.read()
@@ -57,14 +59,13 @@ def check_skill_file(filepath, workspace_root):
     return errors
 
 def main():
-    workspace_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # The checkout to check: the one this script is in, or the directory named on the command line.
+    given = sys.argv[1] if len(sys.argv) > 1 else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    workspace_root = check_target.require_directory(given, "check_skill_integrity")
     skills_dir = os.path.join(workspace_root, "agents", "skills")
-    
-    if not os.path.isdir(skills_dir):
-        # Skills dir doesn't exist, maybe not initialized yet
-        sys.exit(0)
-        
     skill_files = glob.glob(os.path.join(skills_dir, "**", "SKILL.md"), recursive=True)
+    # No skills directory, or none holding a SKILL.md, checked nothing (not an error under run_linters, which sets the opt-out).
+    check_target.require_scanned(len(skill_files), skills_dir, "check_skill_integrity", "agents/skills/**/SKILL.md files")
     
     violation = False
     

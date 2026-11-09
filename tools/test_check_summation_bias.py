@@ -136,11 +136,11 @@ class CheckSummationBiasTests(unittest.TestCase):
         code, out = _run(self.tmp)
         self.assertEqual(code, 0, out)
 
-    def test_not_a_git_repository_at_all_exits_cleanly(self):
+    def test_not_a_git_repository_at_all_is_exit_2_not_a_pass(self):
         no_git_dir = tempfile.mkdtemp()
         try:
             code, out = _run(no_git_dir)
-            self.assertEqual(code, 0, out)
+            self.assertEqual(code, 2, out)
         finally:
             shutil.rmtree(no_git_dir, ignore_errors=True)
 
