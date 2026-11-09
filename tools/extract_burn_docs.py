@@ -33,7 +33,7 @@ def write_docs(docs, output_file):
     literate-doc string this extractor looks for (confirmed empirically: `extract_docs` returns
     an empty list against the real, current `check_burn_list.py`) -- that convention was
     abandoned at some point in favor of hand-maintaining `linter_rules.md` directly (its own real
-    git history has 30+ commits, the most recent from this same bug-hunt campaign, describing a
+    git history has 30+ commits, the most recent describing a
     rich reference document with headers/tables/code blocks that bears no resemblance to what
     this script's own bullet-list format could ever produce). Running this script for real today
     would silently overwrite that real, valuable, actively-maintained file with an almost-empty
