@@ -284,6 +284,19 @@ class WorktreeHygieneTest(unittest.TestCase):
             wh.move_nested(main, other, workspace=ws)  # the target job directory exists
         self.assertTrue(os.path.isdir(other))
 
+    def test_a_moved_hams_shared_tree_is_not_named_hams_shared(self):
+        ws = os.path.join(self.tmp.name, "ws2")
+        os.makedirs(os.path.join(ws, "tmp"))
+        main = os.path.join(ws, "hams_open", "hams_shared")
+        os.makedirs(os.path.dirname(main))
+        subprocess.run(["git", "clone", "-q", os.path.join(self.tmp.name, "origin.git"), main], check=True, capture_output=True)
+        _git(main, "checkout", "-qB", "main")
+        path = os.path.join(main, "tmp", "topic")
+        _git(main, "worktree", "add", "-q", "-b", "topic", path, "origin/main")
+        new = wh.move_nested(main, path, workspace=ws)
+        self.assertEqual(os.path.basename(new), "hams_shared_wt")
+        self.assertEqual(sorted(os.listdir(os.path.dirname(new))), ["hams_com", "hams_open", "hams_shared_wt"])
+
     def test_move_nested_mode_never_moves_dirty_work(self):
         dirty = self.nested("dirty2", dirty=True)
         with unittest.mock.patch.object(wh, "move_nested") as mover:

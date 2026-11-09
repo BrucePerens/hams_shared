@@ -27,7 +27,7 @@ For every REPO (the main working tree of a repository):
     local tip is not the merged head; `--tip SHA` names that head) and held worktrees are still kept, and reported with the reason.
   * A linked worktree that lies INSIDE another git working tree (hams_open/tmp/..., .claude/worktrees/...) is NESTED (2026-11-09):
     anchor scans, ESLint and other checks that walk a checkout then scan it too. It is reported with the command that makes the clean
-    layout; with `--move-nested --apply` a clean, unheld, unlocked one is moved to `<workspace>/tmp/<job>/<repo>` with the sibling
+    layout; with `--move-nested --apply` a clean, unheld, unlocked one is moved to `<workspace>/tmp/<job>/<repo>` (`hams_shared_wt` for hams_shared) with the sibling
     links of `devbox_tools/new_agent_worktree.py`. Dirty, held and locked ones stay where they are and say why. Make worktrees with
     `devbox_tools/new_agent_worktree.py` and they are never nested.
   * Jobs that tool registered (`~/.local/state/agent-worktrees/<job>.json`, AGENT_WORKTREE_STATE overrides) whose worktree is gone and
@@ -289,8 +289,10 @@ def move_nested(repo, path, workspace=None):
     path. `git worktree move` refuses some trees (one with a submodule); the error is raised and nothing is left half-made."""
     workspace = workspace or os.path.expanduser("~/workspace")
     name = os.path.basename(all_worktrees(repo)[0][0].rstrip("/"))
+    # A hams_shared tree is never named hams_shared: run_linters.py would take its parent for the repository root.
+    tree_name = "hams_shared_wt" if name == "hams_shared" else name
     job_dir = os.path.join(workspace, "tmp", "moved-" + os.path.basename(path.rstrip("/")))
-    target = os.path.join(job_dir, name)
+    target = os.path.join(job_dir, tree_name)
     if os.path.lexists(job_dir):
         raise RuntimeError(f"{job_dir} already exists")
     os.makedirs(job_dir)

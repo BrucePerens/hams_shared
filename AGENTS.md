@@ -254,7 +254,7 @@ When debugging tests, especially UI tours, you can use the MCP test server inste
 * **Worktrees (rule of 2026-11-09; replaces "directly under `~/workspace/`"):** make every one with
   `python3 devbox_tools/new_agent_worktree.py <hams_com|hams_open|hams_shared> <branch> [--base origin/main]` (hams_com checkout;
   `eval "$(... | tail -n +2)"` applies the environment it prints). It builds `~/workspace/tmp/<job>/`, a job directory that holds only
-  that repository's tree and the sibling links the tooling needs (`hams_com` + `hams_open`; for hams_shared both), never inside a repository and
+  that repository's tree and the sibling links the tooling needs (`hams_com` + `hams_open`; for hams_shared both, and its tree is named `hams_shared_wt`, because `run_linters.py` takes a directory named `hams_shared` for a submodule and uses its parent as the repository root), never inside a repository and
   never beside another agent's tree, runs `fix_worktree_symlinks.py` (it links the `hams_shared` of a hams_com or hams_open worktree;
   to test a `hams_shared` change, make a hams_shared job instead) and registers the job for `worktree_hygiene.py`. Worktrees nested in
   a checkout (`hams_open/tmp/...`, `.claude/worktrees/...`) or crowded together made anchor scans, ESLint and other checks scan other
