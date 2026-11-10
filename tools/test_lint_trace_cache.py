@@ -84,6 +84,17 @@ class ParseAndVetoTests(unittest.TestCase):
         self.assertEqual(trace.absent, set())
         self.assertEqual(len(trace.contacts), 1)  # the network is never paused
 
+    # Tests [@ANCHOR: lint_trace_cache:step_key]
+    def test_the_key_ignores_job_and_session_bookkeeping_but_not_other_variables(self):
+        cache = ltc.TraceCache(tempfile.mkdtemp(), ltc.Roots({}), versions="v", environ={})
+        self.addCleanup(shutil.rmtree, cache.directory, True)
+
+        def key(**env):
+            return cache.step_key(lint_exec.Step("pytest x", ["python3", "t.py"], env=dict({"PATH": "/usr/bin"}, **env)))
+        self.assertEqual(key(AGENT_PROCS_JOB="lintA", BAGGAGE="a"), key(AGENT_PROCS_JOB="lintB", BAGGAGE="b"))
+        self.assertNotEqual(key(HAMS_FEATURE="1"), key(HAMS_FEATURE="2"))
+        self.assertNotEqual(key(DISPLAY=":0"), key())
+
     def test_the_maximum_age_takes_only_finite_non_negative_numbers(self):
         self.assertEqual(ltc.max_age_seconds({}), ltc.MAX_AGE_SECONDS)
         self.assertEqual(ltc.max_age_seconds({"HAMS_LINT_TRACE_CACHE_MAX_AGE": "60"}), 60.0)

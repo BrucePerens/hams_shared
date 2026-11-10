@@ -92,10 +92,17 @@ NSS_SOCKETS = ("/run/systemd/userdb/", "/var/run/nscd/socket", "/run/nscd/socket
 # Inside a repository: generated or derived content, never an input.
 REPO_DERIVED_PARTS = frozenset({"__pycache__", ".pytest_cache", ".mypy_cache", "target", ".ruff_cache"})
 # Volatile environment variables left out of the key (session, terminal, scheduling and scratch-path details).
+# Every other variable is part of the key (an unknown difference is a miss, never a wrong hit). Measured 2026-11-09: two otherwise identical
+# full lints of the same tree got no hit at all because each `agent_procs.py run` job has its own AGENT_PROCS_JOB; the desktop session adds
+# per-session ids (BAGGAGE, SENTRY-TRACE, GIO_LAUNCHED_DESKTOP_FILE_PID, MEMORY_PRESSURE_WATCH, ...). DISPLAY and WAYLAND_DISPLAY stay in the
+# key: a browser test may behave differently with a display.
 ENV_IGNORED = re.compile(
-    r"^(PWD|OLDPWD|SHLVL|_|TERM|TERM_.*|COLORTERM|SSH_.*|DISPLAY|WINDOWID|XDG_SESSION_.*|XDG_RUNTIME_DIR|DBUS_SESSION_BUS_ADDRESS|TMUX.*|STY|"
+    r"^(PWD|OLDPWD|SHLVL|_|TERM|TERM_.*|COLORTERM|SSH_.*|WINDOWID|XDG_SESSION_.*|XDG_RUNTIME_DIR|DBUS_SESSION_BUS_ADDRESS|TMUX.*|STY|"
     r"COLUMNS|LINES|MAIL|LS_COLORS|CLAUDE.*|ANTHROPIC.*|OTEL_.*|TMPDIR|TEMP|TMP|INVOCATION_ID|JOURNAL_STREAM|SYSTEMD_.*|MANAGERPID|"
-    r"HAMS_LINT_TIMEOUT_SCALE|HAMS_LINT_SLOT.*|HAMS_LINT_RUN_.*|HAMS_LOCK_HELD.*|HAMS_LINT_LOCK_.*|PYTEST_ADDOPTS|GIT_TRACE.*)$")
+    r"HAMS_LINT_TIMEOUT_SCALE|HAMS_LINT_SLOT.*|HAMS_LINT_RUN_.*|HAMS_LOCK_HELD.*|HAMS_LINT_LOCK_.*|PYTEST_ADDOPTS|GIT_TRACE.*|"
+    r"HAMS_SHARED_FF_RESTARTED|AGENT_PROCS_.*|AI_AGENT|BAGGAGE|SENTRY-TRACE|MCP_.*|API_TIMEOUT_MS|DISABLE_AUTOUPDATER|DISABLE_MICROCOMPACT|"
+    r"CHROME_DESKTOP|DESKTOP_.*|GDM.*|GIO_.*|GNOME_.*|GPG_AGENT_INFO|GTK_MODULES|IM_CONFIG_.*|QT_.*|XMODIFIERS|SESSION_MANAGER|"
+    r"MEMORY_PRESSURE_.*|ELECTRON_.*|XDG_CURRENT_DESKTOP|XDG_MENU_PREFIX|GIT_EDITOR|NoDefaultCurrentDirectoryInExePath)$")
 
 _LINE = re.compile(r"^(\d+) +(.*)$")
 _CALL = re.compile(r"^(\w+)\((.*)$")
