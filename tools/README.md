@@ -4612,6 +4612,19 @@ Purpose: the command line. `--before SPEC...` and `--after SPEC...` run the chec
 missing sentences; units longer than 200 characters are cut in the report); `--measure SPEC...` prints characters and `~tokens (chars/4)` per file and exits 0
 unless a check also runs. Neither given: usage error (exit 2). Read only.
 
+## Slow tests of one file in different chunks (`lint_test_durations.py`, "split_tests")
+
+`pytest tools/[NofM]` runs each chunk with pytest-xdist `--dist loadfile`, so all tests of one file share one worker. Measured
+2026-11-09: `pytest tools/[4of4]` took 498-570 s, the longest step of the whole lint, because `test_backup_selftest.py`'s four
+`StorageProfileTests` tests (about 100 s each under lint load) ran one after another. A file listed under "split_tests" in
+`lint_test_durations.json` is cut into units: each named test alone (with its measured seconds) and every other collected test of the
+file together, all passed as pytest node ids, and the units are balanced over the chunks like files. The node ids are what pytest
+collects (`pytest --collect-only -q`, about 0.8 s per split file when the steps are built), so the set of tests and their ids stay
+identical; a file that cannot be collected, or whose table names a test that no longer exists, stays one unit.
+
+### `[@ANCHOR: lint_test_durations:split_units]` `split_units(path, entry, collect)`
+The units ((node id, ...), seconds) of one split file, or None (keep the file whole). `collect(path)` returns its node ids.
+
 ## Step scheduling: a dependency graph, longest critical path first (`lint_exec.py`)
 
 `run_linters.py` hands its steps to `lint_exec.execute`, which runs them on `-j` workers as a dependency graph. A step is ready when every

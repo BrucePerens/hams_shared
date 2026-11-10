@@ -65,6 +65,50 @@ class BalancedChunksTest(unittest.TestCase):
         self.assertTrue(set(table) <= existing | {"test.py"}, sorted(set(table) - existing))
 
 
+class SplitTestsTest(unittest.TestCase):
+    """A file's slow tests go to different chunks as node ids; no test is dropped, added or renamed."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(__import__("shutil").rmtree, self.tmp, True)
+        self.slow = os.path.join(self.tmp, "test_slow.py")
+        with open(self.slow, "w") as handle:
+            handle.write("import unittest\n\n\nclass Base(unittest.TestCase):\n    def test_inherited(self):\n        pass\n\n\n"
+                         "class Slow(Base):\n" + "".join("    def test_%s(self):\n        pass\n\n" % n for n in ("a", "b", "c", "d")))
+        self.other = os.path.join(self.tmp, "test_other.py")
+        with open(self.other, "w") as handle:
+            handle.write("def test_one():\n    pass\n")
+
+    # Tests [@ANCHOR: lint_test_durations:split_units]
+    def test_the_named_slow_tests_land_in_different_chunks_and_every_collected_test_is_kept(self):
+        split = {"test_slow.py": {"tests": {"Slow::test_a": 100, "Slow::test_b": 100, "Slow::test_c": 100}, "rest_seconds": 5}}
+        chunks = ltd.balanced_chunks([self.slow, self.other], 3, table={"test_other.py": 1.0}, split=split)
+        whole = set(ltd.collect_node_ids(self.slow))
+        self.assertEqual(len(whole), 6)  # Base::test_inherited, Slow::test_inherited and Slow::test_a..d (inherited tests included)
+        placed = [arg for chunk in chunks for arg in chunk if "::" in arg]
+        self.assertEqual(sorted(placed), sorted(whole))  # nothing dropped, nothing doubled, same node ids
+        for name in ("Slow::test_a", "Slow::test_b", "Slow::test_c"):
+            self.assertEqual(sum(1 for chunk in chunks for arg in chunk if arg.endswith(name)), 1)
+        slow_per_chunk = [sum(1 for arg in chunk if arg.split("::", 1)[-1] in split["test_slow.py"]["tests"]) for chunk in chunks]
+        self.assertEqual(sorted(slow_per_chunk), [1, 1, 1])
+        self.assertIn(self.other, [arg for chunk in chunks for arg in chunk])
+
+    def test_a_named_test_that_no_longer_exists_keeps_the_file_whole(self):
+        chunks = ltd.balanced_chunks([self.slow], 2, table={}, split={"test_slow.py": {"tests": {"Slow::test_gone": 50}}})
+        self.assertEqual(chunks, [[self.slow]])
+
+    def test_a_file_that_cannot_be_collected_stays_whole(self):
+        chunks = ltd.balanced_chunks([self.slow], 2, table={}, split={"test_slow.py": {"tests": {"Slow::test_a": 50}}},
+                                     collect=lambda path: None)
+        self.assertEqual(chunks, [[self.slow]])
+
+    def test_the_table_names_real_tests(self):
+        here = os.path.dirname(os.path.abspath(__file__))
+        for name, entry in ltd.load_split().items():
+            ids = {node.split("::", 1)[1] for node in ltd.collect_node_ids(os.path.join(here, name))}
+            self.assertTrue(set(entry["tests"]) <= ids, name)
+
+
 class DaemonShardsTest(unittest.TestCase):
     """A daemon test directory listed in the table runs as several balanced sessions that lose and repeat no file."""
 

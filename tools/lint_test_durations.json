@@ -140,5 +140,17 @@
     "test_speech_text.py": 8.5
    }
   }
+ },
+ "split_tests": {
+  "_comment": "Test files whose slow tests run in different pytest-chunks (lint_test_durations.split_units): measured 2026-11-09, pytest tools/[4of4] took 498-570 s because these four tests (about 100 s each under lint load) shared one xdist worker (--dist loadfile), which made that chunk the longest step of the whole lint.",
+  "test_backup_selftest.py": {
+   "tests": {
+    "StorageProfileTests::test_missing_wal_between_backup_and_now_is_caught": 104.4,
+    "StorageProfileTests::test_restore_from_basebackup_directory_with_checksums_uses_pg_checksums": 101.0,
+    "StorageProfileTests::test_restore_from_basebackup_directory_without_checksums_uses_a_dump": 100.8,
+    "StorageProfileTests::test_unverified_or_absent_base_backup_fails": 100.5
+   },
+   "rest_seconds": 24.0
+  }
  }
 }
