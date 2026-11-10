@@ -87,6 +87,7 @@ a download is trusted only through hams.com's reviewed mirror with a checked has
 | Ubuntu 22.04 container | Linux x86_64 and aarch64 release builds | glibc 2.35, gcc 11 | no |
 | Debian 12 (bookworm) root file system | Raspberry Pi builds on `mac1` | glibc 2.36 | no |
 | Apple clang | macOS builds | 21 (Command Line Tools for Xcode 27.0), on `mac1` | no |
+| python3 | signing the self-extracting installer payload (`release/release_sig.py`), and verifying it on the user machine (OpenSSL 3 is the fallback) | system version | no |
 | zipsign, dpkg/rpm tooling, `apt-ftparchive` | signing the updater bundle, repositories | system versions (`build_release.sh` preflight) | no |
 
 ### Server and test infrastructure that the same watch covers
