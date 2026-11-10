@@ -162,6 +162,26 @@ def _unexplained_pytest_failure(lines, listed):
     return ""
 
 
+# [@ANCHOR: lint_baseline:cargo_panic_message]
+def cargo_panic_message(lines, test):
+    """The panic text of failing cargo test `test`, from the `---- test stdout ----` block of the captured output, or "" when the output has
+    none (`--nocapture` runs, a build error). The `thread '..' panicked at file:line:col:` header keeps only its message (a line number moves with
+    unrelated edits and would make an old failure look new); the block ends at the first blank line, so the backtrace note is left out."""
+    for index, line in enumerate(lines):
+        if line.strip() != "---- %s stdout ----" % test:
+            continue
+        kept = []
+        for follow in lines[index + 1:]:
+            if not follow.strip() or follow.startswith(("----", "failures:", "note: run with")):
+                break
+            follow = re.sub(r"^thread '[^']*'(?: \(\d+\))? panicked at ", "", follow)
+            follow = re.sub(r"(?:^|,? )[\w./-]+:\d+:\d+:?$", "", follow)
+            if follow.strip():
+                kept.append(follow.strip())
+        return "\n".join(kept)
+    return ""
+
+
 # [@ANCHOR: lint_baseline:failure_items]
 def failure_items(step_name, output):
     """The failures a failed step reports, as {item_id: {"step", "test", "signature", "message"}}.
@@ -181,7 +201,7 @@ def failure_items(step_name, output):
             continue
         found = CARGO_LINE.match(line)
         if found:
-            items["%s::%s" % (step, found.group(1))] = _item(step, found.group(1), "")
+            items["%s::%s" % (step, found.group(1))] = _item(step, found.group(1), cargo_panic_message(lines, found.group(1)))
             continue
         found = UNITTEST_LINE.match(line)
         if found:

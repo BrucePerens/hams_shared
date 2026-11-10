@@ -9,6 +9,7 @@ The canary test uses a real git repository with an origin and the real combined-
 linter command is a fake script that writes the `--results-json` file.
 
 Tests [@ANCHOR: lint_baseline:BaselineFile]
+Tests [@ANCHOR: lint_baseline:cargo_panic_message]
 Tests [@ANCHOR: lint_baseline:enabled]
 Tests [@ANCHOR: lint_baseline:baseline_dir]
 Tests [@ANCHOR: lint_baseline:baseline_path]
@@ -94,6 +95,19 @@ class ItemTests(Env):
         self.assertEqual(got["unit::pkg.mod.Case.test_y"]["message"], "ValueError: bad")
         cargo = lb.failure_items("cargo test", "test a::b::c ... FAILED\ntest a::d ... ok\n")
         self.assertEqual(list(cargo), ["cargo test::a::b::c"])
+
+    def test_cargo_failure_carries_the_panic_message_without_its_line_number(self):
+        def out(line, message):
+            return ("test a::b ... FAILED\n\nfailures:\n\n---- a::b stdout ----\nthread 'a::b' panicked at src/x.rs:%d:5:\n%s\n"
+                    "note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\nfailures:\n    a::b\n" % (line, message))
+        first = lb.failure_items("cargo test", out(10, "assertion `left == right` failed\n  left: 3\n right: 4"))["cargo test::a::b"]
+        moved = lb.failure_items("cargo test", out(99, "assertion `left == right` failed\n  left: 3\n right: 4"))["cargo test::a::b"]
+        other = lb.failure_items("cargo test", out(10, "assertion `left == right` failed\n  left: 3\n right: 5"))["cargo test::a::b"]
+        self.assertIn("left: 3", first["message"])
+        self.assertNotIn("x.rs", first["message"])
+        self.assertEqual(first["signature"], moved["signature"])
+        self.assertNotEqual(first["signature"], other["signature"])
+        self.assertEqual(lb.cargo_panic_message(["test a ... FAILED"], "a"), "")
 
     def test_step_without_tests_is_one_item_whose_signature_follows_the_findings(self):
         out1 = "x.py:1: E1 bad\nx.py:2: E2 worse\n....\n"
