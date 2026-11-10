@@ -41,6 +41,10 @@ SAMPLE = """\
 
 
 class ParseAndVetoTests(unittest.TestCase):
+    def test_the_cache_hit_note_survives_a_stored_time_that_is_not_a_date(self):
+        for bad in (float("nan"), float("inf"), 1e30, "x", None):
+            self.assertIn("result cache", ltc.cache_hit_note({"when": bad, "seconds": 1}))
+
     # Tests [@ANCHOR: lint_trace_cache:parse_trace]
     def test_the_parser_sorts_reads_listings_absent_writes_and_contacts(self):
         trace = ltc.parse_trace(io.StringIO(SAMPLE))

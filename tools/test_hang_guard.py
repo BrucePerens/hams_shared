@@ -87,6 +87,12 @@ class Reports(unittest.TestCase):
     def test_unwritable_directory_returns_none(self):
         self.assertIsNone(hang_guard.write_hang_report(os.getpid(), "x", "r", "/proc/nonexistent/dir", section=lambda info: ""))
 
+    def test_a_clock_that_returns_nan_or_inf_does_not_stop_the_report(self):
+        for bad in (float("nan"), float("inf")):
+            with tempfile.TemporaryDirectory() as directory:
+                path = hang_guard.write_hang_report(os.getpid(), "x", "r", directory, section=lambda info: "", clock=lambda bad=bad: bad)
+                self.assertTrue(os.path.isfile(path))
+
 
 class Stopping(unittest.TestCase):
     def test_refuses_a_wrong_start_time_and_a_pid_that_leads_no_group(self):
