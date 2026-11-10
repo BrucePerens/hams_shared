@@ -70,6 +70,27 @@ class CacheSlotTests(unittest.TestCase):
             self.assertEqual(first, second)
 
 
+class PersistentCacheRootTests(unittest.TestCase):
+    def test_the_cache_lives_outside_the_checkout_and_is_per_lint_slot(self):
+        with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as repo:
+            old = {k: os.environ.get(k) for k in ("XDG_CACHE_HOME", "HAMS_LINT_SLOT")}
+            os.environ["XDG_CACHE_HOME"] = home
+            try:
+                os.environ["HAMS_LINT_SLOT"] = "2"
+                first = chk.persistent_cache_root(repo)
+                os.environ["HAMS_LINT_SLOT"] = "3"
+                second = chk.persistent_cache_root(repo)
+            finally:
+                for key, value in old.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
+            self.assertTrue(first.startswith(home) and not first.startswith(repo))
+            self.assertNotEqual(first, second)
+            self.assertTrue(os.path.isdir(first))
+
+
 class IsModelClassTests(unittest.TestCase):
     def test_recognizes_models_dot_model(self):
         self.assertTrue(chk._is_model_class(_class_node("class Foo(models.Model):\n    pass\n")))

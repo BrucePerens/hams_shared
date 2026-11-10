@@ -84,6 +84,7 @@ import ast
 from concurrent.futures import ThreadPoolExecutor
 import check_target
 import contextlib
+import hashlib
 import os
 import lint_exec
 import queue
@@ -263,6 +264,18 @@ class cache_slots:
             self._free.put(slot)
 
 
+def persistent_cache_root(repo_root):
+    """A mypy cache directory that outlives the checkout: every lint run is a new worktree, and a cache inside it is cold (2-24 s a file).
+    The paths handed to mypy are relative to the repository, so the cache is valid in any worktree of it. One directory per lint slot (the
+    cache is not safe for two runs at once, see cache_slots) and per repository (its origin URL)."""
+    remote = subprocess.run(["git", "-C", repo_root, "config", "--get", "remote.origin.url"], capture_output=True, text=True).stdout.strip()
+    name = hashlib.sha256((remote or os.path.basename(os.path.realpath(repo_root))).encode()).hexdigest()[:12]
+    base = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+    root = os.path.join(base, "hams-lint", "mypy", "slot" + os.environ.get("HAMS_LINT_SLOT", "manual"), name)
+    os.makedirs(root, exist_ok=True)
+    return root
+
+
 def main():
     repo_root_arg, only_files = parse_args(sys.argv)
     if repo_root_arg is None:
@@ -290,12 +303,13 @@ def main():
     # text is the same as the sequential run's. $HAMS_LINT_JOBS bounds the workers.
     workers = max(1, int(os.environ.get("HAMS_LINT_JOBS", "0")) or (os.cpu_count() or 2) // 2)
     slots = cache_slots(workers)
+    cache_root = persistent_cache_root(repo_root_arg)
 
     def run_one(item):
         repo_root, candidate = item
         with slots.borrow() as slot:
             return subprocess.run(
-                ["mypy", "--check-untyped-defs", "--ignore-missing-imports", f"--cache-dir=.mypy_cache/w{slot}", candidate],
+                ["mypy", "--check-untyped-defs", "--ignore-missing-imports", f"--cache-dir={os.path.join(cache_root, 'w%d' % slot)}", candidate],
                 capture_output=True,
                 text=True,
                 cwd=repo_root,
