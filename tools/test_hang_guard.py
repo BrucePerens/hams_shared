@@ -28,6 +28,13 @@ import lint_exec  # noqa: E402
 HANG = [sys.executable, "-c", "import socket,time; a,b=socket.socketpair(); a.recv(1)"]
 
 
+class NumberFiniteTests(unittest.TestCase):
+    def test_non_finite_and_non_positive_values_take_the_default(self):
+        for text in ("nan", "inf", "-inf", "0", "-3", "x", ""):
+            self.assertEqual(hang_guard.number({"K": text}, "K", 7.0), 7.0, text)
+        self.assertEqual(hang_guard.number({"K": "12.5"}, "K", 7.0), 12.5)
+
+
 class Limits(unittest.TestCase):
     def test_env_name(self):
         self.assertEqual(hang_guard.step_env_name("pytest daemons/relay_signer"), "HAMS_LINT_STEP_TIMEOUT_PYTEST_DAEMONS_RELAY_SIGNER")
