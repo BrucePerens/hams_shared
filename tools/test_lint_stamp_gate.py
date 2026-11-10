@@ -487,11 +487,13 @@ class InheritExactnessTests(InheritFixture):
         self.assertIsNone(self.inherit(tip))
         self.assertEqual(self.messages, ["stamp inheritance: no stamped commit between origin_main and %s" % tip[:9]])
 
-    def _chain(self, records):
-        code = self.commit("daemons/x/src/a.rs", "1\n", "code")
+    def _chain(self, records, salt=""):
+        # `salt` keeps two chains built within the same second from being identical commits (same tree, message, author and
+        # date give the same hash): the second chain would then share the first one's stamped commits and stamp files.
+        code = self.commit("daemons/x/src/a.rs", "1%s\n" % salt, "code" + salt)
         self.put_stamp(code)
         for index in range(records):
-            tip = self.commit("claims/r%d.md" % index, "# r\n", "r%d" % index)
+            tip = self.commit("claims/r%d.md" % index, "# r%s\n" % salt, "r%d%s" % (index, salt))
         return code, tip
 
     def test_the_stamped_commit_may_be_the_oldest_of_the_sixty_one_listed_and_no_older(self):
@@ -500,7 +502,7 @@ class InheritExactnessTests(InheritFixture):
         code, tip = self._chain(limit)
         self.assertIn("inherited-from=" + code, self.inherit(tip))
         self.git("checkout", "-q", "-B", "work2", "origin_main")
-        code, tip = self._chain(limit + 1)
+        code, tip = self._chain(limit + 1, salt="-second")
         self.assertIsNone(self.inherit(tip), "sixty-two commits listed is one more than the walk reads")
 
 
