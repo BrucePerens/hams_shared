@@ -113,6 +113,9 @@ a download is trusted only through hams.com's reviewed mirror with a checked has
 relay starts that path with `Command::new(<variable>)`. The enforcement linter requires all four to exist and to be
 named here, so a new discovery function (or a rename) is a change to this ADR.
 
+The device worker (`device_worker_launch.rs`) is the one launch whose program is not ours to pin: the operator names it in
+`HAMS_LOCAL_RELAY_DEVICE_WORKER_COMMAND` (unset means nothing starts), so the file is in `DYNAMIC_LAUNCH_FILES`.
+
 ## Known gaps (to-dos)
 - hidapi, RADE, Transformers.js and the model files have no upstream check.
 - Inno Setup, MinGW-w64, wine and the container images are not pinned beyond what the release preflight
