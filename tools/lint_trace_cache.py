@@ -14,8 +14,9 @@ whose every recorded input is unchanged is served from the cache: reported as a 
 Never cached (the step simply runs; listed so nobody has to guess):
   * a FAILED or TIMED OUT run: only passes are stored, and a lookup can only return a pass whose inputs are identical, so the cache never turns
     a failure into a pass;
-  * a step that touched the NETWORK: a successful connect/sendto to a non-loopback address, or to a loopback port that was already listening
-    before the step started (a host service: PostgreSQL, Redis, RabbitMQ, Odoo), or to a Unix socket the step did not bind itself;
+  * a step that touched the NETWORK: a successful connect to a non-loopback address, or to a loopback port that was already listening
+    before the step started (a host service: PostgreSQL, Redis, RabbitMQ, Odoo), or to a Unix socket the step did not bind itself, or that
+    read the DNS resolver configuration;
   * a step that read HARDWARE or host ENVIRONMENT state: any /dev node except null, zero, full, random, urandom, tty, ptmx, pts, shm, fd and the
     std streams; any /proc or /sys file outside the process's own entries, cgroup limits, CPU topology and a few kernel constants
     (PROC_SYS_ALLOWED);
@@ -23,6 +24,9 @@ Never cached (the step simply runs; listed so nobody has to guess):
   * a step whose inputs changed while it ran (an input's mtime is later than the step's start);
   * the steps in NEVER_CACHED, each with its reason (wall-clock time, machine load);
   * any step when strace is missing or cannot trace (macOS, a remote machine): it runs and nothing is stored;
+  * a step that runs a setuid/setgid program or one with file capabilities (sudo: under ptrace, and under the no_new_privs flag strace's
+    seccomp filter sets, it gets no privileges), or a tracer (TRACER_PROGRAMS); and a step whose traced run failed with a timeout but
+    passed untraced. Such a step is rerun untraced at once (its verdict is the untraced one) and runs untraced for UNTRACEABLE_DAYS;
   * every step under `run_linters.py --no-cache`, HAMS_LINT_NO_CACHE=1 or HAMS_LINT_TRACE_CACHE=0.
 A stored pass is used for at most MAX_AGE_SECONDS (24 h, HAMS_LINT_TRACE_CACHE_MAX_AGE), which bounds what a test that depends on the date and
 is not in NEVER_CACHED could hide.
@@ -58,8 +62,14 @@ NEVER_CACHED = {
     "pytest devbox_tools/": "talks to GitHub and reads the host's agent and job state",
 }
 
-STRACE_SYSCALLS = ("?open,?openat,?openat2,?creat,execve,?execveat,connect,?sendto,?sendmsg,bind,"
-                   "?rename,?renameat,?renameat2,?mkdir,?mkdirat")
+# sendto/sendmsg are NOT traced: glibc sends on every TCP socket with sendto, so tracing them stopped the step at every write (a byte-drip
+# timing test of relay_signer timed out under the trace). Remote contact is still seen at connect (TCP, and glibc's DNS, which connects
+# its UDP socket); a datagram sent unconnected (dnspython) is caught by the read of the resolver configuration (RESOLVER_FILES).
+STRACE_SYSCALLS = "?open,?openat,?openat2,?creat,execve,?execveat,connect,bind,?rename,?renameat,?renameat2,?mkdir,?mkdirat"
+RESOLVER_FILES = ("/etc/resolv.conf", "/run/systemd/resolve/resolv.conf", "/run/systemd/resolve/stub-resolv.conf", "/run/resolvconf/resolv.conf")
+# Programs that trace other programs: under strace they cannot attach (one tracer per process), so their steps run untraced.
+TRACER_PROGRAMS = frozenset({"strace", "ltrace", "gdb", "py-spy", "perf", "valgrind"})
+UNTRACEABLE_DAYS = 7
 
 DEV_ALLOWED = ("/dev/shm", "/dev/null", "/dev/zero", "/dev/full", "/dev/random", "/dev/urandom", "/dev/tty", "/dev/ptmx", "/dev/stdin", "/dev/stdout",
                "/dev/stderr")
@@ -161,7 +171,7 @@ def parse_trace(lines):
         if marker:
             (paused.add if marker.group(1) == "pause" else paused.discard)(pid)
             continue
-        if pid in paused and call.group(1) not in ("connect", "sendto", "sendmsg", "bind"):
+        if pid in paused and call.group(1) not in ("connect", "bind", "execve", "execveat"):
             continue
         _record(trace, call.group(1), call.group(2))
     return trace
@@ -221,13 +231,13 @@ def _record(trace, name, args):
         if unix:
             trace.bound.add(unix.group(1) + _unescape(unix.group(2)))
         return
-    if name in ("connect", "sendto", "sendmsg") and (ok or errno == "EINPROGRESS"):
+    if name == "connect" and (ok or errno == "EINPROGRESS"):
         inet = _INET.search(args)
         if inet:
             trace.contacts.append(("inet", (inet.group(2) or inet.group(3), int(inet.group(1)))))
             return
         unix = _UNIX.search(args)
-        if unix and name == "connect":
+        if unix:
             trace.contacts.append(("unix", unix.group(1) + _unescape(unix.group(2))))
 
 
@@ -273,9 +283,35 @@ def vetoes(trace, listening_before=frozenset()):
         elif path.startswith(("/proc/", "/sys/")) or path in ("/proc", "/sys"):
             if not any(rule.match(path) for rule in PROC_SYS_ALLOWED):
                 reasons.append("environment: read %s" % path)
+        elif os.path.realpath(path) in RESOLVER_FILES or path in RESOLVER_FILES:
+            reasons.append("network: read the DNS resolver configuration %s" % path)
         elif "/.hypothesis/" in path + "/":
             reasons.append("randomised: read the Hypothesis example database %s" % path)
     return sorted(set(reasons))
+
+
+# [@ANCHOR: lint_trace_cache:trace_blockers]
+def trace_blockers(trace):
+    """Why the traced run cannot stand for an untraced one: it executed a setuid/setgid program or one with file capabilities (no privilege
+    under ptrace and no_new_privs), or a tracer. [] when none. Reads the executed files' modes and capability attributes."""
+    reasons = []
+    for path in sorted(trace.execs):
+        try:
+            mode = os.stat(path).st_mode
+        except OSError:
+            continue
+        if mode & 0o6000:
+            reasons.append("runs the setuid/setgid program %s" % path)
+            continue
+        try:
+            if os.getxattr(path, "security.capability"):
+                reasons.append("runs %s, which has file capabilities" % path)
+                continue
+        except (OSError, AttributeError):
+            pass
+        if os.path.basename(path) in TRACER_PROGRAMS:
+            reasons.append("runs the tracer %s" % path)
+    return reasons
 
 
 def never_cached_reason(name):
@@ -626,14 +662,45 @@ class TraceCache:
         return True
 
 
-    def record(self, step, key, result, trace_file, listening, started, started_ns):
-        """Stores a passing traced run unless a veto or an input that changed while it ran forbids it; the reason why not goes to
-        <directory>/not_stored.log (one line per run, for tuning). Returns True when stored."""
+    def _marker(self, key):
+        return os.path.join(self.directory, key[:2], key + ".untraceable.json")
+
+    def untraceable(self, key, now=None):
+        """The reason the step must run untraced (a marker younger than UNTRACEABLE_DAYS), else None."""
+        try:
+            with open(self._marker(key), encoding="utf-8") as handle:
+                data = json.load(handle)
+        except (OSError, ValueError):
+            return None
+        now = time.time() if now is None else now
+        if not isinstance(data, dict) or now - data.get("when", 0) > UNTRACEABLE_DAYS * 86400:
+            return None
+        return data.get("reason") or "untraceable"
+
+    def mark_untraceable(self, key, step, reasons):
+        path = self._marker(key)
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            tmp = "%s.%d.tmp" % (path, os.getpid())
+            with open(tmp, "w", encoding="utf-8") as handle:
+                json.dump({"when": time.time(), "step": step.name, "reason": "; ".join(reasons[:3])}, handle)
+            os.replace(tmp, path)
+        except OSError:
+            pass
+        self._not_stored(step, ["runs untraced from now on: " + "; ".join(reasons[:3])])
+
+    def read_trace(self, trace_file):
         try:
             with open(trace_file, encoding="utf-8", errors="surrogateescape") as handle:
-                trace = parse_trace(handle)
-        except OSError as error:
-            return self._not_stored(step, ["trace unreadable: %s" % error])
+                return parse_trace(handle)
+        except OSError:
+            return None
+
+    def record(self, step, key, result, trace, listening, started, started_ns):
+        """Stores a passing traced run unless a veto or an input that changed while it ran forbids it; the reason why not goes to
+        <directory>/not_stored.log (one line per run, for tuning). Returns True when stored."""
+        if trace is None:
+            return self._not_stored(step, ["trace unreadable"])
         reasons = vetoes(trace, listening)
         if reasons:
             return self._not_stored(step, reasons)
