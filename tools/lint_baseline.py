@@ -281,14 +281,19 @@ def renew(key, item_id, reason, owner=None, environ=None, now=time.time):
     KeyError when there is no baseline or no such item (the message lists nothing else: use `--baseline-show`)."""
     if not str(reason or "").strip():
         raise ValueError("a renewal needs a reason")
-    doc = read_baseline(key, environ)
-    if doc is None or item_id not in doc["items"]:
-        raise KeyError("no known-red item %r in the baseline of %s" % (item_id, key))
-    item = doc["items"][item_id]
-    item["renewed"] = {"time": time.strftime(TIME_FORMAT, time.localtime(now())), "reason": str(reason).strip()}
-    if owner:
-        item["owner"] = owner
-    _store(doc, key, environ)
+    os.makedirs(baseline_dir(environ), exist_ok=True)
+    # The canary holds `<key>.lock` for its whole run and writes the baseline at the end from the document it read at the start: a renewal
+    # made meanwhile would be lost, or would restore the older document. Wait for the canary, then read and write.
+    with open(os.path.join(baseline_dir(environ), key + ".lock"), "a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        doc = read_baseline(key, environ)
+        if doc is None or item_id not in doc["items"]:
+            raise KeyError("no known-red item %r in the baseline of %s" % (item_id, key))
+        item = doc["items"][item_id]
+        item["renewed"] = {"time": time.strftime(TIME_FORMAT, time.localtime(now())), "reason": str(reason).strip()}
+        if owner:
+            item["owner"] = owner
+        _store(doc, key, environ)
     return item
 
 

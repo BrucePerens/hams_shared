@@ -373,6 +373,25 @@ class AccountabilityTests(Env):
                                  now=self.at(9))["passes"])
 
     # Tests [@ANCHOR: lint_baseline:renew]
+    def test_a_renewal_waits_for_the_canary_run_that_holds_the_lock_and_then_keeps_what_it_wrote(self):
+        import fcntl
+        import threading
+        import time
+        os.makedirs(lb.baseline_dir(self.env), exist_ok=True)
+        canary = open(os.path.join(lb.baseline_dir(self.env), "hams_com.lock"), "a+")
+        fcntl.flock(canary, fcntl.LOCK_EX)
+        done = []
+        worker = threading.Thread(target=lambda: done.append(lb.renew("hams_com", "flake8", "why", environ=self.env, now=self.at(1))))
+        worker.start()
+        time.sleep(0.5)
+        self.assertEqual(done, [])  # still waiting for the canary
+        fcntl.flock(canary, fcntl.LOCK_UN)
+        canary.close()
+        worker.join(10)
+        self.assertEqual(len(done), 1)
+        self.assertEqual(lb.read_baseline("hams_com", self.env)["items"]["flake8"]["renewed"]["reason"], "why")
+
+    # Tests [@ANCHOR: lint_baseline:renew]
     def test_a_renewal_needs_a_reason_and_an_existing_item(self):
         with self.assertRaises(ValueError):
             lb.renew("hams_com", "flake8", "  ", environ=self.env)
