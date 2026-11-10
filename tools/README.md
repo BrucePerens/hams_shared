@@ -4647,7 +4647,10 @@ for at most 24 h (`HAMS_LINT_TRACE_CACHE_MAX_AGE`). Off: `run_linters.py --no-ca
 The trace never decides a verdict on its own: a traced run that executed a setuid/setgid program or one with file capabilities (sudo gets
 no privileges under ptrace and under the no_new_privs flag of strace's seccomp filter; found when `test_provision`'s `sudo` failed under the
 trace), or a tracer (gdb, py-spy, ...), or that FAILED with a timeout under the trace, is rerun untraced at once and the untraced result
-counts; that step then runs untraced for 7 days (`<key>.untraceable.json`). sendto/sendmsg are not traced (every TCP write is a sendto: a
+counts; that step then runs untraced for 7 days (`results/untraceable/<sha256 of the step name>.json`, per name so a changed file list does
+not cost the discovery again). A privileged program or tracer ends the traced run the moment it starts (`run_traced` watches the trace,
+stops strace, whose `--kill-on-exit` ends its tracees, and returns 125), so the discovery costs seconds, not a whole step: measured on
+`pytest tools/[4of4]`, whose `test_provision` runs sudo, the full traced run plus the untraced rerun cost about 500 s extra before this. sendto/sendmsg are not traced (every TCP write is a sendto: a
 byte-drip timing test of relay_signer timed out under the trace); remote contact is seen at connect, and an unconnected UDP sender is
 caught by its read of the DNS resolver configuration (`RESOLVER_FILES`, a veto).
 Leftover background processes: the traced run ends when the step's main process ends (`run_traced` stops strace, which detaches), as an
