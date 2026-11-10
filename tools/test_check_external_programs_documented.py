@@ -167,6 +167,22 @@ class AdrTests(unittest.TestCase):
         self.assertNotIn("winlink", names)
 
 
+class ProgramColumnTests(unittest.TestCase):
+    def test_only_the_program_name_columns_name_a_program(self):
+        """Tests [@ANCHOR: ext_programs:documented_names]"""
+        adr = (
+            "| Program | Role | Pin |\n|---|---|---|\n"
+            "| Pat (`la5nta/pat`) | the `go` or `which` tool, on `master` | abc1234 |\n"
+            "| Chrome or Chromium with Playwright | glue | x |\n\n"
+            "| Platform | Programs | Used for |\n|---|---|---|\n"
+            "| Linux file system | `amixer`, `sudo` | with `id` and `ip` in a note |\n"
+        )
+        names = cepd.documented_names(adr)
+        self.assertTrue({"pat", "la5nta", "chrome", "chromium", "playwright", "amixer", "sudo"} <= names)
+        for word in ("go", "which", "master", "abc1234", "glue", "id", "ip", "with", "or", "file", "system", "linux"):
+            self.assertNotIn(word, names)
+
+
 class WatchTests(unittest.TestCase):
     def test_unwatched_and_missing_repos_are_found(self):
         findings = cepd.watch_findings(ADR, WATCH)
@@ -218,6 +234,16 @@ class TreeTests(unittest.TestCase):
         self.assertTrue(any("mokutil" in f for f in findings))
         self.assertTrue(any("certutil" in f for f in findings))
         self.assertFalse(any("python3" in f for f in findings))
+
+    def test_a_dynamic_launch_is_allowed_only_in_the_listed_files(self):
+        """Tests [@ANCHOR: ext_programs:find_findings]"""
+        _write(os.path.join(self.relay, "src", "gps_time.rs"), "fn a(p: &str) { Command::new(p); }\n")
+        self.assertEqual(cepd.find_findings(self.root, self.adr, self.watch), [])
+        _write(os.path.join(self.relay, "src", "newthing.rs"), "fn a(p: &str) { Command::new(p); }\n")
+        findings = cepd.find_findings(self.root, self.adr, self.watch)
+        self.assertEqual(len(findings), 1, findings)
+        self.assertIn("src/newthing.rs", findings[0])
+        self.assertIn("DYNAMIC_LAUNCH_FILES", findings[0])
 
     def test_missing_discovery_function_and_unnamed_one(self):
         os.remove(os.path.join(self.relay, "src", "winlink.rs"))
