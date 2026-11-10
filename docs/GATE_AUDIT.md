@@ -34,6 +34,8 @@ tree; `assert_control_absent` passing when the page had no tree; a release-gate 
 | Claims freshness | `tools/check_claims_freshness.py` | A non-git tree printed SUCCESS (empty file list); an unreadable claim file was skipped. | Fixed, hams_shared #569 |
 | Burn list entry | `tools/check_burn_list.py` | A nonexistent directory printed "Checked 0 files ... Passed". | Fixed, hams_shared #568 |
 | `assert_control_absent` and siblings | `control_inventory_audit/tests/control_inventory_common.py` | Already red on a page with no tree (the 2026-11-09 fix). | RED proven |
+| Deploy round gate (`round_gate.evaluate`) | `devbox_tools/round_gate.py`, `devbox_tools/test_round_gate.py` | Unclassified failure, missing result line, unidentified failure and pass-on-retry already RED. `0 failed ... of 0 tests`, a manifest with no shard commands, and a shard that timed out after printing a result line stayed GO. | Fixed, hams_com #3918 |
+| `pr_truth` claims, `queue_depth` | `devbox_tools/pr_truth.py`, `devbox_tools/test_pr_truth.py` | Unreadable PR, stale queue verdict, foreign queue entry, missing commit, unreadable paths all RED or UNKNOWN already. `queue_depth` only advises (it blocks nothing). | RED proven |
 | Other `wait_for` helpers (`shack_console`, `cert_login_e2e`, `relay_e2e`) | their test helpers | Raise on timeout, or return False that callers check. | Reviewed, fine |
 
 ## Known gaps left open
