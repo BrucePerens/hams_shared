@@ -39,7 +39,11 @@ agents who are not working on the lint machinery do not carry it in their contex
 * Steps over several test directories are merged where that is provably safe (one daemon, one interpreter:
   `pytest daemons/hams_local_relay`); the old step names are aliases that `--only` still accepts. The repository-pair
   checkers (`check_async_lock_scope`, `check_fake_network_listener`, `check_int_float_overflow`,
-  `check_float_isfinite`, `check_window_fetch_reassignment`) are one step each over hams_com and hams_open.
+  `check_float_isfinite`, `check_window_fetch_reassignment`) are one step each over hams_com and hams_open, as is
+  `check_boundary_hazards` (credential header through urllib without a redirect refuser, raw command line in a log call, public
+  `@api.model` method acting as a service account with no caller check, truncated `gh --json files`, unchecked outside number into
+  `gmtime`/`fromtimestamp`; fix, `# boundary-hazard-ignore: <rule>: <reason>`, or `tools/boundary_hazards_known.json` with an owner:
+  `tools/README.md` "Boundary hazards").
   `tools/lint_step_inventory.py compare` proves a restructuring kept every test (`docs/LINT_STEP_ANALYSIS.md`).
 * **Remote execution** (`--remote auto|HOST|local`, `--where`; `tools/lint_remote.py`,
   `tools/lint_machines.json`). `--remote auto` runs everything on the dev box and uses the other lint runners only as overflow (above);
