@@ -25,6 +25,8 @@ import os
 import re
 import sys
 
+import check_target
+
 SKIP_DIRS = {".git", "node_modules", "__pycache__", "tmp", "archive", "static", "tests", "migrations"}
 SECRET_NAME = re.compile(r"secret|token|passw|credential|api_?key|signing|private_key|(^|_)key$", re.IGNORECASE)
 # Names that match SECRET_NAME but are not secrets.
@@ -93,24 +95,27 @@ def scan_source(source, path="<source>"):
     return found
 
 
-def scan_repo(repo_root):
-    """`{key: line}` for every unmasked secret-looking settings field under `repo_root`."""
-    found = {}
+def _python_files(repo_root):
     for dirpath, dirnames, filenames in os.walk(repo_root):
         dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
         for filename in sorted(filenames):
-            if not filename.endswith(".py"):
+            if filename.endswith(".py"):
+                yield os.path.join(dirpath, filename)
+
+
+def scan_repo(repo_root):
+    """`{key: line}` for every unmasked secret-looking settings field under `repo_root`."""
+    found = {}
+    for full in _python_files(repo_root):
+        try:
+            with open(full, encoding="utf-8") as handle:
+                source = handle.read()
+            if "res.config.settings" not in source:
                 continue
-            full = os.path.join(dirpath, filename)
-            try:
-                with open(full, encoding="utf-8") as handle:
-                    source = handle.read()
-                if "res.config.settings" not in source:
-                    continue
-                for key, line in scan_source(source, os.path.relpath(full, repo_root)):
-                    found[key] = line
-            except (OSError, SyntaxError, UnicodeDecodeError):
-                continue
+            for key, line in scan_source(source, os.path.relpath(full, repo_root)):
+                found[key] = line
+        except (OSError, SyntaxError, UnicodeDecodeError):
+            continue
     return found
 
 
@@ -145,7 +150,9 @@ def main(argv=None):
     parser.add_argument("--baseline")
     parser.add_argument("--write-baseline", action="store_true", help="write the baseline (first time) or shrink it")
     args = parser.parse_args(argv)
-    found = scan_repo(args.repo_root)
+    root = check_target.require_directory(args.repo_root, "check_settings_secrets")
+    check_target.require_scanned(sum(1 for _ in _python_files(root)), root, "check_settings_secrets", "Python files")
+    found = scan_repo(root)
     baseline = load_baseline(args.baseline)
     if args.write_baseline:
         text = render_baseline(found, baseline) if baseline or not found else render_baseline(found, {})
