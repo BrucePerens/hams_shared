@@ -5808,6 +5808,20 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
                     self.assertEqual(int(entry["provision_mode"], 8) & 0o027, 0)
 
 
+class ApplyProductionDirectoriesSymlinkTests(unittest.TestCase):
+    # Tests [@ANCHOR: infrastructure:apply_production_directories]
+    def test_a_symbolic_link_in_place_of_a_manifest_directory_is_refused_untouched(self):
+        with tempfile.TemporaryDirectory() as root:
+            target = os.path.join(root, "elsewhere")
+            os.mkdir(target, 0o700)
+            os.symlink(target, os.path.join(root, "var_lib_thing"))
+            entry = {"path": "/var_lib_thing", "environments": ["test"], "provision_mode": "0755", "owner": None}
+            with patch.dict(infra.MANIFEST, {"directories": [entry]}):
+                with self.assertRaises(RuntimeError):
+                    infra.apply_production_directories(environment="test", dest_dir=root)
+            self.assertEqual(stat.S_IMODE(os.stat(target).st_mode), 0o700, "the link target was not chmod'ed")
+
+
 class ProvisionDaemonFamiliesTests(_SafePatchTestCase):
     """Tests [@ANCHOR: infrastructure:daemon_family_selection] and
     [@ANCHOR: infrastructure:provision_daemon_families]: `provision.py --daemon-family` touches one
