@@ -1228,7 +1228,7 @@ def run_bundle(argv):
     if not run_ok:
         return lint_lock.EXIT_TEMPFAIL
     try:
-        results = lint_exec.execute(steps, options.jobs)
+        results = lint_exec.execute(steps, options.jobs, durations=lint_lock.known_durations())
     finally:
         if run_lock:
             run_lock.release()
@@ -2813,7 +2813,8 @@ def main():
         for step in steps:
             if slot_env and step.env is not None:  # steps whose environment was captured before the slot was known
                 step.env = dict(step.env, **slot_env)
-    results = lint_exec.execute(steps, options.jobs, cache=cache, fingerprints=fingerprints)
+    # Longest critical path first, by the median measured duration of each step over every recorded run (not only this checkout's).
+    results = lint_exec.execute(steps, options.jobs, cache=cache, fingerprints=fingerprints, durations=batch_durations or lint_lock.known_durations())
     fallback_lock = [run_lock]
 
     def execute_here(wanted):
@@ -2839,7 +2840,7 @@ def main():
 
                 atexit.register(taken.release)
                 fallback_lock[0] = taken
-        return lint_exec.execute(wanted, options.jobs)
+        return lint_exec.execute(wanted, options.jobs, durations=lint_lock.known_durations())
 
     remote_siblings = []
     extra_results, remote_hosts = lint_remote.collect(

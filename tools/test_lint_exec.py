@@ -154,6 +154,77 @@ class LockTests(unittest.TestCase):
         self.assertEqual([r.returncode for r in results], [0, 0])
 
 
+class SchedulerTests(unittest.TestCase):
+    """The dependency-graph scheduler: longest critical path first, `needs` respected, locked steps never block a worker."""
+
+    # Tests [@ANCHOR: lint_exec:critical_paths]
+    def test_critical_path_adds_the_longest_chain_of_dependents(self):
+        steps = [lint_exec.Step("a", ["x"]), lint_exec.Step("b", ["x"], needs=("a",)), lint_exec.Step("c", ["x"], needs=("b", "gone"))]
+        paths, needs = lint_exec.critical_paths(steps, {0: 1.0, 1: 2.0, 2: 4.0})
+        self.assertEqual(paths, {0: 7.0, 1: 6.0, 2: 4.0})
+        self.assertEqual(needs, {0: [], 1: [0], 2: [1]})
+
+    def test_a_dependency_cycle_is_named(self):
+        steps = [lint_exec.Step("a", ["x"], needs=("b",)), lint_exec.Step("b", ["x"], needs=("a",))]
+        with self.assertRaisesRegex(ValueError, "cycle: a -> b -> a|cycle: b -> a -> b"):
+            lint_exec.critical_paths(steps, {0: 1.0, 1: 1.0})
+
+    def test_longest_first_and_a_short_step_that_a_long_one_needs_goes_before_a_medium_one(self):
+        steps = [lint_exec.Step("short", ["x"]), lint_exec.Step("medium", ["x"]), lint_exec.Step("long", ["x"]),
+                 lint_exec.Step("gate", ["x"]), lint_exec.Step("after_gate", ["x"], needs=("gate",))]
+        sched = lint_exec._Scheduler(steps, {0: 1.0, 1: 50.0, 2: 100.0, 3: 2.0, 4: 90.0})
+        order = []
+        while True:
+            index = sched.take()
+            if index is None:
+                break
+            order.append(steps[index].name)
+            sched.done(index)
+        self.assertEqual(order, ["long", "gate", "after_gate", "medium", "short"])
+
+    def test_a_ready_unlocked_step_is_handed_out_while_the_lock_is_held(self):
+        steps = [lint_exec.Step("cargo1", ["x"], lock="cargo"), lint_exec.Step("cargo2", ["x"], lock="cargo"), lint_exec.Step("free", ["x"])]
+        sched = lint_exec._Scheduler(steps, {0: 10.0, 1: 10.0, 2: 1.0})
+        first = sched.take()
+        self.assertEqual(steps[first].lock, "cargo")  # the lock group's 20 s of serial work outranks the free 1 s step
+        self.assertEqual(steps[sched.take()].name, "free")  # not the other cargo step: its lock is held
+        sched.done(2)
+        sched.done(first)
+        self.assertEqual(steps[sched.take()].lock, "cargo")
+
+    def test_unknown_steps_get_the_default_estimate_and_static_steps_cost_nothing(self):
+        steps = [lint_exec.Step("known", ["x"]), lint_exec.Step("new", ["x"]), lint_exec.Step("static", None)]
+        self.assertEqual(lint_exec.step_estimates(steps, {"known": 400.0}),
+                         {0: 400.0, 1: lint_exec.UNKNOWN_STEP_SECONDS, 2: 0.0})
+
+    # Tests [@ANCHOR: lint_exec:execute]
+    def test_execute_runs_the_longest_measured_step_first_and_respects_needs(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        log = os.path.join(tmp, "order")
+        code = "import sys; open(%r, 'a').write(sys.argv[1] + chr(10))" % log
+        steps = [lint_exec.Step(name, [PY, "-c", code, name], needs=needs) for name, needs in
+                 (("quick", ()), ("slowest", ()), ("needs_quick", ("quick",)))]
+        results = lint_exec.execute(steps, 1, out=io.StringIO(), durations={"quick": 1.0, "slowest": 500.0, "needs_quick": 5.0})
+        self.assertEqual([r.name for r in results], ["quick", "slowest", "needs_quick"])  # results stay in declaration order
+        with open(log) as handle:
+            self.assertEqual(handle.read().split(), ["slowest", "quick", "needs_quick"])
+
+    def test_locked_steps_never_overlap_with_more_workers_than_steps(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        log = os.path.join(tmp, "spans")
+        code = ("import sys, time; t = time.monotonic(); time.sleep(0.15); "
+                "open(%r, 'a').write('%%s %%f %%f' %% (sys.argv[1], t, time.monotonic()) + chr(10))" % log)
+        steps = [lint_exec.Step(f"c{i}", [PY, "-c", code, f"c{i}"], lock="cargo") for i in range(3)]
+        steps.append(lint_exec.Step("free", [PY, "-c", code, "free"]))
+        lint_exec.execute(steps, 6, out=io.StringIO())
+        with open(log) as handle:
+            spans = sorted((float(a), float(b)) for name, a, b in (line.split() for line in handle) if name != "free")
+        for (_s1, end1), (start2, _e2) in zip(spans, spans[1:]):
+            self.assertLessEqual(end1, start2)
+
+
 class TimingTableTests(unittest.TestCase):
     def test_table_lists_every_step_slowest_first_with_status(self):
         results = [
