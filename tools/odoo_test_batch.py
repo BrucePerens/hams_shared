@@ -560,7 +560,7 @@ class RemoteTestBatch(OdooTestBatch):
         busy = [m for m in self.machines if m not in idle]
         plan = plan_machine_split(union, load_durations(self.sdir), list(self.machines))
         self.current_members = group
-        self.last_selected = union
+        self.remember([m["tip"] for m in group], union)
         self._emit("\n===== remote run %d.%d: %d branch(es): %s =====\n" % (
             batch_id, self._run_no, len({m["tip"] for m in group}), ", ".join(m["branch"] for m in group)))
         if set(installed) - set(union):
