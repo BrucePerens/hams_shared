@@ -1784,6 +1784,20 @@ def burn_list_target(base_dir, module):
     return own
 
 
+def has_lintable_js(directory):
+    """True when DIRECTORY holds a non-minified .js file that check_js_syntax.py would read (it skips hidden folders,
+    node_modules, radae, __pycache__ and static/lib); that checker refuses a directory with none."""
+    for root, dirs, files in os.walk(directory):
+        dirs[:] = [
+            d for d in dirs
+            if not d.startswith(".") and d not in ("radae", "node_modules", "__pycache__")
+            and not (d == "lib" and os.path.basename(root) == "static")
+        ]
+        if any(f.endswith(".js") and ".min." not in f for f in files):
+            return True
+    return False
+
+
 def get_addons_path(base_dir):
     paths = ["/usr/lib/python3/dist-packages/odoo/addons", base_dir]
 
@@ -2054,6 +2068,11 @@ def check_linters(
     # always passes a real list, so this was latent, not live) that reuses
     # this function without an explicit module list.
     target_dirs = [burn_list_target(base_dir, m) for m in (target_modules or [])]
+    # check_js_syntax.py exits 2 on a scan of zero files, so a run of modules that hold no JavaScript skips it.
+    target_dirs = [d for d in target_dirs if not os.path.isdir(d) or has_lintable_js(d)]
+    if target_modules and not target_dirs:
+        print("[*] JavaScript Syntax Linter: no JavaScript in the named modules; skipped.")
+        return
     cmd_js = [python_exec, js_linter, "--ignore-file", ignore_filepath] + target_dirs
     res_js = subprocess.run(cmd_js, capture_output=True, text=True)
     if res_js.returncode != 0:

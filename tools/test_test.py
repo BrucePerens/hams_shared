@@ -2667,6 +2667,7 @@ class CheckLintersBurnListScopeTests(unittest.TestCase):
             sibling = os.path.join(tmp, "hams_open")
             os.makedirs(base)
             os.makedirs(os.path.join(sibling, "cloudflare"))
+            open(os.path.join(sibling, "cloudflare", "app.js"), "w").close()
             cmds = []
 
             def side_effect(cmd, *args, **kwargs):
@@ -2684,6 +2685,33 @@ class CheckLintersBurnListScopeTests(unittest.TestCase):
             js = [c for c in cmds if any("check_js_syntax.py" in str(part) for part in c)]
             self.assertEqual(len(js), 1)
             self.assertIn(os.path.join(sibling, "cloudflare"), js[0])
+
+    def test_the_javascript_lint_is_skipped_for_modules_without_javascript(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, "plain", "static", "lib"))
+            os.makedirs(os.path.join(tmp, "scripted", "static", "src"))
+            open(os.path.join(tmp, "plain", "static", "lib", "vendor.js"), "w").close()
+            open(os.path.join(tmp, "scripted", "static", "src", "app.js"), "w").close()
+            self.assertFalse(_test_runner.has_lintable_js(os.path.join(tmp, "plain")))
+            self.assertTrue(_test_runner.has_lintable_js(os.path.join(tmp, "scripted")))
+            cmds = []
+
+            def side_effect(cmd, *args, **kwargs):
+                cmds.append(cmd)
+                result = MagicMock()
+                result.returncode = 0
+                result.stdout = ""
+                result.stderr = ""
+                return result
+
+            with patch.object(_test_runner.subprocess, "run", side_effect=side_effect):
+                _test_runner.check_linters("python3", tmp, tmp + "/.ignore", target_modules=["plain"])
+                self.assertEqual([c for c in cmds if any("check_js_syntax.py" in str(p) for p in c)], [])
+                _test_runner.check_linters("python3", tmp, tmp + "/.ignore", target_modules=["plain", "scripted"])
+            js = [c for c in cmds if any("check_js_syntax.py" in str(p) for p in c)]
+            self.assertEqual(len(js), 1)
+            self.assertIn(os.path.join(tmp, "scripted"), js[0])
+            self.assertNotIn(os.path.join(tmp, "plain"), js[0])
 
     def test_a_module_found_nowhere_keeps_its_base_path_so_the_scan_reports_it_missing(self):
         self.assertEqual(_test_runner.burn_list_target("/repo", "nowhere"), os.path.join("/repo", "nowhere"))
