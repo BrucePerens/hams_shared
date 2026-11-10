@@ -498,7 +498,7 @@ def build_parser():
     create.add_argument("--workspace", default=DEFAULT_WORKSPACE)
     create.add_argument("--parent", default=None, help="where gate_* directories go (default <workspace>/tmp)")
     create.add_argument("--shards", type=int, default=DEFAULT_SHARDS)
-    create.add_argument("--balance", action="store_true", help="balance the shards by measured module seconds (gate_module_seconds.json); ignores the modules' old shards")
+    create.add_argument("--balance", action=argparse.BooleanOptionalAction, default=None, help="balance the shards by measured module seconds (gate_module_seconds.json); ignores the modules' old shards. On by default (Bruce, 2026-11-09), except with --shards-file, which keeps the file's shards; --no-balance turns it off")
     create.add_argument("--shards-file", default=None, help="a gate_shards.json whose modules keep their shard")
     create.add_argument("--no-fetch", action="store_true")
     create.add_argument("--no-build", action="store_true")
@@ -527,7 +527,7 @@ def main(argv=None, out=print):
         if args.command == "create":
             manifest = create_snapshot(
                 args.workspace, args.parent, args.shards, args.shards_file, not args.no_fetch, not args.no_build,
-                args.cargo_target_dir, out=out, balance=args.balance,
+                args.cargo_target_dir, out=out, balance=(args.balance if args.balance is not None else not args.shards_file),
             )
             gate = manifest["trees"]["parent"]
             out("gate_snapshot: snapshot ready in %s (verified current)" % gate)
