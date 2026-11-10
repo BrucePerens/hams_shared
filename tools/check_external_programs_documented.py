@@ -218,13 +218,13 @@ def adr_tables(adr_text):
     return tables
 
 
-# [@ANCHOR: ext_programs:documented_names]
 PROGRAM_COLUMNS = frozenset({"program", "programs", "tool", "library"})
 # Ordinary English words of a first cell written as prose ("Chrome or Chromium with Playwright", "Debian 12 root file system"): never a program name
 # by themselves. A program that really is `file` or `go` must be named in backticks.
 PROSE_WORDS = frozenset({"a", "an", "and", "or", "on", "in", "of", "for", "the", "to", "under", "with", "file", "system", "root", "tooling", "toolchain"})
 
 
+# [@ANCHOR: ext_programs:documented_names]
 def documented_names(adr_text):
     """Returns the lower-case program names the ADR tables name: in the columns headed Program, Programs, Tool or Library only, every word
     inside backticks (split at spaces, slashes, commas and semicolons, `.exe` removed) and, when the first column is one of those, the
