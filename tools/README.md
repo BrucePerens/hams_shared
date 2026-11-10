@@ -4650,9 +4650,10 @@ trace), or a tracer (gdb, py-spy, ...), or that FAILED with a timeout under the 
 counts; that step then runs untraced for 7 days (`results/untraceable/<sha256 of the step name>.json`, per name so a changed file list does
 not cost the discovery again). A privileged program or tracer ends the traced run the moment it starts (`run_traced` watches the trace,
 stops strace, whose `--kill-on-exit` ends its tracees, and returns 125), so the discovery costs seconds, not a whole step: measured on
-`pytest tools/[4of4]`, whose `test_provision` runs sudo, the full traced run plus the untraced rerun cost about 500 s extra before this. sendto/sendmsg are not traced (every TCP write is a sendto: a
-byte-drip timing test of relay_signer timed out under the trace); remote contact is seen at connect, and an unconnected UDP sender is
-caught by its read of the DNS resolver configuration (`RESOLVER_FILES`, a veto).
+`pytest tools/[4of4]`, whose `test_provision` runs sudo, the full traced run plus the untraced rerun cost about 500 s extra before this. sendto/sendmsg are traced (an unconnected UDP datagram to a
+remote host is network use); every TCP write is a sendto as well, which slowed relay_signer's byte-drip timing test into a timeout under
+the trace: that is exactly the case the untraced rerun covers, and the step now runs untraced. (A veto on reading /etc/resolv.conf, tried
+instead, hit a dozen steps that never sent anything, because libraries read it at import.)
 Leftover background processes: the traced run ends when the step's main process ends (`run_traced` stops strace, which detaches), as an
 untraced run would.
 
