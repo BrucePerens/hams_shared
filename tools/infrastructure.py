@@ -13282,18 +13282,59 @@ def _create_odoo_role_if_missing(run_cmd_func, db_pass, is_test=False):
                 text=True,
             )
         return
-    attributes = (
-        "SUPERUSER LOGIN" if is_test
-        else "LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
-    )
+    if is_test:
+        run_cmd_func(
+            [
+                "sudo", "-u", "postgres", "psql",
+                "-v", f"db_pass={db_pass}",
+            ],
+            input="CREATE ROLE odoo WITH SUPERUSER LOGIN PASSWORD :'db_pass';\n",
+            text=True,
+        )
+        return
+    # Production: peer authentication only (database-separation to-do, 2026-11-09). The role gets no password, the same as the role
+    # the Debian odoo package creates, so Odoo (db_host and db_password False in odoo.conf) reaches PostgreSQL over the unix socket as
+    # the odoo OS account, and a password login over TCP is refused: there is no database password for the web process to leak.
     run_cmd_func(
-        [
-            "sudo", "-u", "postgres", "psql",
-            "-v", f"db_pass={db_pass}",
-        ],
-        input=f"CREATE ROLE odoo WITH {attributes} PASSWORD :'db_pass';\n",
+        ["sudo", "-u", "postgres", "psql"],
+        input=f"CREATE ROLE odoo WITH {ODOO_ROLE_ATTRIBUTES};\n",
         text=True,
     )
+
+
+# The production `odoo` role: a login with no superuser, no role or database creation, no replication and no RLS bypass, and no password
+# (peer authentication over the unix socket only). hams_shared docs/DATABASE_SEPARATION.md gives the same statements for a stock install.
+ODOO_ROLE_ATTRIBUTES = "LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
+
+# The schema for secret-bearing tables and the role that owns it. The role has the name of the secret broker's OS account (Tier B,
+# hams_open zero_sudo/daemon/secret_broker/provision.py), so the broker logs in by peer authentication; the web role gets no grant.
+SECRET_SCHEMA = "hams_secret"
+SECRET_SCHEMA_OWNER = "hams_secret_broker"
+
+
+# [@ANCHOR: infrastructure:_provision_secret_schema]
+def _provision_secret_schema(run_cmd_func, db_name):
+    """Creates SECRET_SCHEMA in db_name, owned by the SECRET_SCHEMA_OWNER role (created without a password when missing), with every
+    privilege revoked from PUBLIC. The `odoo` role, though it owns the database, has no privilege on the schema and cannot grant itself
+    one: only the schema owner or a superuser can. Idempotent. A failure is logged and never raised, so the later provisioning steps
+    still run. hams_shared docs/DATABASE_SEPARATION.md."""
+    try:
+        if not _role_exists(SECRET_SCHEMA_OWNER):
+            run_cmd_func(
+                ["sudo", "-u", "postgres", "psql", "-v", "ON_ERROR_STOP=1"],
+                input=f"CREATE ROLE {SECRET_SCHEMA_OWNER} WITH {ODOO_ROLE_ATTRIBUTES};\n",
+                text=True,
+            )
+        run_cmd_func(
+            ["sudo", "-u", "postgres", "psql", "-v", "ON_ERROR_STOP=1", "-d", db_name],
+            input=(
+                f"CREATE SCHEMA IF NOT EXISTS {SECRET_SCHEMA} AUTHORIZATION {SECRET_SCHEMA_OWNER};\n"
+                f"REVOKE ALL ON SCHEMA {SECRET_SCHEMA} FROM PUBLIC;\n"
+            ),
+            text=True,
+        )
+    except Exception as e:  # audit-ignore-catch-all
+        _logger.warning("[*] Could not provision the %s schema in %s: %s", SECRET_SCHEMA, db_name, e)
 
 
 # Extensions Odoo or a hams module needs in the application database. Created by the postgres superuser at provisioning time, so the
@@ -14666,6 +14707,7 @@ def provision_environment(
                 # Unconditionally ensure the database is owned by odoo to fix pre-existing DBs
                 _alter_database_owner_to_odoo(run_cmd_func, db_name)
                 _precreate_odoo_extensions(run_cmd_func, db_name)
+                _provision_secret_schema(run_cmd_func, db_name)
 
                 _logger.info(
                     "[*] Provisioning cache_manager.py's own minimally-privileged "
