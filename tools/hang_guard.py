@@ -16,6 +16,7 @@ Configuration (environment): HAMS_LINT_STEP_FACTOR (4), HAMS_LINT_STEP_FLOOR (30
 HAMS_HANG_REPORT_DIR (default ~/.cache/hams/hang_reports).
 """
 
+import math
 import os
 import re
 import shutil
@@ -39,7 +40,7 @@ def number(environ, key, default):
         value = float(environ.get(key, ""))
     except ValueError:
         return default
-    return value if value > 0 else default
+    return value if math.isfinite(value) and value > 0 else default
 
 
 # [@ANCHOR: hang_guard:step_env_name]
