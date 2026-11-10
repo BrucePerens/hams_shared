@@ -144,13 +144,16 @@ def write_hang_report(root_pid, label, reason, directory=None, snapshot=agent_pr
     directory cannot be written (the report is then printed to stderr so it is not lost)."""
     table = snapshot()
     pids = sorted(({root_pid} | agent_procs.descendants(table, root_pid)) & set(table))
-    body = [f"hang report: {label}", f"reason: {reason}", f"time: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(clock()))}",
+    now = clock()
+    if not math.isfinite(now):  # an injected clock is not trusted: localtime() raises on nan and inf
+        now = time.time()
+    body = [f"hang report: {label}", f"reason: {reason}", f"time: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(now))}",
             f"process tree of pid {root_pid}: {len(pids)} process(es)"]
     body += [agent_procs.ps_line(table[p]) for p in pids]
     body += ["", *(section(table[p]) for p in pids)]
     text = "\n".join(body) + "\n"
     directory = directory or report_dir()
-    path = os.path.join(directory, time.strftime("%Y%m%d-%H%M%S", time.localtime(clock())) + "_" + re.sub(r"[^A-Za-z0-9._-]+", "_", label)[:80] + ".txt")
+    path = os.path.join(directory, time.strftime("%Y%m%d-%H%M%S", time.localtime(now)) + "_" + re.sub(r"[^A-Za-z0-9._-]+", "_", label)[:80] + ".txt")
     try:
         os.makedirs(directory, exist_ok=True)
         with open(path, "w", encoding="utf-8") as handle:

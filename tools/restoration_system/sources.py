@@ -10,6 +10,7 @@ Nothing is ever created, changed or deleted in a repository: kopia is connected 
 """
 import datetime
 import json
+import math
 import os
 import re
 
@@ -238,5 +239,10 @@ class PgBackRestRepo:
 def parse_timestamp(value):
     """UTC datetime from a pgBackRest epoch or a kopia RFC 3339 time."""
     if isinstance(value, (int, float)):
-        return datetime.datetime.fromtimestamp(value, datetime.timezone.utc)
+        if not math.isfinite(value):
+            raise ValueError("timestamp %r is not a finite number" % (value,))
+        try:
+            return datetime.datetime.fromtimestamp(value, datetime.timezone.utc)
+        except (OverflowError, OSError) as error:
+            raise ValueError("timestamp %r is outside the years a datetime holds" % (value,)) from error
     return datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))

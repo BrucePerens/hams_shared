@@ -142,3 +142,14 @@ def test_profile_requires_sections(tmp_path):
     bad.write_text('{"name": "x"}')
     with pytest.raises(RestorationError, match="lacks"):
         prof.load(str(bad))
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), 1e20, -1e20])
+def test_parse_timestamp_refuses_an_epoch_that_is_not_a_date_with_a_value_error(bad):
+    with pytest.raises(ValueError):
+        src.parse_timestamp(bad)
+
+
+def test_parse_timestamp_reads_an_epoch_and_an_rfc3339_time():
+    assert src.parse_timestamp(0).year == 1970
+    assert src.parse_timestamp("2026-11-09T12:00:00Z").hour == 12

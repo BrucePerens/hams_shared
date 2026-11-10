@@ -810,7 +810,10 @@ def max_age_seconds(environ):
 
 
 def cache_hit_note(entry):
-    when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(entry.get("when", 0)))
+    stored = entry.get("when", 0)  # read from the cache file: a hand-edited or damaged file can hold nan, inf or a non-number
+    if not isinstance(stored, (int, float)) or not math.isfinite(stored) or not 0 <= stored < 253402300800:
+        stored = 0
+    when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stored))
     return ("(result cache: every file this step read is unchanged since its pass of %s (%.0f s); output above is from that run; "
             "--no-cache reruns it)\n" % (when, entry.get("seconds", 0)))
 
