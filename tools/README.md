@@ -4756,3 +4756,77 @@ A same-line `boundary-hazard-ignore` comment for the finding's rule removes it h
 Purpose: reads the known list. Takes `path` (str or None; default `boundary_hazards_known.json` beside the script). Returns `(entries, problems)`: the entries that are well formed (rule exists,
 `rule`, `path`, `symbol`, `owner`, `reason` all non-empty) and one message per malformed entry. A missing file is an empty list. Raises `json.JSONDecodeError` for a file that is not JSON,
 which fails the step. Reads the file; no side effects.
+
+## Secret storage (`check_secret_storage.py`)
+
+A secret goes in the secret store (hams_open `zero_sudo/daemon/secret_store.py`, story `zero_sudo/docs/stories/secret_store_tier_a.md`), never in the database: the web
+process, a database dump, an SQL-injection read and a settings read over RPC can all read `ir.config_parameter` and every model field. Run by `run_linters.py` (step
+`check_secret_storage`, right after `check_boundary_hazards`) over both repositories in one process: `check_secret_storage.py <repo_root> [<repo_root> ...]`. Exit 0 clean, 1 on a
+finding, a stale or malformed known entry, or no argument. Two rules; test files are not judged:
+
+| Rule | Fires on | Symbol |
+|---|---|---|
+| `secret-config-parameter` | `set_param("<key>", ...)` with a literal key that names a secret; `config_parameter="<key>"` on a field; an `ir.config_parameter` XML record whose `key` names one | the key |
+| `secret-field` | `fields.Char`, `fields.Text` or `fields.Binary` named like a secret on a class with `_name` or `_inherit` | `Class.field` |
+
+Silencing: a same-line `# secret-storage-ignore: <rule-id>: <reason>` (XML: inside a comment on the line) for a value that is not a secret. Secrets still stored in the database and
+not migrated yet are listed in `secret_storage_known.json` (`rule`, `path`, `symbol`, `owner`, `reason`, `recorded`), seeded on 2026-11-09 with the 35 findings on both
+`main` branches; an entry that no longer matches a finding fails (judged only when both repositories are scanned, or when its path exists), so the list only shrinks. Tests:
+`test_check_secret_storage.py`.
+
+### `[@ANCHOR: secret_storage:names_a_secret]` `names_a_secret(name)`
+
+Purpose: decides whether a parameter key or field name names a secret. Takes `name` (str). Returns True when one of its words (split on `.`, `_`, `-`) is `secret`, `password`,
+`passwd`, `apikey`, `token` or `credential`, or it contains `api_key`, `private_key` or `signing_key`, and no word is one of the not-the-secret words (`public`, `hash`, `hint`,
+`masked`, `last4`, `fingerprint`, `configured`, `set`, `url`, `expiry`, `expires`, `expiration`, `date`, `ttl`, `lifetime`, `length`, `count`, `enabled`, `required`, `reset`,
+`policy`, `id`, `ids`, `name`, `label`). Pure.
+
+### `[@ANCHOR: secret_storage:is_test_path]` `is_test_path(path)`
+
+Purpose: test files are not judged (they set fake secrets on purpose). Takes `path` (str). True for a file under a `tests` directory, `test_*.py`, `*_test.py` or `conftest.py`. Pure.
+
+### `[@ANCHOR: secret_storage:find_files]` `find_files(repo_root)`
+
+Purpose: the files one root contributes. Takes `repo_root` (str). Returns the sorted absolute paths of the tracked, unignored `.py` and `.xml` files, skipping `__pycache__`,
+`node_modules`, virtual environments, `target`, `.git` and `worktrees`, through `tree_files`. Reads the file system; no side effects.
+
+### `[@ANCHOR: secret_storage:silenced]` `silenced(lines, lineno, rule)`
+
+Purpose: the ignore comment. Takes the file's lines (list of str), a 1-based line number and a rule id. True when that line carries `secret-storage-ignore: <rule>: <reason>` with a
+non-empty reason for exactly that rule; False for a line number out of range. Pure.
+
+### `[@ANCHOR: secret_storage:check_python]` `check_python(source)`
+
+Purpose: both rules on one Python source (str). Returns a list of `(rule, symbol, line, message)` with silenced findings removed; an empty list for a source that does not parse. Pure.
+Calls `_call_findings(node)` `[@ANCHOR: secret_storage:call_findings]` on every call (a literal `set_param` key, a `config_parameter=` keyword) and, on every class for which
+`_is_odoo_model(node)` `[@ANCHOR: secret_storage:is_odoo_model]` is true (its body assigns `_name` or `_inherit`), `_field_findings(node)` `[@ANCHOR: secret_storage:field_findings]`
+(a single-target assignment of `fields.Char`, `fields.Text` or `fields.Binary` whose name names a secret). A key built at run time is not seen: the rule is syntactic.
+
+### `[@ANCHOR: secret_storage:check_xml]` `check_xml(source)`
+
+Purpose: `secret-config-parameter` on XML data. Takes the file text. Returns findings for each `<record model="ir.config_parameter">` whose `<field name="key">` names a secret, with the
+line of the key. A regular-expression scan, not a parser. Pure.
+
+### `[@ANCHOR: secret_storage:check_file]` `check_file(path)`
+
+Purpose: findings for one file. Takes `path` (str). An empty list for a test file; otherwise `check_xml` for `.xml` and `check_python` for anything else. Reads the file (UTF-8,
+undecodable bytes replaced).
+
+### `[@ANCHOR: secret_storage:load_known]` `load_known(path=None)`
+
+Purpose: reads the known list. Takes `path` (str or None; default `secret_storage_known.json` beside the script). Returns `(entries, problems)`: well-formed entries (known rule, and
+`rule`, `path`, `symbol`, `owner`, `reason` non-empty) and one message per malformed entry; a missing file is `([], [])`. Raises `json.JSONDecodeError` for a file that is not JSON.
+
+### `[@ANCHOR: secret_storage:scan]` `scan(roots)`
+
+Purpose: runs `check_file` over every file of every root. Takes a list of repository roots. Returns `{(rule, relative_path, symbol): [(line, message), ...]}`. Reads files only.
+
+### `[@ANCHOR: secret_storage:report]` `report(found, entries, problems, roots)`
+
+Purpose: the verdict. Returns `(lines, status)`: one line per known-list problem, per finding not in the known list (`❌ rule path:line: message`), and per stale entry (an entry with no
+finding whose path exists in a root, or any such entry when two or more roots were scanned), then a one-line diagnostic; status 1 when there is any line, else 0. Pure.
+
+### `[@ANCHOR: secret_storage:main]` `main(argv=None)`
+
+Purpose: the command line. Takes the repository roots (a root named `hams_shared` means its parent repository; duplicates dropped). Prints the report, or one OK line; returns the
+status, or 1 with a usage line when no root is given.
