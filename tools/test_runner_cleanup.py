@@ -352,7 +352,8 @@ class PostgresAccessTests(unittest.TestCase):
     def test_an_unreachable_server_is_none_and_false_not_an_exception(self):
         broken = runner.PostgresAccess(infrastructure.get_pg_bin("psql"), env=dict(_env(), PGHOST="/nonexistent"))
         self.assertIsNone(broken.database_rows())
-        self.assertIsNone(broken.database_comment("anything"))
+        with self.assertRaises(subprocess.SubprocessError):
+            broken.database_comment("anything")  # unreachable is not "absent"
         self.assertFalse(broken.drop_database("anything_db"))
 
 
@@ -557,6 +558,12 @@ class RootPhaseDatabaseCleanupTests(unittest.TestCase):
             self.assertEqual(runner.root_phase_database_cleanup(self.args(), 3, self.pg), "absent")
         self.assertIn("rp_db_s2", _names(self.pg))
         self.assertIn("rp_db", _names(self.pg))
+
+    def test_an_unreachable_server_leaves_everything_alone_and_says_failed(self):
+        broken = runner.PostgresAccess(infrastructure.get_pg_bin("psql"), env=dict(_env(), PGHOST="/nonexistent"))
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(runner.root_phase_database_cleanup(self.args(), 2, broken), "failed")
+        self.assertIn("leaving it alone", out.getvalue())
 
     def test_a_database_name_too_long_for_a_slot_does_nothing(self):
         self.assertIsNone(runner.root_phase_database_cleanup(self.args(db="x" * 62), 2, self.pg))

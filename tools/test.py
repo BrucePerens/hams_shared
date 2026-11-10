@@ -1815,7 +1815,8 @@ def get_addons_path(base_dir):
         paths.append(override)
         found_community = True
     try:
-        for item in os.listdir(parent_dir):
+        # The first match wins, so look in a fixed order: the plain `hams_open` first, then the rest by name.
+        for item in sorted(os.listdir(parent_dir), key=lambda name: (name != "hams_open", name)):
             item_path = os.path.join(parent_dir, item)
             if os.path.isdir(item_path):
                 if item.startswith("hams_open") or item.startswith("hams_com"):
@@ -2438,15 +2439,18 @@ class PostgresAccess:
         return rows
 
     def database_comment(self, name):
-        """The comment of database `name` ("" if it has none), or None when the database does not exist (or
-        the server cannot be asked: the caller then leaves everything alone)."""
+        """The comment of database `name` ("" if it has none), or None when the database does not exist. Raises
+        `subprocess.SubprocessError` when the server cannot be asked, so a caller never reads "unreachable" as "absent"
+        and removes the run's leftovers on a guess (`finish_run` callers catch it and leave everything alone)."""
         if not _SAFE_DB_NAME_RE.match(name):
             return None
         result = self.run(
             "SELECT 'x' || coalesce(shobj_description(oid, 'pg_database'), '') FROM pg_database WHERE datname = :'dbname';",
             dbname=name,
         )
-        first = result.stdout.splitlines()[0] if result.returncode == 0 and result.stdout.strip() else None
+        if result.returncode != 0:
+            raise subprocess.SubprocessError(f"psql could not read the comment of {name}: {result.stderr.strip()[:200]}")
+        first = result.stdout.splitlines()[0] if result.stdout.strip() else None
         return first[1:] if first else None
 
     def drop_database(self, name):
@@ -2455,7 +2459,10 @@ class PostgresAccess:
         statement = runner_cleanup.drop_database_sql(name)
         if self.run(statement).returncode != 0:
             return False
-        return self.database_comment(name) is None
+        try:
+            return self.database_comment(name) is None
+        except subprocess.SubprocessError:
+            return False
 
 
 # [@ANCHOR: test:default_postgres_access]
@@ -2642,9 +2649,13 @@ def root_phase_database_cleanup(run_args, slot, pg):
         return None
     if not _SAFE_DB_NAME_RE.match(database):
         return None
-    return runner_cleanup.finish_run(
-        database, slot, False, pg.database_comment, pg.drop_database, lambda name: True, None, print
-    )
+    try:
+        return runner_cleanup.finish_run(
+            database, slot, False, pg.database_comment, pg.drop_database, lambda name: True, None, print
+        )
+    except subprocess.SubprocessError as e:
+        print(f"⚠️  WARNING: could not read database {database}: {e}; leaving it alone.")
+        return "failed"
 
 
 # [@ANCHOR: test:reap_orphans_forever]
@@ -2861,7 +2872,7 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
     extra_mounts = []
     parent_dir = os.path.abspath(os.path.join(base_dir, ".."))
     try:
-        for item in os.listdir(parent_dir):
+        for item in sorted(os.listdir(parent_dir)):
             if item.startswith("hams_open") or item.startswith("hams_com"):
                 extra_mounts.append(os.path.join(parent_dir, item))
     except OSError as e:
@@ -4416,6 +4427,8 @@ def broker_users_sharing_the_host(resources, target_modules, addons_path):
             if os.path.isdir(os.path.join(entry, module)):
                 directories[module] = os.path.join(entry, module)
                 break
+        else:
+            print(f"[*] Broker check: module {module} is in no addons directory; not checked for RabbitMQ use.")
     return runner_slots.modules_mentioning_broker(directories)
 
 
