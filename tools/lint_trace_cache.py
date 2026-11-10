@@ -14,9 +14,9 @@ whose every recorded input is unchanged is served from the cache: reported as a 
 Never cached (the step simply runs; listed so nobody has to guess):
   * a FAILED or TIMED OUT run: only passes are stored, and a lookup can only return a pass whose inputs are identical, so the cache never turns
     a failure into a pass;
-  * a step that touched the NETWORK: a successful connect to a non-loopback address, or to a loopback port that was already listening
-    before the step started (a host service: PostgreSQL, Redis, RabbitMQ, Odoo), or to a Unix socket the step did not bind itself, or that
-    read the DNS resolver configuration;
+  * a step that touched the NETWORK: a successful connect, or a sendto/sendmsg with an address, to a non-loopback address, or to a
+    loopback port that was already listening before the step started (a host service: PostgreSQL, Redis, RabbitMQ, Odoo), or a connect to
+    a Unix socket the step did not bind itself;
   * a step that read HARDWARE or host ENVIRONMENT state: any /dev node except null, zero, full, random, urandom, tty, ptmx, pts, shm, fd and the
     std streams; any /proc or /sys file outside the process's own entries, cgroup limits, CPU topology and a few kernel constants
     (PROC_SYS_ALLOWED);
@@ -63,11 +63,12 @@ NEVER_CACHED = {
     "pytest devbox_tools/": "talks to GitHub and reads the host's agent and job state",
 }
 
-# sendto/sendmsg are NOT traced: glibc sends on every TCP socket with sendto, so tracing them stopped the step at every write (a byte-drip
-# timing test of relay_signer timed out under the trace). Remote contact is still seen at connect (TCP, and glibc's DNS, which connects
-# its UDP socket); a datagram sent unconnected (dnspython) is caught by the read of the resolver configuration (RESOLVER_FILES).
-STRACE_SYSCALLS = "?open,?openat,?openat2,?creat,execve,?execveat,connect,bind,?rename,?renameat,?renameat2,?mkdir,?mkdirat"
-RESOLVER_FILES = ("/etc/resolv.conf", "/run/systemd/resolve/resolv.conf", "/run/systemd/resolve/stub-resolv.conf", "/run/resolvconf/resolv.conf")
+# sendto/sendmsg are traced so that a datagram sent to a remote address without connect (dnspython) is seen. Every TCP write is a sendto
+# too, which slows a step that writes byte by byte; a step whose traced run fails with a timeout is rerun untraced and then runs untraced
+# (traced_work in lint_exec.py), so the slowdown can never fail a step. Measured 2026-11-09: reading /etc/resolv.conf instead (a veto) hit
+# a dozen steps that never sent anything (libraries read it at import), the relay structural tests among them, so that rule was dropped.
+STRACE_SYSCALLS = ("?open,?openat,?openat2,?creat,execve,?execveat,connect,?sendto,?sendmsg,bind,"
+                   "?rename,?renameat,?renameat2,?mkdir,?mkdirat")
 # Programs that trace other programs: under strace they cannot attach (one tracer per process), so their steps run untraced.
 TRACER_PROGRAMS = frozenset({"strace", "ltrace", "gdb", "py-spy", "perf", "valgrind"})
 UNTRACEABLE_DAYS = 7
@@ -179,7 +180,7 @@ def parse_trace(lines):
         if marker:
             (paused.add if marker.group(1) == "pause" else paused.discard)(pid)
             continue
-        if pid in paused and call.group(1) not in ("connect", "bind", "execve", "execveat"):
+        if pid in paused and call.group(1) not in ("connect", "sendto", "sendmsg", "bind", "execve", "execveat"):
             continue
         _record(trace, call.group(1), call.group(2))
     return trace
@@ -239,13 +240,13 @@ def _record(trace, name, args):
         if unix:
             trace.bound.add(unix.group(1) + _unescape(unix.group(2)))
         return
-    if name == "connect" and (ok or errno == "EINPROGRESS"):
+    if name in ("connect", "sendto", "sendmsg") and (ok or errno == "EINPROGRESS"):
         inet = _INET.search(args)
         if inet:
             trace.contacts.append(("inet", (inet.group(2) or inet.group(3), int(inet.group(1)))))
             return
         unix = _UNIX.search(args)
-        if unix:
+        if unix and name == "connect":
             trace.contacts.append(("unix", unix.group(1) + _unescape(unix.group(2))))
 
 
@@ -291,8 +292,6 @@ def vetoes(trace, listening_before=frozenset()):
         elif path.startswith(("/proc/", "/sys/")) or path in ("/proc", "/sys"):
             if not any(rule.match(path) for rule in PROC_SYS_ALLOWED):
                 reasons.append("environment: read %s" % path)
-        elif os.path.realpath(path) in RESOLVER_FILES or path in RESOLVER_FILES:
-            reasons.append("network: read the DNS resolver configuration %s" % path)
         elif "/.hypothesis/" in path + "/":
             reasons.append("randomised: read the Hypothesis example database %s" % path)
     return sorted(set(reasons))

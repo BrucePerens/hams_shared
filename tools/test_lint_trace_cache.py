@@ -67,7 +67,6 @@ class ParseAndVetoTests(unittest.TestCase):
             "host service: connected to the Unix socket /var/run/postgresql/.s.PGSQL.5432",
             "hardware: read /dev/ttyUSB0",
             "environment: read /proc/net/route",
-            "network: read the DNS resolver configuration /etc/resolv.conf",
             "randomised: read the Hypothesis example database /repo/.hypothesis/examples/ab",
         ]))
 
@@ -200,16 +199,16 @@ class TraceCacheEndToEndTests(unittest.TestCase):
         self.assertEqual(self.runs(), 1)
 
     def test_a_step_that_touches_the_network_is_never_stored(self):
-        self.write("test_net.py", "import socket\n"
-                                  "s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\n"
-                                  "s.connect(('192.0.2.1', 9))\n"
-                                  "s.send(b'x')\n"
-                                  "print('sent')\n")
-        step = self.step(script="test_net.py")
-        self.assertFalse(self.run_once(step)[0].cached)
-        self.assertFalse(self.run_once(step)[0].cached)
+        for name, send in (("test_net.py", "s.connect(('192.0.2.1', 9)); s.send(b'x')\n"), ("test_net2.py", "s.sendto(b'x', ('192.0.2.2', 9))\n")):
+            self.write(name, "import socket\n"
+                             "s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\n" + send + "print('sent')\n")
+            step = self.step(script=name, name="pytest " + name)
+            self.assertFalse(self.run_once(step)[0].cached)
+            self.assertFalse(self.run_once(step)[0].cached)
         with open(os.path.join(self.store, "not_stored.log")) as handle:
-            self.assertIn("network: contacted 192.0.2.1:9", handle.read())
+            text = handle.read()
+        self.assertIn("network: contacted 192.0.2.1:9", text)  # connected UDP
+        self.assertIn("network: contacted 192.0.2.2:9", text)  # unconnected UDP (dnspython does this)
 
     def test_reads_inside_the_work_copy_markers_are_not_inputs(self):
         tools = os.path.dirname(os.path.abspath(__file__))
