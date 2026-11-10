@@ -84,6 +84,12 @@ class ParseAndVetoTests(unittest.TestCase):
         self.assertEqual(trace.absent, set())
         self.assertEqual(len(trace.contacts), 1)  # the network is never paused
 
+    def test_the_maximum_age_takes_only_finite_non_negative_numbers(self):
+        self.assertEqual(ltc.max_age_seconds({}), ltc.MAX_AGE_SECONDS)
+        self.assertEqual(ltc.max_age_seconds({"HAMS_LINT_TRACE_CACHE_MAX_AGE": "60"}), 60.0)
+        for bad in ("inf", "nan", "-5", "x"):
+            self.assertEqual(ltc.max_age_seconds({"HAMS_LINT_TRACE_CACHE_MAX_AGE": bad}), ltc.MAX_AGE_SECONDS, bad)
+
     def test_listed_steps_are_never_traced_and_only_test_steps_are(self):
         self.assertFalse(ltc.traced("pytest daemons/relay_ca"))
         self.assertFalse(ltc.traced("check_burn_list"))
