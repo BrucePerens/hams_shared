@@ -241,7 +241,8 @@ def odoo_login(cfg):
     import urllib.request
     password = sec.token_urlsafe(18)
     script = "u = env['res.users'].browse(%d)\nu.write({'password': %r})\nenv.cr.commit()\nprint('LOGIN', u.login)\n" % (login["user_id"], password)
-    proc = subprocess.run(["runuser", "-u", "odoo", "--", "odoo", "shell", "-c", "/etc/odoo/odoo.conf", "-d", login["db"], "--no-http"], input=script, capture_output=True, text=True, timeout=600, check=False)
+    argv = ["runuser", "-u", "odoo", "--", "odoo", "shell", "-c", "/etc/odoo/odoo.conf", "-d", login["db"], "--no-http"]
+    proc = subprocess.run(argv, input=script, capture_output=True, text=True, timeout=600, check=False)
     user = [ln.split(" ", 1)[1] for ln in proc.stdout.splitlines() if ln.startswith("LOGIN ")]
     if not user:
         return {"ok": False, "detail": "odoo shell failed: " + proc.stderr[-200:]}

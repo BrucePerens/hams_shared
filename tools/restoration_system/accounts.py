@@ -95,8 +95,8 @@ def account_commands(manifest, users, groups, environment="prod"):
 
 def create_accounts(chroot, commands):
     """Run the commands in the image; an account that already exists is skipped (the commands are repeatable)."""
-    existing_users = {l.split(":")[0] for l in open_text(chroot.path("etc/passwd")).splitlines() if l}
-    existing_groups = {l.split(":")[0] for l in open_text(chroot.path("etc/group")).splitlines() if l}
+    existing_users = {row.split(":")[0] for row in open_text(chroot.path("etc/passwd")).splitlines() if row}
+    existing_groups = {row.split(":")[0] for row in open_text(chroot.path("etc/group")).splitlines() if row}
     for kind, name, argv in commands:
         if kind == "group" and name in existing_groups:
             continue

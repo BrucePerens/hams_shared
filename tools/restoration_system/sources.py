@@ -193,7 +193,7 @@ class PgBackRestRepo:
         if stanza.get("cipher", "none") == "none":
             raise RestorationError("pgBackRest repository is not encrypted (cipher none): refusing an unencrypted source")
         if not stanza.get("backup"):
-            raise RestorationError("pgBackRest repository holds no backup: refusing an empty source")
+            raise RestorationError("pgBackRest repository holds no readable backup (empty, or wrong passphrase): refusing the source")
         if stanza.get("status", {}).get("code", 0) not in (0,):
             raise RestorationError("pgBackRest status: %s" % stanza["status"].get("message"))
         return stanza["backup"][-1]

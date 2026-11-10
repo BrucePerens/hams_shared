@@ -287,8 +287,8 @@ def write_exclude(tree, profile):
 
 
 def snapshot_base_accounts(tree):
-    return {l.split(":")[0] for l in acc.open_text(os.path.join(tree, "etc/passwd")).splitlines()}, \
-        {l.split(":")[0] for l in acc.open_text(os.path.join(tree, "etc/group")).splitlines()}
+    return {row.split(":")[0] for row in acc.open_text(os.path.join(tree, "etc/passwd")).splitlines()}, \
+        {row.split(":")[0] for row in acc.open_text(os.path.join(tree, "etc/group")).splitlines()}
 
 
 def write_post_step_files(tree, base_users, base_groups, runner):

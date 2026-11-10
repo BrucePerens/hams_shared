@@ -85,7 +85,7 @@ def test_pgbackrest_marker_requires_encryption_header(tmp_path):
 def test_check_info_refuses_plaintext_and_empty():
     with pytest.raises(RestorationError, match="not encrypted"):
         src.PgBackRestRepo.check_info({"cipher": "none", "backup": [{}]})
-    with pytest.raises(RestorationError, match="no backup"):
+    with pytest.raises(RestorationError, match="no readable backup"):
         src.PgBackRestRepo.check_info({"cipher": "aes-256-cbc", "backup": []})
     assert src.PgBackRestRepo.check_info({"cipher": "aes-256-cbc", "backup": [{"label": "a"}, {"label": "b"}], "status": {"code": 0}})["label"] == "b"
 

@@ -103,8 +103,7 @@ def test_04_verify_the_image_in_the_isolated_vm(world):
 def test_05_image_missing_a_unit_fails_verify(world):
     broken = os.path.join(BASE, "broken")
     subprocess.run(["sudo", "-n", "cp", "-a", world["image"], broken], check=True)
-    subprocess.run(["sudo", "-n", "rm", "-f", os.path.join(broken, "etc/systemd/system/multi-user.target.wants/nginx.service")], check=True)
-    subprocess.run(["sudo", "-n", "sh", "-c", "rm -f %s/etc/rc?.d/S*nginx" % broken], check=True)  # the SysV links enable it too
+    subprocess.run(["sudo", "-n", "ln", "-sf", "/dev/null", os.path.join(broken, "etc/systemd/system/nginx.service")], check=True)
     code, text = cli("verify", broken, "--work", BASE)
     assert code == 1 and "nginx.service is active" in text and "FAIL" in text, text[-1500:]
 

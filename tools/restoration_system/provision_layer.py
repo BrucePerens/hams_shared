@@ -27,8 +27,8 @@ def read_env_values(tree):
 
 def id_lookup(tree):
     """(user name -> uid, group name -> gid) from the image's own files."""
-    users = {l.split(":")[0]: int(l.split(":")[2]) for l in acc.open_text(os.path.join(tree, "etc/passwd")).splitlines() if l}
-    groups = {l.split(":")[0]: int(l.split(":")[2]) for l in acc.open_text(os.path.join(tree, "etc/group")).splitlines() if l}
+    users = {row.split(":")[0]: int(row.split(":")[2]) for row in acc.open_text(os.path.join(tree, "etc/passwd")).splitlines() if row}
+    groups = {row.split(":")[0]: int(row.split(":")[2]) for row in acc.open_text(os.path.join(tree, "etc/group")).splitlines() if row}
     return users, groups
 
 
