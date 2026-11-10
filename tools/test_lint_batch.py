@@ -281,6 +281,26 @@ class UnitTests(unittest.TestCase):
         self.assertEqual(verdict["exit_code"], 1)
         self.assertIn("run_linters", verdict["failures"])
 
+    def test_a_split_batch_stamps_each_passed_member_with_its_own_runs_steps_and_known_red(self):
+        # Tests [@ANCHOR: lint_batch:LintBatch_call]
+        from unittest import mock
+        stamped = {}
+        runner = lint_batch.LintBatch("/nonexistent", "hams_demo", "origin/main", [],
+                                      lambda tip, names, batch_id, with_tips, **extra: stamped.update({tip: (names, extra)}),
+                                      out=lambda text: None, environ=dict(os.environ), fetch=False)
+        members = [{"branch": "a", "tip": "ta"}, {"branch": "b", "tip": "tb"}]
+
+        def settle(group, run, attribute, log=None):
+            runner.remember(["ta"], ["flake8", "clippy"], "known red: x")  # first half
+            runner.remember(["tb"], ["flake8"], "")  # second half, the last run
+            return {m["tip"]: {"status": batch_queue.PASSED} for m in group}
+
+        with mock.patch.object(batch_queue, "reap_orphan_trees"), mock.patch.object(batch_queue, "settle", side_effect=settle), \
+                mock.patch.object(runner, "tokens", return_value=({}, lambda line: [])):
+            runner(1, members, None)
+        self.assertEqual(stamped["ta"], (["flake8", "clippy"], {"known_red": "known red: x"}))
+        self.assertEqual(stamped["tb"], (["flake8"], {}))
+
     def test_changed_paths(self):
         with tempfile.TemporaryDirectory() as tmp:
             work = helpers.make_repo(tmp)

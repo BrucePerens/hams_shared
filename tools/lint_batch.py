@@ -305,6 +305,7 @@ class LintBatch:
         self.fetch = fetch
         self.last_selected = []
         self.last_known_red = ""
+        self.run_data = {}  # tip -> (selected steps, known_red) of the LAST run that contained it: a split batch has one run per half
         self.current_members = []
         self._run_no = 0
         self._log = None
@@ -354,8 +355,8 @@ class LintBatch:
                     proc.kill()
                     proc.wait()
             selected, failed = self.collect(dest, results, "".join(captured), proc.returncode)
-            self.last_selected = selected or self.last_selected
-            self.last_known_red = read_known_red(results) if proc.returncode == 0 else ""
+            self.remember([m["tip"] for m in built["merged"]], selected or self.last_selected,
+                          read_known_red(results) if proc.returncode == 0 else "")
             code = self.verdict_code(proc.returncode, selected, "".join(captured))
             if code == lock_queue.EXIT_WAIT_TIMEOUT:
                 return {"exit_code": code, "fatal": True, "failures": {}, "conflicted": built["conflicted"],
@@ -367,6 +368,12 @@ class LintBatch:
             return {"exit_code": code, "failures": failed, "conflicted": built["conflicted"], "selected": selected}
         finally:
             batch_queue.remove_tree(self.repo, dest)
+
+    def remember(self, tips, selected, known_red=""):
+        """Record the step list and known-red note of the run that covered `tips`; `__call__` stamps each passed member with its own run's."""
+        self.last_selected, self.last_known_red = selected, known_red
+        for tip in tips:
+            self.run_data[tip] = (selected, known_red)
 
     def verdict_code(self, code, selected, output):
         """The exit status that decides the batch's verdict: the run's own by default. A subclass returns non-zero for an exit 0 that proves nothing
@@ -438,8 +445,9 @@ class LintBatch:
             verdict["batch"] = batch_id
             if verdict.get("status") == batch_queue.PASSED:
                 # The combined run's own record of the known-red failures it tolerated (ADR 0117) goes into the stamp.
-                extra = {"known_red": self.last_known_red} if self.last_known_red else {}
-                self.stamp_writer(member["tip"], self.last_selected, batch_id, verdict.get("with") or [], **extra)
+                selected, known_red = self.run_data.get(member["tip"], (self.last_selected, self.last_known_red))
+                extra = {"known_red": known_red} if known_red else {}
+                self.stamp_writer(member["tip"], selected, batch_id, verdict.get("with") or [], **extra)
         return {"verdicts": verdicts, "log": log_path}
 
 
