@@ -52,7 +52,10 @@ _CRUDE_RE = re.compile(r"kill|pgrep|pidof|xargs|-9\b|SIGKILL|fuser", re.IGNORECA
 _ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _PYTHON_KILL_RE = re.compile(
     r"SIGKILL|os\.killpg|\.kill\([^)]*,\s*9\s*\)|\[\s*['\"](?:pkill|killall)['\"]|\[\s*['\"]pgrep['\"]\s*,\s*['\"]-\w*f|"
-    r"os\.system\(\s*['\"][^'\"]*(?:pkill|killall|kill\s+-9|pgrep\s+-\w*f)")
+    r"\[\s*['\"]kill['\"]\s*,\s*['\"]-(?:9|KILL)|"
+    r"(?:os\.system|subprocess\.\w+|Popen)\(\s*['\"][^'\"]*(?:pkill|killall|kill\s+-(?:9|KILL)|pgrep\s+-\w*f)|"
+    r"os\.kill\([^\n]*,\s*(?!0\s*\))\S|"  # any signal but the existence probe 0, however the pid is computed
+    r"psutil[^\n]*\.(?:kill|terminate)\(\s*\)|Process\.kill\(|\bkill\s+['\"]?(?:9|KILL)\b")
 RESERVED = {"if", "then", "else", "elif", "while", "until", "do", "!", "{", "}", "fi", "done", "esac", "coproc"}
 EXEC_OPTIONS = ("-exec", "-execdir", "-ok", "-okdir")
 SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
