@@ -72,13 +72,23 @@ def read_depends(module_path):
     return list(data.get("depends", []))
 
 
+# [@ANCHOR: test_impact:read_test_depends]
+def read_test_depends(module_path):
+    """The `test_depends` list of a module's manifest ([] when absent): modules the module's tests need installed although its
+    runtime `depends` does not list them. Raises ValueError like `read_depends`. Not `depends_cycle`, a separate runtime mechanism."""
+    with open(os.path.join(module_path, "__manifest__.py"), encoding="utf-8") as handle:
+        data = ast.literal_eval(handle.read())
+    return list(data.get("test_depends", []))
+
+
 # [@ANCHOR: test_impact:reverse_closure]
 def reverse_closure(changed, modules):
-    """`changed` plus every module that depends on one of them, directly or through others. Returns a sorted list.
+    """`changed` plus every module that depends (`depends` or `test_depends`) on one of them, directly or through others. Returns a sorted list.
     Depends names that are not in `modules` (Odoo's own, such as `base`) are ignored."""
     reverse = {}
     for name, path in modules.items():
-        for dep in read_depends(path):
+        # test_depends: a change to the companion must also run the tests that need it installed.
+        for dep in read_depends(path) + read_test_depends(path):
             reverse.setdefault(dep, set()).add(name)
     result, frontier = set(changed), list(changed)
     while frontier:

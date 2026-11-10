@@ -36,6 +36,7 @@ CHECKERS = [
     ("check_doc_images", "roots"),
     ("check_access_csv_group_order", "find"),
     ("check_dependency_cycles", "find"),
+    ("check_test_depends", "find"),
     ("check_res_config_settings_access", "find"),
     ("check_module_subpackage_imports", "find"),
     ("check_minified_js_nested_templates", "find"),

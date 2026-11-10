@@ -87,6 +87,23 @@ class ImpactTests(unittest.TestCase):
         self.assertEqual(ti.reverse_closure({"top"}, self.modules), ["top"])
         self.assertEqual(ti.reverse_closure({"mid"}, self.modules), ["mid", "top"])
 
+    def test_test_depends_is_an_extra_reverse_edge(self):
+        # lonely's tests need base installed although it does not depend on it (manifest key test_depends).
+        with open(os.path.join(self.com, "lonely", "__manifest__.py"), "w") as handle:
+            handle.write("{'depends': ['web'], 'test_depends': ['base']}\n")
+        self.assertEqual(ti.read_test_depends(self.modules["lonely"]), ["base"])
+        self.assertEqual(ti.read_test_depends(self.modules["top"]), [])
+        self.assertEqual(ti.reverse_closure({"base"}, self.modules), ["base", "lonely", "mid", "open_mod", "top"])
+        self.assertEqual(ti.reverse_closure({"mid"}, self.modules), ["mid", "top"])
+        impact = self.run_for("base/models/m.py")
+        self.assertIn("lonely", impact.modules)
+
+    def test_a_change_to_a_companion_selects_the_dependent_but_not_the_reverse(self):
+        with open(os.path.join(self.com, "top", "__manifest__.py"), "w") as handle:
+            handle.write("{'depends': ['mid', 'web'], 'test_depends': ['lonely']}\n")
+        self.assertEqual(ti.reverse_closure({"lonely"}, self.modules), ["lonely", "top"])
+        self.assertEqual(ti.reverse_closure({"top"}, self.modules), ["top"])
+
     def test_classify_path_rules(self):
         expect = {
             "__manifest__.py": "full", "security/ir.model.access.csv": "full", "data/x.xml": "full", "views/v.xml": "full",
