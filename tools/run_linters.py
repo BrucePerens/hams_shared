@@ -261,6 +261,7 @@ STEP_META = {
     "check_fake_network_listener": {"suffixes": frozenset({".rs", ".py"})},
     "check_function_test_anchors": {"suffixes": _PY},
     "check_private_by_default": {"suffixes": frozenset({".json", ".py"})},
+    "check_settings_secrets": {"suffixes": frozenset({".json", ".py"})},
     "check_js_function_test_anchors": {"suffixes": frozenset({".js", ".py"})},
     "check_rust_function_test_anchors": {
         "suffixes": frozenset({".rs", ".py", ".toml"}),
@@ -2315,6 +2316,23 @@ def main():
                 dir_path,
                 "tools",
                 f"private_by_default_baseline_{os.path.basename(main_checkout_root)}.json",
+            ),
+        ],
+    )
+
+    # 38c. check_settings_secrets -- a secret-looking res.config.settings field must be masked by get_values; the unmasked
+    # ones are debt in a checked-in baseline that can only shrink (default-deny RPC to-do 2cf07bad, hams1 inventory s.8).
+    _add(
+        "check_settings_secrets",
+        [
+            python_exec,
+            os.path.join(dir_path, "tools", "check_settings_secrets.py"),
+            repo_root,
+            "--baseline",
+            os.path.join(
+                dir_path,
+                "tools",
+                f"settings_secrets_baseline_{os.path.basename(main_checkout_root)}.json",
             ),
         ],
     )
