@@ -1,6 +1,5 @@
 [
   "backup_management/daemon/main.py::_kopia_config_file",
-  "backup_management/daemon/main.py::_pgbackrest_repo_number",
   "backup_management/daemon/main.py::run",
   "backup_management/daemon/pgbackrest_sidecar.py::main",
   "backup_management/models/backup_config.py::BackupConfig._get_executable",
