@@ -135,6 +135,11 @@ def hash_module_sources(module_dirs, names, include_tests=True):
             dirs[:] = sorted(
                 d for d in dirs if d not in SKIPPED_SOURCE_DIRS and not (not include_tests and d == "tests" and current == root)
             )
+            for linked in [d for d in dirs if os.path.islink(os.path.join(current, d))]:
+                # os.walk lists a link to a directory in `dirs` but does not descend: hash it by its target text like a file link.
+                dirs.remove(linked)
+                digest.update(b"file:" + os.path.relpath(os.path.join(current, linked), root).encode() + b"\0")
+                digest.update(b"link:" + os.readlink(os.path.join(current, linked)).encode())
             for filename in sorted(files):
                 if filename.endswith(SKIPPED_SOURCE_SUFFIXES):
                     continue
@@ -375,14 +380,13 @@ def parse_odoo_log(lines):
 
 
 # [@ANCHOR: tools:template_db_compare_outcomes]
-def compare_outcomes(reference, other, only_post_install=True, post_install_names=None):
+def compare_outcomes(reference, other, post_install_names=None):
     """Compares two `LogMilestones`: the pass/fail set of a clone against a fresh install.
 
     Returns {"same": bool, "only_in_reference": [...], "only_in_other": [...], "failed_differ": [...]} with test names sorted.
     A test counts as run when it was started; "failed_differ" lists tests started in both whose FAIL status differs.
-    With `only_post_install` the reference's at_install tests (started before its `post_tests_start`) are left out, since a
-    plain-load clone runs the at_install suite too but at a different point; `post_install_names` instead gives the exact
-    set to compare when the caller knows it."""
+    `post_install_names`, when given, restricts both sides to those names (the harness passes the post-install set; without it every
+    started test is compared)."""
     ref_names = list(reference.tests_started)
     if post_install_names is not None:
         ref_set = set(ref_names) & set(post_install_names)
@@ -413,7 +417,9 @@ def equality_lines(records):
             if r["arm"] in ("fresh_ssd", "build"):
                 continue
             same = (
-                r["result"] == reference["result"]
+                reference["result"] is not None
+                and r["result"] is not None
+                and r["result"] == reference["result"]
                 and set(r["outcome_names"]) == set(reference["outcome_names"])
                 and set(r["failed_names"]) == set(reference["failed_names"])
             )
@@ -422,6 +428,13 @@ def equality_lines(records):
                 + ("SAME outcome" if same else f"DIFFERENT (result {r['result']} vs {reference['result']}, {len(r['outcome_names'])} vs {len(reference['outcome_names'])} tests started)")
             )
     return lines
+
+
+def _copy_method(value):
+    """`copy` or `clone`, the only values of `file_copy_method` the benchmark uses; anything else is refused (it goes into SQL)."""
+    if value not in ("copy", "clone"):
+        raise ValueError(f"HAMS_BENCH_COPY_METHOD must be copy or clone, not {value!r}")
+    return value
 
 
 # [@ANCHOR: tools:template_db_clone_sql]
@@ -576,7 +589,9 @@ def transform_odoo_command(cmd, plan, database=None):
     no test needs). Without `plan.tests` the `--test-enable` flag and the `--test-tags` pair are removed. Every other argument
     is kept in order."""
     out = list(cmd)
-    if database is not None and "-d" in out:
+    if database is not None:
+        if "-d" not in out:
+            raise ValueError("the Odoo command has no -d to replace with the template database")
         out[out.index("-d") + 1] = database
     if plan.drop_install or plan.update:
         index = out.index("-i")
@@ -896,7 +911,7 @@ def clone_for_run(runner, db_name, template, plan, redis_flush_db):
         runner,
         f"""SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{db_name}';
 DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE);
-SET file_copy_method = {os.environ.get("HAMS_BENCH_COPY_METHOD", "copy")};
+SET file_copy_method = {_copy_method(os.environ.get("HAMS_BENCH_COPY_METHOD", "copy"))};
 {create}
 {marker}
 """,
@@ -1243,6 +1258,8 @@ def run_command(args):
             bench.build_template(key, slot, slots, rep)
         verdict, why = verify_template(bench.sql("SELECT shobj_description(oid, 'pg_database') FROM pg_database WHERE datname = '%s';" % template).strip(), key)
         bench.meta["template_verified"] = [verdict, why]
+        if not verdict:
+            raise SystemExit(f"[bench] the built template {template} does not verify ({why}); not cloning it")
         ram_template = None
         if ram:
             ram_template = template + "_ram"
@@ -1335,14 +1352,14 @@ def build_parser():
     run.add_argument("--strategy", default=None, choices=(None, "wal_log", "file_copy"), help="CREATE DATABASE strategy in the clone arms")
     run.add_argument("--copy-method", default="copy", choices=("copy", "clone"), help="file_copy_method for the clone arms (session setting)")
     run.add_argument("--no-clone-micro", dest="clone_micro", action="store_false")
-    run.add_argument("--key-includes-tests", dest="key_includes_tests", action="store_true", default=True)
+    run.add_argument("--key-includes-tests", dest="key_includes_tests", action=argparse.BooleanOptionalAction, default=True)
     run.add_argument("--keep-template", action="store_true")
     run.add_argument("--replace-template", action="store_true", help="start although the template database already exists (it is rebuilt and, unless --keep-template, dropped at the end)")
     key = sub.add_parser("key", help="print the template key for a module list")
     key.add_argument("--repo-root", required=True)
     key.add_argument("--modules", required=True)
     key.add_argument("--out-dir", default="/tmp")
-    key.add_argument("--key-includes-tests", dest="key_includes_tests", action="store_true", default=True)
+    key.add_argument("--key-includes-tests", dest="key_includes_tests", action=argparse.BooleanOptionalAction, default=True)
     key.add_argument("--modules-file", default=None)
     report = sub.add_parser("report", help="render results files as Markdown")
     report.add_argument("files", nargs="+")
