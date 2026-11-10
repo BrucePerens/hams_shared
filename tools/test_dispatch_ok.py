@@ -180,6 +180,8 @@ class LandingTests(unittest.TestCase):
         self.assertEqual(lines[0], "OK")
         self.assertIn("LANDING_HOLD", lines)
         self.assertNotIn("\nHOLD\n", text)
+        self.assertIn("open your own PR", text)
+        self.assertNotIn("fold new PRs", text, "every change is its own PR; nothing is folded into another")
         code, _ = self.run_main("--landing")
         self.assertEqual(code, dispatch_ok.EXIT_LANDING_HOLD)
         self.assertEqual(self.run_main("--quiet", "--landing")[1], "")

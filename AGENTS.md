@@ -241,7 +241,7 @@ When debugging tests, especially UI tours, you can use the MCP test server inste
   and the combined lint gate are the bottleneck, not agent slots or CPU. `dispatch_ok.py` therefore also prints `LANDING_OK` or `LANDING_HOLD` on separate
   lines (HOLD when more than 25 PRs are queued+testing or the oldest queued PR has waited over 60 minutes), and `python3 devbox_tools/queue_depth.py`
   prints the same as one line. Check it before opening a PR. `LANDING_HOLD` never stops an agent from starting or running (ten or more agents run at all
-  times); it means finish and commit, then fold the change into an already-open PR or hold it, and do gate-free work meanwhile. Agent starts are held only
+  times); it means finish and commit, then open your own PR (every change is its own PR; nothing is ever folded into another) and let it land by the batch cycle, and do gate-free work meanwhile. Agent starts are held only
   for memory or critical CPU, as above. Work mix: pair landing work with CPU-bound work that needs no gate (whole-system delta runs, property, fuzz and
   mutation tests, soaks, benchmarks, builds, audits); batch related changes into one PR per module or topic rather than one per finding; and do not start
   mass edits (comments, claims hashes, renames across many files) while the queue is deep, since they go stale and conflict with other agents' work:

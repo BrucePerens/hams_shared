@@ -15,8 +15,8 @@ may still be dispatched at the coordinator's discretion (the exit status stays 1
 A second, separate signal (Bruce, 2026-11-09): the merge queue is the bottleneck, so what is throttled is PR LANDING, not agent starts. After the
 agent-start verdict the tool prints LANDING_OK or LANDING_HOLD from the merge queue file (`~/.cache/hams-merge-queue/queue.json`, read only):
 LANDING_HOLD when more than 25 PRs are queued+testing or the oldest queued PR has waited over 60 minutes. LANDING_HOLD never stops an agent from
-starting (ten agents run at all times): it tells running agents to finish and commit but fold new PRs into an open one or hold them, and to do
-gate-free work meanwhile. A missing queue file is an empty queue (LANDING_OK); an unreadable one is LANDING_HOLD.
+starting (ten agents run at all times): it tells running agents to finish and commit and open their own PR (every change is its own PR, never folded into another),
+land it by the batch cycle, and do gate-free work meanwhile. A missing queue file is an empty queue (LANDING_OK); an unreadable one is LANDING_HOLD.
 
     python3 hams_shared/tools/dispatch_ok.py            # OK / HOLD + reasons, then LANDING_OK / LANDING_HOLD + counts; exit 0 / 1 (agent start)
     python3 hams_shared/tools/dispatch_ok.py --landing  # same output; exit 0 for LANDING_OK, 2 for LANDING_HOLD (PR landing)
@@ -157,7 +157,7 @@ def main(argv=None):
             print("  - " + line)
         print("  - " + summary)
         if land_state == "LANDING_HOLD":
-            print("  - agents keep running: finish and commit, but fold new PRs into an open one or hold them, and do gate-free work")
+            print("  - agents keep running: finish, commit and open your own PR (never fold into another); it lands by the batch cycle; do gate-free work")
     if args.landing:
         return 0 if land_state == "LANDING_OK" else EXIT_LANDING_HOLD
     return 0 if state == "OK" else 1
