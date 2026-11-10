@@ -65,18 +65,70 @@ def estimate(files, table):
     return out
 
 
-def balanced_chunks(files, count, table=None):
+def balanced_chunks(files, count, table=None, split=None, collect=None):
     """`count` lists of `files`, balanced by estimated run time (longest first into the lightest chunk). Each list is
-    sorted; the empty chunks are dropped. Pure and deterministic."""
+    sorted; the empty chunks are dropped. Deterministic. A file named in `split` (default: the "split_tests" section of the
+    table, `load_split`) is not one unit but several (`split_units`): its slow tests one by one, the rest of its tests together,
+    all as pytest node ids, so the slow tests of one file run in different chunks (pytest-xdist's --dist loadfile keeps a file
+    on one worker). `collect` lists a file's node ids (default `collect_node_ids`); a file it cannot list stays whole."""
     table = load_table() if table is None else table
+    split = load_split() if split is None else split
     seconds = estimate(files, table)
+    units = []
+    for path in files:
+        parts = split_units(path, split[os.path.basename(path)], collect or collect_node_ids) if os.path.basename(path) in split else None
+        units.extend(parts or [((path,), seconds[path])])
     chunks = [[] for _ in range(max(1, count))]
     load = [0.0] * len(chunks)
-    for path in sorted(files, key=lambda f: (-seconds[f], f)):
+    for args, cost in sorted(units, key=lambda unit: (-unit[1], unit[0])):
         lightest = min(range(len(chunks)), key=lambda i: (load[i], i))
-        chunks[lightest].append(path)
-        load[lightest] += seconds[path]
+        chunks[lightest].extend(args)
+        load[lightest] += cost
     return [sorted(chunk) for chunk in chunks if chunk]
+
+
+def load_split(path=None):
+    """{test file name: {"tests": {"Class::test": seconds}, "rest_seconds": seconds}} from the table's "split_tests" section."""
+    try:
+        with open(path or TABLE, encoding="utf-8") as handle:
+            entry = json.load(handle).get("split_tests", {})
+    except (OSError, ValueError, AttributeError):
+        return {}
+    return {name: value for name, value in entry.items() if isinstance(value, dict)} if isinstance(entry, dict) else {}
+
+
+def collect_node_ids(path):
+    """The node ids pytest collects from the test file `path`, as `<path>::<rest>` (absolute path kept), or None when collection
+    fails. Runs `pytest --collect-only -q` in the file's directory."""
+    import subprocess
+    try:
+        out = subprocess.run([sys.executable, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider", path],
+                             cwd=os.path.dirname(path), capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    ids = [path + "::" + line.split("::", 1)[1] for line in out.stdout.splitlines() if "::" in line and not line.startswith(" ")]
+    return ids or None
+
+
+# [@ANCHOR: lint_test_durations:split_units]
+def split_units(path, entry, collect):
+    """Units ((node id, ...), seconds) of one split file: each test named in `entry["tests"]` alone with its seconds, every other
+    collected test of the file together (`entry["rest_seconds"]`, default 1 s). None when the file cannot be collected or a named
+    test no longer exists (the caller keeps the whole file then: a split can never drop or invent a test)."""
+    ids = collect(path)
+    if not ids:
+        return None
+    named = {name: float(value) for name, value in (entry.get("tests") or {}).items() if isinstance(value, (int, float))}
+    local = {node.split("::", 1)[1]: node for node in ids}
+    if not named or any(name not in local for name in named):
+        return None
+    units = [((local[name],), named[name]) for name in sorted(named)]
+    rest = tuple(node for name, node in sorted(local.items()) if name not in named)
+    if rest:
+        units.append((rest, float(entry.get("rest_seconds", 1.0))))
+    return units
 
 
 def daemon_shards(rel_dir, files, path=None, disabled=False):
@@ -103,7 +155,7 @@ def daemon_shards(rel_dir, files, path=None, disabled=False):
         return [list(files)]
     seconds = {name: float(value) for name, value in entry.get("seconds", {}).items()
                if isinstance(value, (int, float)) and math.isfinite(value) and value >= 0}
-    return balanced_chunks(files, min(count, len(files)), seconds)
+    return balanced_chunks(files, min(count, len(files)), seconds, split={})
 
 
 def refresh(junit_path, table_path=None):
