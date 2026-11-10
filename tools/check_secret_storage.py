@@ -37,6 +37,7 @@ import os
 import re
 import sys
 
+import check_target
 from tree_files import tree_files
 
 IGNORE_DIR_NAMES = {"__pycache__", "node_modules", ".venv", "venv", "target", ".git", "worktrees", "site-packages"}
@@ -244,11 +245,14 @@ def main(argv=None):
         return 1
     roots = []
     for given in argv:
-        repo_root = os.path.abspath(given)
+        repo_root = check_target.require_directory(given, "check_secret_storage")
         if os.path.basename(repo_root) == "hams_shared":
             repo_root = os.path.dirname(repo_root)
         if repo_root not in roots:
             roots.append(repo_root)
+    check_target.require_scanned(
+        sum(len(find_files(repo_root)) for repo_root in roots), ", ".join(roots), "check_secret_storage", ".py and .xml files"
+    )
     entries, problems = load_known()
     lines, status = report(scan(roots), entries, problems, roots)
     for line in lines:

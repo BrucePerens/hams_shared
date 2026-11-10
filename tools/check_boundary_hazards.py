@@ -53,6 +53,7 @@ import os
 import re
 import sys
 
+import check_target
 import lint_cache
 from tree_files import tree_files
 
@@ -533,7 +534,7 @@ def main():
         sys.exit(1)
     roots = []
     for given in sys.argv[1:]:
-        repo_root = os.path.abspath(given)
+        repo_root = check_target.require_directory(given, "check_boundary_hazards")
         if os.path.basename(repo_root) == "hams_shared":
             repo_root = os.path.dirname(repo_root)
         if repo_root not in roots:
@@ -541,6 +542,7 @@ def main():
 
     cache = lint_cache.ResultCache("check_boundary_hazards", lint_cache.checker_version(os.path.abspath(__file__)))
     found, scanned = _scan(roots, cache)
+    check_target.require_scanned(len(scanned), ", ".join(roots), "check_boundary_hazards", ".py and .sh files")
     cache.save()
 
     entries, problems = load_known()

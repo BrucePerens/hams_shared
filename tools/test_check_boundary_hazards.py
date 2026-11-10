@@ -441,6 +441,8 @@ class KnownListTests(RuleTestCase):
         self.other = os.path.join(self.tmp, "hams_open")
         os.makedirs(self.repo)
         os.makedirs(self.other)
+        for root in (self.repo, self.other):  # a scan of zero files exits 2 (check_target)
+            _write(root, "clean.py", "VALUE = 1\n")
         self.known = os.path.join(self.tmp, "known.json")
         self._saved = chk.KNOWN_FILE
         chk.KNOWN_FILE = self.known
