@@ -49,6 +49,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -589,6 +590,47 @@ class RunJobTest(RamTestCase):
         self.assertEqual(result.returncode, ram_dirs.EX_TEMPFAIL)
         self.assertIn("belongs to a running job", said[-1])
         self.assertTrue(os.path.isdir(result.target))
+
+    # Tests [@ANCHOR: ram_dirs:run_job]
+    def test_an_unclaimable_directory_is_refused_with_an_exit_code_not_a_traceback(self):
+        squat = os.path.join(self.root, "hams-cargo-target-t1")
+        os.makedirs(squat)
+        os.chmod(squat, 0)
+        self.addCleanup(os.chmod, squat, 0o700)
+        if os.access(squat, os.W_OK):
+            self.skipTest("running as a user that ignores directory modes")
+        with mock.patch.object(ram_dirs, "owner_state", return_value="dead"), mock.patch.object(ram_dirs, "remove_tree"):
+            result, said = self.run_job("raise SystemExit(0)")
+        self.assertEqual(result.returncode, ram_dirs.EX_TEMPFAIL)
+        self.assertIn("cannot claim", said[-1])
+
+    # Tests [@ANCHOR: ram_dirs:run_job]
+    def test_two_starts_of_one_job_name_take_turns_at_the_check_and_claim(self):
+        target = os.path.join(self.root, "hams-cargo-target-t1")
+        entered = []
+        release = threading.Event()
+
+        def first():
+            with ram_dirs._claim_lock(target):
+                entered.append("first")
+                release.wait(5)
+
+        thread = threading.Thread(target=first)
+        thread.start()
+        while not entered:
+            time.sleep(0.01)
+        def later():
+            with ram_dirs._claim_lock(target):
+                entered.append("second")
+
+        second = threading.Thread(target=later)
+        second.start()
+        time.sleep(0.3)
+        self.assertEqual(entered, ["first"])  # the second is blocked while the first holds the lock
+        release.set()
+        thread.join()
+        second.join(5)
+        self.assertEqual(entered, ["first", "second"])
 
     # Tests [@ANCHOR: ram_dirs:run_job]
     def test_the_directory_of_a_dead_job_is_replaced_and_the_run_sweeps_others(self):

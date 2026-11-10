@@ -45,6 +45,7 @@ Full documentation of every function: tools/README.md "Build and test scratch di
 """
 
 import argparse
+import contextlib
 import dataclasses
 import ctypes
 import fcntl
@@ -868,12 +869,19 @@ def run_job(job, argv, keep=False, force_ssd=False, pol=None, environ=None, inte
     else:
         placed = cargo_target_dir(job, pol, environ)
     target = placed.path
-    if os.path.lexists(target):
-        if owner_state(target) == "alive":
-            say(f"the directory {target} belongs to a running job; use another job name (two jobs must not share one)")
+    # One job name started twice in the same instant: the check and the claim are one step under a per-job lock, so a directory
+    # the other run just created is never seen as "unmarked" and removed under it.
+    with _claim_lock(target):
+        if os.path.lexists(target):
+            if owner_state(target) == "alive":
+                say(f"the directory {target} belongs to a running job; use another job name (two jobs must not share one)")
+                return JobResult(EX_TEMPFAIL, target, placed.in_ram)
+            remove_tree(target)
+        try:
+            claim(target, keep=keep, job=job)
+        except OSError as error:  # for example a foreign directory squatting on the name
+            say(f"cannot claim {target}: {error}; use another job name")
             return JobResult(EX_TEMPFAIL, target, placed.in_ram)
-        remove_tree(target)
-    claim(target, keep=keep, job=job)
     if placed.in_ram:
         write_usage(pol)
     environ["CARGO_TARGET_DIR"] = target
@@ -953,6 +961,21 @@ def run_job(job, argv, keep=False, force_ssd=False, pol=None, environ=None, inte
 
 
 # [@ANCHOR: ram_dirs:die_with_parent]
+@contextlib.contextmanager
+def _claim_lock(target):
+    """Hold an exclusive `flock` on `<dir of target>/.hams-claim-<name>.lock` while a job checks and claims `target`. When the lock
+    file cannot be opened the step runs unlocked (as before)."""
+    lock_path = os.path.join(os.path.dirname(target), ".hams-claim-" + os.path.basename(target) + ".lock")
+    try:
+        handle = open(lock_path, "a", encoding="utf-8")
+    except OSError:
+        yield
+        return
+    with handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        yield
+
+
 def _die_with_parent():
     """Child-side hook of `run_job`: SIGTERM this process when the runner dies, so a SIGKILLed runner does not leave a build
     writing into a directory the next sweep (rightly) calls dead."""
