@@ -314,6 +314,7 @@ class DaemonChangeSelectionTests(SelectionFixture):
             "check_function_test_anchors",
             "check_int_float_overflow",
             "check_float_isfinite",
+            "check_boundary_hazards",
             "check_fake_network_listener",
             "check_summation_bias",
             "check_dependency_cycles",
@@ -352,6 +353,7 @@ class DaemonChangeSelectionTests(SelectionFixture):
         combined = {
             "check_int_float_overflow": "daemons/bench/tools/helper.py",
             "check_float_isfinite": "daemons/bench/tools/helper.py",
+            "check_boundary_hazards": "daemons/bench/tools/helper.py",
             "check_fake_network_listener": "daemons/bench/tools/helper.py",
             "check_async_lock_scope": "daemons/bench/src/main.rs",
             "check_window_fetch_reassignment": "daemons/bench/tools/x.test.js",
