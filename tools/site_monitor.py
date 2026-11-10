@@ -20,7 +20,8 @@ that works and it does not depend on Odoo, so it still pages when Odoo is the th
   * Dead-man switch: when every check passes, the monitor GETs `HAMS_MONITOR_HEARTBEAT_URL`. An off-host service
     that expects that ping every few minutes pages when it stops, which covers what no software on the host can
     report: the host, its network or this timer being dead. That service is chosen and configured by the operator
-    (docs/runbooks/SITE_MONITORING.md in hams_com); nothing here signs up for anything.
+    (docs/runbooks/SITE_MONITORING.md in hams_com); nothing here signs up for anything. Optional
+    `HAMS_MONITOR_HEARTBEAT_TOKEN` is sent as `Authorization: Bearer` (pager-duty on prove1 requires it).
 
 Maintenance: while the pagerduty maintenance flag (`/etc/pagerduty/maintenance`, or `$PAGERDUTY_MAINTENANCE_FILE`; set
 by `pagerduty-maintenance start`, root only) is active, every check still runs and is logged, but no page and no
@@ -455,9 +456,12 @@ def deliver(messages, env, host, channels=CHANNELS):
     return delivered
 
 
-def ping_heartbeat(url, urlopen=urllib.request.urlopen):
+def ping_heartbeat(url, urlopen=urllib.request.urlopen, token=None):
+    headers = {"User-Agent": USER_AGENT}
+    if token:  # prove1's pager-duty heartbeat endpoint wants `Authorization: Bearer <board token>`
+        headers["Authorization"] = "Bearer " + token
     try:
-        request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        request = urllib.request.Request(url, headers=headers)
         with urlopen(request, timeout=15):
             pass
         return True
@@ -516,7 +520,7 @@ def main(env=None, now=None, deps=None, host=None):
     # During maintenance the heartbeat is sent even though checks fail: the planned restart must not trip the
     # off-host dead-man page, and the monitor having run proves the host and timer are alive. It is capped by the flag.
     if heartbeat and (status == 0 or (in_maintenance and status == 1)):
-        ping_heartbeat(heartbeat, **deps.get("heartbeat", {}))
+        ping_heartbeat(heartbeat, token=env.get("HAMS_MONITOR_HEARTBEAT_TOKEN"), **deps.get("heartbeat", {}))
     if heartbeat:
         run_status["heartbeat_warned_boot"] = ""
     else:
