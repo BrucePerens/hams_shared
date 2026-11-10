@@ -40,6 +40,12 @@ runs it starts.
 `:line` after one), `0x` addresses, hex strings of 8 or more digits, durations (`1.5s`, `20 ms`) and whitespace runs, then strips.
 Other digits are kept, so `3 != 4` and `3 != 5` differ. Pure; no errors.
 
+### `lint_baseline:cargo_panic_message`
+**Purpose.** The message of a failing cargo test, so a test red on main that fails differently on a branch is not tolerated.
+`cargo_panic_message(lines, test) -> str` returns the lines of the `---- test stdout ----` block up to the first blank line, with the
+`thread '..' panicked at file:line:col:` header reduced to its message (no line number, so unrelated edits do not change it). Returns ""
+when the output has no such block. Pure; no errors.
+
 ### `lint_baseline:failure_items`
 **Purpose.** Turns one failed step's output into items. `failure_items(step_name, output) -> {item_id: item}`.
 
