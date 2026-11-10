@@ -587,7 +587,7 @@ class StorageProfileTests(unittest.TestCase):
         wal_dir = os.path.join(self.tmp, "storage", "wal")
         os.makedirs(wal_dir)
         sh([f"{PG_BIN}/pg_basebackup", "-h", self.src.sock, "-p", str(self.src.port), "-U", USER, "-D", os.path.join(db_dir, stamp),
-            "-Ft", "--compress=client-zstd:3", "-X", "stream", "--manifest-checksums=SHA256"])
+            "-Ft", "--compress=client-zstd:3", "-X", "stream", "--manifest-checksums=SHA256", "-c", "fast"])  # fast: a spread checkpoint made each test wait about 100 s
         with open(os.path.join(db_dir, stamp + ".verified.json"), "w") as f:
             json.dump({"name": stamp}, f)
         for _ in range(2):
