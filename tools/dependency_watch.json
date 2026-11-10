@@ -74,5 +74,12 @@
       "until": "2026-12-08"
     },
     "notes": "Added 2026-11-08 (ADR 0114 known gap). `gh api repos/ka9q/ka9q-radio/compare/8c50dbbe...main`: ahead_by 4, files debian/changelog, docs/PREVIEW.txt, src/radio.c, src/rtp.c."
+  },
+  "portaudio": {
+    "repo": "PortAudio/portaudio",
+    "mode": "release",
+    "pinned": "v19.7.0",
+    "pinned_via": "hams_com macOS Direwolf static build (PortAudio source pa_stable_v190700_20210406.tgz, SHA-256 47efbf42c77c19a05d22e627d42873e991ec0c1357219c0d74ce6a2948cb2def, see ADR 0114 libraries table)",
+    "notes": "Added 2026-11-09 (ADR 0114 known gap; to-do external-programs-inventory-enforcement-and-watch-gaps item 4). `gh api repos/PortAudio/portaudio/releases/latest` on that day: v19.7.0, identical to the pin."
   }
 }
