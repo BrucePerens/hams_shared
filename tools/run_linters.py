@@ -1130,7 +1130,6 @@ def invocation_root(script_path):
     return given
 
 
-# [@ANCHOR: run_linters:retry_timed_out_steps]
 # [@ANCHOR: run_linters:steps_without_result]
 def steps_without_result(selected_names, results):
     """Names of the selected steps that produced no result, in selection order. A pass stamp says "these steps passed": a step that
@@ -1140,6 +1139,7 @@ def steps_without_result(selected_names, results):
     return [name for name in dict.fromkeys(selected_names) if name not in have]
 
 
+# [@ANCHOR: run_linters:retry_timed_out_steps]
 def retry_timed_out_steps(results, steps, execute=None, out=print):
     """Steps that failed by timing out on a saturated machine are rerun ONCE, alone and one at a time, after the whole run.
 
