@@ -275,6 +275,12 @@ def locked(path, exclusive=True, wait=True):
         handle.close()
 
 
+def _require_lock(held, target):
+    """A blocking `locked()` that yields False means flock itself failed: pruning the cache under a live build would be worse than stopping."""
+    if not held:
+        raise RuntimeError(f"lint cache: could not lock {target}; refusing to prune or build in a directory another build may be using")
+
+
 def _unit_hash(filename):
     """The 16-hex-digit cargo unit hash in a file or directory name (`libfoo-0123456789abcdef.rlib`,
     `foo-0123456789abcdef`), or None."""
@@ -550,7 +556,8 @@ def cargo_session(environ=None, log=None):
         # The dispatcher names the directory with ITS toolchain; this host may run another (a runner is a different
         # machine): the name is derived again here, so one toolchain on one machine is one directory.
         target = cargo_target_dir(repo, environ)
-    with locked(target, exclusive=True):
+    with locked(target, exclusive=True) as held:
+        _require_lock(held, target)
         adopted = None if in_ram(target, environ) else adopt_legacy_dir(target, environ)
         if adopted and log:
             log(f"lint cache: adopted the old shared directory {adopted} as {target} (its incremental data is pruned first)")
@@ -583,7 +590,8 @@ def named_cargo_session(name, environ=None, log=None):
         # In RAM one directory serves every slot: the exclusive lock below already makes concurrent builds take turns, and four
         # copies of a 4.5 GB dependency build cost 13.5 GB of memory (measured 2026-11-08).
         target = cargo_target_dir(name, dict(environ, HAMS_LINT_SLOT="1"))
-    with locked(target, exclusive=True):
+    with locked(target, exclusive=True) as held:
+        _require_lock(held, target)
         prepare_cargo_target(target, environ, log)
         yield target
 

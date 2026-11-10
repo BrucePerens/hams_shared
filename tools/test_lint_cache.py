@@ -249,6 +249,16 @@ class CargoBudgetTest(unittest.TestCase):
             self.assertEqual(lint_cache.dir_bytes(cleared), 0)  # cleared, not failed
 
     # Tests [@ANCHOR: lint_cache:named_cargo_session]
+    # Tests [@ANCHOR: lint_cache:cargo_session]
+    def test_a_failing_flock_stops_the_session_instead_of_pruning_under_a_live_build(self):
+        from unittest import mock
+        env = {"XDG_CACHE_HOME": self._tmp.name}
+        with mock.patch.object(lint_cache.fcntl, "flock", side_effect=OSError("no locks")):
+            with self.assertRaisesRegex(RuntimeError, "could not lock"):
+                with lint_cache.named_cargo_session("relay-export-test", env):
+                    self.fail("the body must not run without the lock")
+
+    # Tests [@ANCHOR: lint_cache:named_cargo_session]
     def test_named_session_leaves_an_explicit_cargo_target_dir_alone(self):
         make_unit(self.profile, "a", "0123456789abcdef", 1000, 10)
         environ = {"XDG_CACHE_HOME": self._tmp.name, "CARGO_TARGET_DIR": self.target, "HAMS_LINT_CARGO_GB": "0"}
