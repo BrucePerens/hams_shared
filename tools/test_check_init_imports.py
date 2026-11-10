@@ -111,6 +111,13 @@ class MainIntegrationTests(unittest.TestCase):
         code, out = self._run()
         self.assertEqual(code, 0, out)
 
+    def test_the_restoration_system_library_package_is_not_an_odoo_package(self):
+        _write(os.path.join(self.tmp, "ok_mod", "ok.py"), "x = 1\n")
+        _write(os.path.join(self.tmp, "tools", "restoration_system", "__init__.py"), '"""A library."""\n')
+        _write(os.path.join(self.tmp, "tools", "restoration_system", "build.py"), "x = 1\n")
+        code, out = self._run()
+        self.assertEqual(code, 0, out)
+
     def test_a_claude_worktree_directory_is_never_walked(self):
         # Agent sessions run in isolated git worktrees under .claude/worktrees/<session>/
         # inside the repo root -- real git worktree checkouts (verified with a real
