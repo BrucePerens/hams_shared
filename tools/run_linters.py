@@ -235,6 +235,7 @@ STEP_META = {
     "check_init_imports": {"suffixes": _PY},
     "check_model_extension_collisions": {"suffixes": _PY},
     "check_self_writeable_field_tests": {"suffixes": _PY},
+    "check_test_depends": {"suffixes": frozenset({".py"})},
     "check_registry_test_cr_usage": {"suffixes": _PY},
     "check_gdpr_erasure_uses_service_utility": {"suffixes": _PY},
     # night_shift_history.py check: the night_shift_history/ directory (one markdown file per entry) and its stub file.
@@ -1718,6 +1719,13 @@ def main():
     _add(
         "check_dependency_cycles",
         [python_exec, os.path.join(dir_path, "tools", "check_dependency_cycles.py"), dir_path],
+    )
+
+    # 19b. check_test_depends: audits the manifest `test_depends` key (unknown, redundant, self-referential, cyclic entries).
+    # Whole-tree for the same reason as step 19.
+    _add(
+        "check_test_depends",
+        [python_exec, os.path.join(dir_path, "tools", "check_test_depends.py"), dir_path],
     )
 
     # 20. check_self_writeable_field_tests

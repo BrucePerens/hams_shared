@@ -4141,6 +4141,18 @@ Purpose: the `depends` list of a manifest, parsed with `ast.literal_eval` (the m
 Returns: list of names; `[]` when the manifest is missing, unparsable or not a dict. Includes Odoo's own modules (`base`, `web`), which
 the closure ignores.
 
+### `[@ANCHOR: test_impact:read_test_depends]` `read_test_depends(module_path)`
+
+Purpose: the `test_depends` list of a manifest: modules the module's tests need installed although its runtime `depends` does not list
+them. `reverse_closure` treats each entry as an extra reverse edge, so a change to the companion selects the dependent module's tests.
+Not `depends_cycle` (a separate runtime mechanism). Checked by `check_test_depends.py`.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `module_path` | str | A module directory. |
+
+Returns: list of names; `[]` when the key is absent. Raises `ValueError`-family errors on an unreadable manifest, like `read_depends`.
+
 ### `[@ANCHOR: test_impact:reverse_closure]` `reverse_closure(changed, modules)`
 
 Purpose: every module that must be retested when `changed` modules change: those modules plus all that depend on them, transitively.

@@ -221,6 +221,13 @@ live elsewhere.
   module's own models/utilities, merging into the base would require the base to depend on the module
   that already depends on it, which Odoo's acyclic module graph can't support — in that case
   `_inherit` is correct and must stay.
+- **Manifest key `test_depends`: modules a module's TESTS need installed although its runtime `depends` does not list them.** Add
+  `"test_depends": ["other_module"],` to the owning module's `__manifest__.py` with a comment saying which test needs it (a page
+  measured, a model or field read), never a hard-coded list in tooling. It is separate from `depends_cycle` (the runtime
+  mechanism for genuine dependency cycles; do not reuse it). `hams_open/hams_test_depends` installs the companions in a plain
+  `--test-enable` run (see its README); `tools/test_impact.py` treats each entry as an extra reverse edge; `tools/check_test_depends.py`
+  (lint step `check_test_depends`) refuses unknown, redundant, self-referential and test_depends-only-cyclic entries. A companion
+  that depends on the module (ham_events -> ham_club_management) is allowed; its tests must then be `post_install`.
 - **`hams_open/knowledge` is an intentional open-source work-alike, not an accidental duplicate.** It
   exists specifically to reimplement Odoo Enterprise's proprietary "Knowledge" module for Odoo
   Community, so its `knowledge.article` model is a deliberate, standalone primary definition — don't

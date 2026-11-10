@@ -37,6 +37,7 @@ BATCH_A = {
     "check_res_config_settings_access.py": ((), None),
     "check_self_writeable_field_tests.py": ((), None),
     "check_shebang.py": ((), None),
+    "check_test_depends.py": ((), None),
     "check_test_tags.py": ((), None),
     "check_untyped_utility_files.py": ((), None),
 }
