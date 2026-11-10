@@ -90,7 +90,7 @@ def setup_apt(profile, tree, runner, fetch=None):
 
 
 def debootstrap(profile, tree, runner):
-    runner.run(["debootstrap", "--variant=minbase", "--include=systemd-sysv,dbus,ca-certificates,python3,gnupg,locales,procps,iproute2",
+    runner.run(["debootstrap", "--variant=minbase", "--include=systemd-sysv,dbus,kmod,ca-certificates,python3,gnupg,locales,procps,iproute2",
                 profile["debian_suite"], tree, profile["debian_mirror"]])
 
 

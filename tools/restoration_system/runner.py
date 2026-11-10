@@ -36,7 +36,7 @@ class Runner:
         self.log("run: " + " ".join(argv) + (" [secret env: %s]" % ",".join(names) if names else ""))
         proc = subprocess.run(
             argv, env=env, check=False, cwd=cwd, timeout=timeout, stdin=stdin,
-            stdout=subprocess.PIPE if capture else None, stderr=subprocess.PIPE, text=True,
+            stdout=subprocess.PIPE if capture else None, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
         )
         if check and proc.returncode != 0:
             tail = ((proc.stderr or "") + "\n" + (proc.stdout or "")).strip().splitlines()[-8:]

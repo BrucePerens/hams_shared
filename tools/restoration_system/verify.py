@@ -298,6 +298,8 @@ def evaluate(phases, hits, profile, meta, expected_counts, report, external_unit
         report.add("production services were NOT started (fail closed)", "starting" not in phases, "")
         return
     report.add("isolation still holds after the services ran", bool(phases.get("isolation_after", {}).get("ok")))
+    if "modules" in phases:
+        report.add("host kernel modules mounted into the VM", phases["modules"]["mount"][0] == 0, str(phases["modules"]), warn=False)
     units = phases.get("units", {})
     report.add("system reached a running or degraded state", units.get("system") in ("running", "degraded"), str(units.get("system")))
     states = units.get("units", {})

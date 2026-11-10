@@ -76,7 +76,7 @@ def classify(state, journal):
         return EXPECTED, external[-1].strip()[:200]
     if hard:
         return REAL, hard[-1].strip()[:200]
-    return REAL, "failed with no explanation in the journal (result %s, status %s)" % (result, state.get("ExecMainStatus"))
+    return REAL, "failed with no network or known error text (result %s, status %s): %s" % (result, state.get("ExecMainStatus"), " | ".join(lines[-4:])[:400])
 
 
 def network_attempt_seen(journal):

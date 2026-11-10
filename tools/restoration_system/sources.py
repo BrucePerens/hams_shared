@@ -180,7 +180,7 @@ class PgBackRestRepo:
         """The stanza's entry of `pgbackrest info --output=json`. RestorationError: wrong passphrase, unreachable, or no such stanza."""
         try:
             data = json.loads(self.call("info", "--output=json").stdout)
-        except RestorationError as exc:
+        except (RestorationError, ValueError) as exc:  # a wrong passphrase can make pgBackRest print undecodable text
             raise RestorationError("cannot read the pgBackRest repository (wrong passphrase, wrong location or unreachable): %s" % exc)
         for stanza in data:
             if stanza["name"] == self.stanza:

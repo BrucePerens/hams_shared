@@ -96,7 +96,7 @@ def test_04_verify_the_image_in_the_isolated_vm(world):
     print(text)
     assert code == 0, text[-3000:]
     for line in ("isolation proven before any service started", "host canary saw no packet", "PostgreSQL started and finished recovery",
-                 "row counts equal the backup's metadata", "newest transaction time equals", "site answers http://127.0.0.1/"):
+                 "row counts equal the backup's metadata", "newest transaction time equals", "site answers http://127.0.0.1:8080/"):
         assert any(line in row and row.startswith("ok") for row in text.splitlines()), line
 
 
@@ -104,6 +104,7 @@ def test_05_image_missing_a_unit_fails_verify(world):
     broken = os.path.join(BASE, "broken")
     subprocess.run(["sudo", "-n", "cp", "-a", world["image"], broken], check=True)
     subprocess.run(["sudo", "-n", "rm", "-f", os.path.join(broken, "etc/systemd/system/multi-user.target.wants/nginx.service")], check=True)
+    subprocess.run(["sudo", "-n", "sh", "-c", "rm -f %s/etc/rc?.d/S*nginx" % broken], check=True)  # the SysV links enable it too
     code, text = cli("verify", broken, "--work", BASE)
     assert code == 1 and "nginx.service is active" in text and "FAIL" in text, text[-1500:]
 

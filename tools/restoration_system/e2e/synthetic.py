@@ -62,7 +62,7 @@ def make(root, newest_pad=0):
     os.makedirs(os.path.join(stage, "etc/nginx/conf.d"))
     os.makedirs(os.path.join(stage, "opt/hams/etc"))
     with open(os.path.join(stage, "etc/nginx/conf.d/synth.conf"), "w") as handle:
-        handle.write("server { listen 80 default_server; root /var/www/synth; index index.html; }\n")
+        handle.write("server { listen 8080; root /var/www/synth; index index.html; }\n")
     with open(os.path.join(stage, "opt/hams/etc/synth.env"), "w") as handle:
         handle.write("SYNTH=1\n")
     cfgdir = os.path.join(work, "config")

@@ -121,7 +121,9 @@ def mount_modules():
     if os.path.exists("/dev/vdb"):
         target = "/lib/modules/" + os.uname().release
         os.makedirs(target, exist_ok=True)
-        sh(["mount", "-o", "ro", "/dev/vdb", target])
+        mounted = sh(["mount", "-o", "ro", "/dev/vdb", target])
+        restarted = sh(["systemctl", "restart", "systemd-modules-load.service"])  # it ran in sysinit, before these modules existed
+        emit("modules", mount=mounted, restart=restarted)
 
 
 def isolation(cfg):
@@ -163,7 +165,8 @@ def unit_state(unit):
 
 
 def journal(unit, lines=80):
-    return sh(["journalctl", "-u", unit, "-b", "--no-pager", "-o", "cat", "-n", str(lines)])[1]
+    text = sh(["journalctl", "-u", unit, "-b", "--no-pager", "-o", "cat", "-n", str(lines)])[1]
+    return text.strip() and text or sh(["systemctl", "status", unit, "--no-pager", "-l"])[1]  # no journal text: systemd's own status lines
 
 
 def wait_running(limit):
