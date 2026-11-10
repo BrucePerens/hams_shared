@@ -8316,6 +8316,21 @@ WantedBy=multi-user.target
             "environments": ["prod", "test"],
         },
         {
+            # Journal namespace of hams-auth-gateway.service (its LogNamespace=hams-auth): systemd starts
+            # systemd-journald@hams-auth on demand and reads this file for it. The gateway logs the client
+            # address on handshake and refusal lines; 14 days (Bruce's delegate, 2026-11-08) keeps them long
+            # enough for abuse handling and no longer. Rollback: remove the LogNamespace= line and this file.
+            "path": "/etc/systemd/journald@hams-auth.conf",
+            "content": """\
+[Journal]
+Storage=persistent
+MaxRetentionSec=14d
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+        },
+        {
             # hams_com daemons/hams_auth_gateway: the auth.hams.com certificate login gateway.
             # Text identical to hams_com daemons/hams_auth_gateway/packaging/
             # hams-auth-gateway.service (hams_com's daemons/test_daemon_provisioning_coverage.py
@@ -8340,6 +8355,11 @@ Type=simple
 ExecStart=/opt/hams/daemons/hams_auth_gateway/target/release/hams_auth_gateway /etc/hams/auth/gateway.toml
 Restart=always
 RestartSec=5
+
+# Own journal namespace so its logs (client address on handshake and refusal lines) keep to the
+# 14-day cap in /etc/systemd/journald@hams-auth.conf without shortening any other service's logs.
+# Read them with: journalctl --namespace=hams-auth -u hams-auth-gateway
+LogNamespace=hams-auth
 
 # Unprivileged. Port 443 is bound with CAP_NET_BIND_SERVICE only.
 User=hams-auth
