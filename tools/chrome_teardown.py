@@ -47,6 +47,14 @@ def _group_alive(pgid):
     return True
 
 
+def _program(cmdline):
+    """The program name of a command line (or the `[name]` of a process without one): its arguments can hold a secret, so the log never carries them."""
+    if cmdline.startswith("["):
+        return cmdline
+    first = cmdline.split(" ", 1)[0]
+    return os.path.basename(first) or first
+
+
 def group_members(pgid):
     """[(pid, state, cmdline)] of every process currently in process group `pgid` (from /proc)."""
     found = []
@@ -141,14 +149,14 @@ def terminate_group(proc, cap=DEFAULT_CAP_SECONDS, poll=DEFAULT_POLL_SECONDS, lo
         if time.monotonic() >= deadline:
             for p in alive:
                 try:
-                    survivors.append((p.pid, p.status(), " ".join(p.cmdline())[:200] or f"[{p.name()}]"))
+                    survivors.append((p.pid, p.status(), _program(" ".join(p.cmdline())) or f"[{p.name()}]"))
                 except psutil.NoSuchProcess:
                     pass
-            survivors += [m for m in group_members(pgid) if m[0] not in {s[0] for s in survivors}]
+            survivors += [(pid, state, _program(cmd)) for pid, state, cmd in group_members(pgid) if pid not in {s[0] for s in survivors}]
             logger.warning(
                 "chrome tree of %s: %d process(es) still alive %.1fs after the term signal, killing:%s",
                 pgid, len(survivors), cap,
-                "".join(f"\n- pid {p} ({state}) {cmd}" for p, state, cmd in survivors),
+                "".join(f"\n- pid {p} ({state}) {name}" for p, state, name in survivors),
             )
             _signal_group(pgid, 9)
             for p in alive:
