@@ -4270,7 +4270,7 @@ unreadable, non-object, undated, stale or verdict-less file is HOLD with its own
 The merge queue and the combined lint gate are the bottleneck, not agent slots, so a second signal throttles PR **landing** and never agent starts.
 `dispatch_ok.py` prints it after the agent-start verdict, as separate lines: `LANDING_OK` or `LANDING_HOLD`, its reasons, and a one-line count. The
 agent-start verdict (`OK`/`HOLD`, exit 0/1) is unchanged and is never made HOLD by queue depth; it stays HOLD only for the load display's reasons.
-`LANDING_HOLD` means: keep the agent running, finish and commit, but fold new PRs into an open one or hold them and do gate-free work (whole-system
+`LANDING_HOLD` means: keep the agent running, finish and commit, then open your own PR (never fold a change into another PR; it lands by the batch cycle) and do gate-free work (whole-system
 runs, property/fuzz/mutation tests, soaks, benchmarks, builds, audits); start no mass edits. Exit status: default is the agent-start verdict; with
 `--landing` it is the landing verdict (0 LANDING_OK, 2 LANDING_HOLD). One-line form for agents: `python3 devbox_tools/queue_depth.py` (hams_com).
 

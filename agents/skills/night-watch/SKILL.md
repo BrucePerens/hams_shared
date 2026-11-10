@@ -2236,7 +2236,7 @@ instead.
 - **Check the merge queue depth before opening a PR (Bruce, 2026-11-09).** The shared gate (combined lint plus merge queue) is the bottleneck, not
   agents. Run `python3 devbox_tools/queue_depth.py` from the `hams_com` checkout (or `python3 hams_shared/tools/dispatch_ok.py` and read the
   `LANDING_` line). On `LANDING_OK` open the PR and enqueue it. On `LANDING_HOLD` (more than 25 queued+testing, or the oldest queued PR over 60
-  minutes) finish and commit the work, then fold it into a PR of yours that is already open or hold the branch unpushed, and spend the time on work that
+  minutes) finish and commit the work, then open your own PR for it (every change is its own PR, never folded into another; mixed-landing rule: LANDING_OK goes through the merge queue with lint, LANDING_HOLD waits for the batch cycle) and spend the time on work that
   needs no gate (builds, whole-system runs, fuzz or property tests, soaks, audits); re-check later. This never stops the run itself or an agent start.
   Batch related fixes into one PR per module or topic, and start no mass edits (comments, claims hashes, renames) while the queue is deep.
 - **To-do hygiene.** `python3 devbox_tools/todo_groom.py` prints every to-do with a verdict (OWNED, STALE-LIKELY, DUPLICATE-LIKELY, BLOCKED,
