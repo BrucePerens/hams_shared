@@ -72,7 +72,11 @@ DENIED = [
     "cd /tmp && pkill foo", "true || pkill foo", "(pkill foo)", "{ pkill foo; }", "! pgrep -f foo",
     "kill -sKILL 123", "kill -09 123", "kill -n9 5", "kill -s 09 5", "kill -TERM -- -1", "kill -TERM 0", "kill 1",
     "bash <<< 'kill -9 5'", 'sh <<<"pkill foo"', "bash -s <<<'pgrep -f x'",
-    "python3 -c 'import os; os.kill(5, 9)'", "python3 -c 'import os,signal; os.kill(5, signal.SIGKILL)'",
+    "python3 -c 'import os; os.kill(int(x), 9)'", "python3 -c 'import os; os.kill(int(open(\"f\").read()), 15)'",
+    "python3 -c 'import psutil; psutil.Process(5).kill()'", "python3 -c 'import psutil; psutil.Process(5).terminate()'",
+    "python3 -c 'import subprocess; subprocess.run(\"kill -9 5\", shell=True)'", "python3 -c 'import subprocess; subprocess.run([\"kill\", \"-9\", \"5\"])'",
+    "ruby -e 'Process.kill(\"KILL\", 5)'", "perl -e 'kill 9, 5'",
+    "python3 -c 'import os; os.kill(5, 9)'","python3 -c 'import os,signal; os.kill(5, signal.SIGKILL)'",
     "python3 - <<'EOF'\nimport os\nos.killpg(5, 9)\nEOF\n", "python3 -c \"import subprocess; subprocess.run(['pkill', 'x'])\"", "bash <<'EOF'\npkill foo\nEOF\n",
     "sleep 1\npkill foo\n", "echo a; kill -9 5 # note", "kill -9 5 2>/dev/null",
     # 2026-11-09: an agent killed its own parent (systemd --user): a pid from ps/ppid, then the literal pids it printed
