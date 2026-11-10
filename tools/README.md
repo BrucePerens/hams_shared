@@ -4600,6 +4600,22 @@ Purpose: the command line. `--before SPEC...` and `--after SPEC...` run the chec
 missing sentences; units longer than 200 characters are cut in the report); `--measure SPEC...` prints characters and `~tokens (chars/4)` per file and exits 0
 unless a check also runs. Neither given: usage error (exit 2). Read only.
 
+## Step scheduling: a dependency graph, longest critical path first (`lint_exec.py`)
+
+`run_linters.py` hands its steps to `lint_exec.execute`, which runs them on `-j` workers as a dependency graph. A step is ready when every
+step named in its `needs` has ended (passed or failed: a failure never stops other steps) and its `lock` is free; of the ready steps the one
+with the longest remaining critical path starts first. Estimates are the median measured seconds of each step over every cache file of the
+user (`lint_lock.known_durations`), so a fresh worktree or a merge-queue tree is ordered like the checkout that ran the step before; a step
+never measured counts `UNKNOWN_STEP_SECONDS` (30 s). A worker never waits on a lock another step of the run holds: it takes the next ready
+step (the old pool queued every step at once in a fixed order, so a worker could sit blocked on the cargo lock while shorter steps waited).
+Output is still printed in declaration order.
+
+### `[@ANCHOR: lint_exec:critical_paths]` `critical_paths(steps, estimates)`
+Each step's own estimate plus the longest chain of steps that need it; `needs` names not in the run are dropped; a cycle raises ValueError naming it.
+
+### `[@ANCHOR: lint_exec:execute]` `execute(steps, jobs, cache=None, fingerprints=None, out=None, durations=None)`
+Runs the steps as described above (cache hits are served as before) and returns Results in declaration order.
+
 ## Wall-clock limits and hang reports (`hang_guard.py`)
 
 Every lint step (`lint_exec.run_step`) and every Odoo test run (`test.py run_cmd`) has a wall-clock limit. A step over its limit is

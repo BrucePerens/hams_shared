@@ -25,6 +25,7 @@ import hashlib
 import json
 import math
 import os
+import queue
 import re
 import subprocess
 import sys
@@ -138,6 +139,8 @@ class Step:
     gated       a step with no argv (`static_output`, always a failure) that `--changed` runs only
                 when one of its inputs changed, instead of always: a missing toolchain fails the
                 step only when there is something for it to check.
+    needs       names of steps that must have ENDED (passed or failed: a failure never stops
+                other steps) before this one starts; a name not in the run is ignored.
     """
 
     name: str
@@ -155,6 +158,7 @@ class Step:
     always: bool = False
     gated: bool = False
     aliases: tuple = ()
+    needs: tuple = ()  # names of steps that must have ended before this one starts (ignored when not in the run); see `execute`
 
 
 @dataclasses.dataclass
@@ -687,9 +691,122 @@ def _touches(step, changed_paths):
     return False
 
 
-def execute(steps, jobs, cache=None, fingerprints=None, out=None):
-    """Run `steps` on `jobs` workers; print each step's output in declaration order as soon
-    as every earlier step has been printed. Returns the list of Results (declaration order).
+UNKNOWN_STEP_SECONDS = 30.0  # estimate for a step never measured: early enough that a new long step does not end the run alone
+
+
+def step_estimates(steps, durations=None, cache=None):
+    """{index: estimated seconds} of each step: `durations` (step name -> median seconds over every cache file of the user,
+    `lint_lock.known_durations`), else the run's own cache, else UNKNOWN_STEP_SECONDS; a step with no argv costs nothing. Pure
+    apart from reading `cache`."""
+    out = {}
+    for index, step in enumerate(steps):
+        if step.argv is None:
+            out[index] = 0.0
+            continue
+        seconds = (durations or {}).get(step.name)
+        if seconds is None and cache is not None:
+            seconds = cache.known_seconds(step.name) or None
+        out[index] = float(seconds) if seconds is not None and math.isfinite(seconds) and seconds >= 0 else UNKNOWN_STEP_SECONDS
+    return out
+
+
+# [@ANCHOR: lint_exec:critical_paths]
+def critical_paths(steps, estimates):
+    """({index: critical-path seconds}, {index: [indexes it needs]}): a step's own estimate plus the longest chain of steps that
+    need it (transitively), so a step that others wait for starts before an equally long step nobody waits for. `needs` names that
+    are not in `steps` are dropped. Raises ValueError on a dependency cycle (named). Pure."""
+    by_name = {}
+    for index, step in enumerate(steps):
+        by_name.setdefault(step.name, index)
+    needs = {index: sorted({by_name[name] for name in step.needs if name in by_name and by_name[name] != index})
+             for index, step in enumerate(steps)}
+    dependents = {index: [] for index in range(len(steps))}
+    for index, wanted in needs.items():
+        for other in wanted:
+            dependents[other].append(index)
+    paths = {}
+    state = {}
+
+    def visit(index, trail):
+        if state.get(index) == "done":
+            return paths[index]
+        if state.get(index) == "open":
+            cycle = trail[trail.index(index):] + [index]
+            raise ValueError("lint steps need each other in a cycle: " + " -> ".join(steps[i].name for i in cycle))
+        state[index] = "open"
+        longest = max((visit(other, trail + [index]) for other in dependents[index]), default=0.0)
+        paths[index] = estimates[index] + longest
+        state[index] = "done"
+        return paths[index]
+
+    for index in range(len(steps)):
+        visit(index, [])
+    return paths, needs
+
+
+class _Scheduler:
+    """Hands steps to workers as a dependency graph: a step is READY when every step it `needs` has ended and its `lock` is free; of the
+    ready steps the one with the longest remaining critical path goes first (for a locked step, at least the estimated work still waiting
+    on that lock, since those steps cannot overlap). A worker never sits blocked on a lock another step holds: it takes the next ready
+    step instead. Thread-safe."""
+
+    def __init__(self, steps, estimates):
+        self.steps = steps
+        self.estimates = estimates
+        self.paths, self.needs = critical_paths(steps, estimates)
+        self.waiting = set(range(len(steps)))
+        self.ended = set()
+        self.held = set()
+        self.lock_left = {}
+        for index, step in enumerate(steps):
+            if step.lock:
+                self.lock_left[step.lock] = self.lock_left.get(step.lock, 0.0) + estimates[index]
+        self.cond = threading.Condition()
+
+    def _priority(self, index):
+        step = self.steps[index]
+        rank = self.paths[index]
+        if step.lock:
+            rank = max(rank, self.lock_left.get(step.lock, 0.0))
+        return (-rank, index)
+
+    def _ready(self, index):
+        step = self.steps[index]
+        if step.lock and step.lock in self.held:
+            return False
+        return all(other in self.ended for other in self.needs[index])
+
+    def take(self):
+        """The next step index to run, or None when every step has been handed out. Blocks while steps wait only on running ones."""
+        with self.cond:
+            while True:
+                if not self.waiting:
+                    return None
+                ready = [index for index in self.waiting if self._ready(index)]
+                if ready:
+                    index = min(ready, key=self._priority)
+                    self.waiting.discard(index)
+                    step = self.steps[index]
+                    if step.lock:
+                        self.held.add(step.lock)
+                        self.lock_left[step.lock] -= self.estimates[index]
+                    return index
+                self.cond.wait()
+
+    def done(self, index):
+        with self.cond:
+            self.ended.add(index)
+            lock = self.steps[index].lock
+            if lock:
+                self.held.discard(lock)
+            self.cond.notify_all()
+
+
+# [@ANCHOR: lint_exec:execute]
+def execute(steps, jobs, cache=None, fingerprints=None, out=None, durations=None):
+    """Run `steps` on `jobs` workers, scheduled as a dependency graph longest-critical-path first (`_Scheduler`; `durations` is step
+    name -> measured median seconds, see `step_estimates`); print each step's output in declaration order as soon as every earlier
+    step has been printed. Returns the list of Results (declaration order).
     """
     out = out or sys.stdout
     # side by side: no more steps than there are to run (one pytest step alone may use the whole machine)
@@ -714,15 +831,30 @@ def execute(steps, jobs, cache=None, fingerprints=None, out=None):
         result = run_step(step, locks, cache.recent_seconds(step.name) if cache is not None else (), deadline)
         return index, result, key
 
-    order = list(range(len(steps)))
-    if cache is not None:
-        order.sort(key=lambda i: -cache.known_seconds(steps[i].name))
+    scheduler = _Scheduler(steps, step_estimates(steps, durations, cache))
+    finished = queue.Queue()
+
+    def worker():
+        while True:
+            index = scheduler.take()
+            if index is None:
+                return
+            try:
+                finished.put(work(index))
+            except BaseException as error:  # a bug in the runner itself: hand it to the main thread, never hang it
+                finished.put((index, error, None))
+            finally:
+                scheduler.done(index)
+
     printed = 0
     pending = {}
     with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
-        futures = [pool.submit(work, i) for i in order]
-        for future in futures:
-            index, result, key = future.result()
+        for _ in range(max(1, min(jobs, len(steps)))):
+            pool.submit(worker)
+        for _ in range(len(steps)):
+            index, result, key = finished.get()
+            if isinstance(result, BaseException):
+                raise result
             results[index] = result
             keys[index] = key
             pending[index] = result
