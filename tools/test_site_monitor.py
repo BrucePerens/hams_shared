@@ -379,6 +379,7 @@ class MainTests(unittest.TestCase):
 
     def _beat(self, req, timeout=0):
         self.pings.append(req.full_url)
+        self.beat_auth = req.get_header("Authorization")
         return _Ctx()
 
     def _deps(self, ok=True):
@@ -596,6 +597,12 @@ class MaintenanceTests(MainTests):
     def test_heartbeat_is_still_sent_during_maintenance(self):
         sm.main(env=self._menv(self._active()), now=self.NOW, deps=self._deps(ok=False), host="h")
         self.assertEqual(self.pings, ["https://beat/ping"])
+
+    def test_heartbeat_token_is_sent_as_a_bearer_header_and_absent_without_it(self):
+        sm.main(env=self._env(HAMS_MONITOR_HEARTBEAT_TOKEN="tok"), now=1000, deps=self._deps(), host="h")
+        self.assertEqual(self.beat_auth, "Bearer tok")
+        sm.main(env=self._env(), now=2000, deps=self._deps(), host="h")
+        self.assertIsNone(self.beat_auth)
 
     def test_no_paging_channel_is_still_loud_during_maintenance(self):
         env = self._menv(self._active())
