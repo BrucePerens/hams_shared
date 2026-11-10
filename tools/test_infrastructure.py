@@ -1908,12 +1908,12 @@ class BridgeApiKeyProvisioningTests(_TmpDirTestCase):
 
 
 class CreateOdooRoleIfMissingTests(_SafePatchTestCase):
-    def _run(self, db_pass, role_already_exists):
+    def _run(self, db_pass, role_already_exists, is_test=False):
         mock_role_exists = self.safe_patch_object(
             infra, "_role_exists", return_value=role_already_exists
         )
         mock_run_cmd_func = MagicMock()
-        infra._create_odoo_role_if_missing(mock_run_cmd_func, db_pass)
+        infra._create_odoo_role_if_missing(mock_run_cmd_func, db_pass, is_test=is_test)
         mock_role_exists.assert_called_once_with("odoo")
         return mock_run_cmd_func
 
@@ -1924,7 +1924,7 @@ class CreateOdooRoleIfMissingTests(_SafePatchTestCase):
         # broke out of the SQL string literal and injected arbitrary SQL,
         # executed as the postgres superuser via `sudo -u postgres`.
         malicious_pass = "x'; DROP TABLE pg_roles; --"
-        mock_run_cmd_func = self._run(malicious_pass, role_already_exists=False)
+        mock_run_cmd_func = self._run(malicious_pass, role_already_exists=False, is_test=True)
 
         cmd = mock_run_cmd_func.call_args[0][0]
         sql_text = mock_run_cmd_func.call_args.kwargs["input"]
@@ -1967,6 +1967,12 @@ class CreateOdooRoleIfMissingTests(_SafePatchTestCase):
         self.assertIn("NOREPLICATION", sql_text)
         self.assertIn("NOBYPASSRLS", sql_text)
         self.assertNotIn("WITH SUPERUSER", sql_text)
+
+    def test_a_new_production_role_has_no_password(self):
+        # Peer authentication over the unix socket only: no password reaches the role, so a TCP password login is refused.
+        run = self._run("normalPass123", role_already_exists=False)
+        self.assertEqual(run.call_args.kwargs["input"], f"CREATE ROLE odoo WITH {infra.ODOO_ROLE_ATTRIBUTES};\n")
+        self.assertNotIn("normalPass123", " ".join(run.call_args.args[0]))
 
     def test_a_new_test_host_role_is_a_superuser(self):
         # test.py drops and creates databases as `odoo`, so only a test host keeps the superuser role.
@@ -2022,7 +2028,7 @@ class CreateOdooRoleIfMissingTests(_SafePatchTestCase):
         self.assertNotEqual(spec["sha256_by_arch"]["amd64"], spec["sha256_by_arch"]["arm64"])
 
     def test_normal_password_still_produces_a_working_command_shape(self):
-        cmd = self._run("normalPass123", role_already_exists=False).call_args[0][0]
+        cmd = self._run("normalPass123", role_already_exists=False, is_test=True).call_args[0][0]
         self.assertEqual(cmd[:4], ["sudo", "-u", "postgres", "psql"])
         self.assertIn("db_pass=normalPass123", cmd)
 
@@ -2065,6 +2071,120 @@ class CreateOdooRoleIfMissingTests(_SafePatchTestCase):
         # created by postgres (_precreate_odoo_extensions), so no command runs here: no CREATE ROLE, no ALTER ROLE, no db_pass.
         mock_run_cmd_func = self._run("normalPass123", role_already_exists=True)
         mock_run_cmd_func.assert_not_called()
+
+
+class ProvisionSecretSchemaTests(_SafePatchTestCase):
+    # Verified by [@ANCHOR: infrastructure:_provision_secret_schema]
+    def test_the_schema_is_owned_by_the_broker_role_and_revoked_from_public(self):
+        self.safe_patch_object(infra, "_role_exists", return_value=False)
+        run = MagicMock()
+        infra._provision_secret_schema(run, "hams_prod")
+        create_role, create_schema = run.call_args_list
+        self.assertEqual(create_role.kwargs["input"], f"CREATE ROLE hams_secret_broker WITH {infra.ODOO_ROLE_ATTRIBUTES};\n")
+        self.assertEqual(create_schema.args[0][-2:], ["-d", "hams_prod"])
+        self.assertIn("CREATE SCHEMA IF NOT EXISTS hams_secret AUTHORIZATION hams_secret_broker;", create_schema.kwargs["input"])
+        self.assertIn("REVOKE ALL ON SCHEMA hams_secret FROM PUBLIC;", create_schema.kwargs["input"])
+        self.assertNotIn("odoo", create_schema.kwargs["input"])
+
+    def test_an_existing_owner_role_is_not_recreated(self):
+        self.safe_patch_object(infra, "_role_exists", return_value=True)
+        run = MagicMock()
+        infra._provision_secret_schema(run, "hams_prod")
+        self.assertEqual(len(run.call_args_list), 1)
+        self.assertNotIn("CREATE ROLE", run.call_args.kwargs["input"])
+
+    def test_a_failure_is_logged_not_raised(self):
+        self.safe_patch_object(infra, "_role_exists", return_value=True)
+        infra._provision_secret_schema(MagicMock(side_effect=RuntimeError("no cluster")), "hams_prod")
+
+    def test_provisioning_creates_the_schema_after_the_extensions(self):
+        source = inspect.getsource(infra.provision_environment)
+        self.assertLess(
+            source.index("_precreate_odoo_extensions(run_cmd_func, db_name)"),
+            source.index("_provision_secret_schema(run_cmd_func, db_name)"),
+        )
+
+
+def _postgres_reachable_as_superuser():
+    try:
+        res = subprocess.run(["sudo", "-n", "-u", "postgres", "psql", "-XAtq"], input="SELECT 1;\n",
+                             capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return res.returncode == 0 and res.stdout.strip() == "1"
+
+
+@unittest.skipUnless(_postgres_reachable_as_superuser(), "needs a local PostgreSQL cluster and passwordless sudo to postgres")
+class SecretSchemaOnARealClusterTests(_SafePatchTestCase):
+    """Runs the real provisioning statements on the local cluster: a scratch database owned by a scratch role created with the
+    production attributes of the `odoo` role (ODOO_ROLE_ATTRIBUTES), and a scratch owner in place of hams_secret_broker. The real
+    `odoo` role of a test host stays as it is (a superuser there, for test.py)."""
+
+    def _psql(self, sql, db="postgres", check=True):
+        res = subprocess.run(["sudo", "-n", "-u", "postgres", "psql", "-XAtq", "-v", "ON_ERROR_STOP=1", "-d", db],
+                             input=sql, capture_output=True, text=True, timeout=60)
+        if check and res.returncode != 0:
+            self.fail(f"psql failed: {res.stderr}")
+        return res
+
+    def setUp(self):
+        super().setUp()
+        suffix = f"{os.getpid()}_{int(time.time())}"
+        self.db = f"hams_secret_schema_test_{suffix}"
+        self.web_role = f"hams_secret_schema_test_web_{suffix}"
+        self.owner_role = f"hams_secret_schema_test_owner_{suffix}"
+        self.addCleanup(self._psql, f"DROP DATABASE IF EXISTS {self.db};\nDROP ROLE IF EXISTS {self.web_role};\n"
+                        f"DROP ROLE IF EXISTS {self.owner_role};\n", "postgres", False)
+        self._psql(f"CREATE ROLE {self.web_role} WITH {infra.ODOO_ROLE_ATTRIBUTES};\n")
+        self._psql(f"CREATE DATABASE {self.db} OWNER {self.web_role};\n")
+        self.safe_patch_object(infra, "SECRET_SCHEMA_OWNER", self.owner_role)
+
+        def run(cmd, **kwargs):
+            return subprocess.run(["sudo", "-n"] + cmd[1:] if cmd[0] == "sudo" else cmd, check=True,
+                                  capture_output=True, timeout=60, **kwargs)
+
+        infra._provision_secret_schema(run, self.db)
+        infra._provision_secret_schema(run, self.db)  # idempotent
+        self._psql(f"SET ROLE {self.owner_role};\nCREATE TABLE hams_secret.probe (value text);\n", self.db)
+
+    def test_the_web_role_cannot_read_the_secret_schema(self):
+        res = self._psql(f"SET ROLE {self.web_role};\nSELECT * FROM hams_secret.probe;\n", self.db, check=False)
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("permission denied for schema hams_secret", res.stderr)
+
+    def test_the_web_role_cannot_grant_itself_access(self):
+        res = self._psql(f"SET ROLE {self.web_role};\nGRANT USAGE ON SCHEMA hams_secret TO {self.web_role};\n", self.db,
+                         check=False)
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("permission denied", res.stderr)
+        res = self._psql(f"SET ROLE {self.web_role};\nALTER SCHEMA hams_secret OWNER TO {self.web_role};\n", self.db,
+                         check=False)
+        self.assertNotEqual(res.returncode, 0)
+
+    def test_the_web_role_has_no_privilege_on_the_schema(self):
+        out = self._psql(f"SELECT has_schema_privilege('{self.web_role}', 'hams_secret', 'USAGE'), "
+                         f"has_schema_privilege('{self.web_role}', 'hams_secret', 'CREATE');\n", self.db).stdout.strip()
+        self.assertEqual(out, "f|f")
+
+    def test_a_tcp_password_login_is_refused_for_the_web_role(self):
+        # The production role has no password: whatever password a TCP client offers, the login fails.
+        res = subprocess.run(["psql", "-XAtq", "-h", "127.0.0.1", "-U", self.web_role, "-d", self.db, "-c", "SELECT 1"],
+                             env={**os.environ, "PGPASSWORD": "any-password", "PGCONNECT_TIMEOUT": "10"},
+                             capture_output=True, text=True, timeout=60)
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("password authentication failed", res.stderr)
+
+    def test_the_unix_socket_uses_peer_authentication_for_the_web_role(self):
+        # The first `local` rule that matches the role (pg_hba.conf is first-match) is peer: no password prompt path.
+        rows = self._psql("SELECT user_name, database, auth_method FROM pg_hba_file_rules WHERE type = 'local' "
+                          "ORDER BY rule_number;\n").stdout.splitlines()
+        for row in rows:
+            users, databases, method = row.split("|")
+            if users in ("{all}", f"{{{self.web_role}}}") and "all" in databases:
+                self.assertEqual(method, "peer")
+                break
+        else:
+            self.fail(f"no local rule matches the role: {rows}")
 
 
 class ProvisionCacheManagerRoleTests(_TmpDirTestCase):
