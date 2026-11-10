@@ -1657,7 +1657,7 @@ class ProvisionModeEnvFileTests(_TmpDirTestCase):
         with patch.dict(os.environ, {"HAMS_ALLOW_PROVISION_MODE_SWITCH": "1"}):
             infra.load_and_prompt_env(env_vars, is_test=False)
         self.assertEqual(env_vars["DB_NAME"], "hams_prod")
-        self.assertNotEqual(env_vars["DB_PASS"], "odoo")
+        self.assertNotIn("DB_PASS", env_vars, "production has no database password: the odoo role is peer-only")
         self.assertNotEqual(env_vars["ODOO_ADMIN_PASSWORD"], "admin")
         self.assertEqual(env_vars["HAMS_PROVISION_MODE"], "prod")
 
@@ -2105,6 +2105,39 @@ class ProvisionSecretSchemaTests(_SafePatchTestCase):
         )
 
 
+class ProvisionDxFirehoseRoleTests(_SafePatchTestCase):
+    # Verified by [@ANCHOR: infrastructure:_provision_dx_firehose_role]
+    def test_the_role_has_no_password_and_only_select_on_its_tables(self):
+        self.safe_patch_object(infra, "_role_exists", return_value=False)
+        run = MagicMock()
+        infra._provision_dx_firehose_role(run, "hams_prod")
+        create_role, grants = run.call_args_list
+        self.assertEqual(create_role.kwargs["input"], f'CREATE ROLE :"role_name" WITH {infra.ODOO_ROLE_ATTRIBUTES};\n')
+        self.assertIn("role_name=hamsd_dx_firehose", create_role.args[0])
+        self.assertNotIn("PASSWORD", create_role.kwargs["input"])
+        sql = grants.kwargs["input"]
+        self.assertIn('GRANT CONNECT ON DATABASE :"db_name" TO :"role_name";', sql)
+        self.assertIn("GRANT SELECT ON %I TO %I", sql)
+        self.assertIn("'ham_qso', 'ham_dxcc_entity'", sql)
+        self.assertNotIn("INSERT", sql)
+        self.assertEqual(grants.args[0][-2:], ["-d", "hams_prod"])
+
+    def test_an_existing_role_is_not_recreated(self):
+        self.safe_patch_object(infra, "_role_exists", return_value=True)
+        run = MagicMock()
+        infra._provision_dx_firehose_role(run, "hams_prod")
+        self.assertEqual(len(run.call_args_list), 1)
+        self.assertNotIn("CREATE ROLE", run.call_args.kwargs["input"])
+
+    def test_a_failure_is_logged_not_raised(self):
+        self.safe_patch_object(infra, "_role_exists", return_value=True)
+        infra._provision_dx_firehose_role(MagicMock(side_effect=RuntimeError("no cluster")), "hams_prod")
+
+    def test_production_generates_no_database_password_and_provisioning_creates_the_role(self):
+        self.assertNotIn('env_vars["DB_PASS"] = generate_secure_password()', inspect.getsource(infra.load_and_prompt_env))
+        self.assertIn("_provision_dx_firehose_role(run_cmd_func, db_name)", inspect.getsource(infra.provision_environment))
+
+
 def _postgres_reachable_as_superuser():
     try:
         res = subprocess.run(["sudo", "-n", "-u", "postgres", "psql", "-XAtq"], input="SELECT 1;\n",
@@ -2112,6 +2145,48 @@ def _postgres_reachable_as_superuser():
     except (OSError, subprocess.TimeoutExpired):
         return False
     return res.returncode == 0 and res.stdout.strip() == "1"
+
+
+@unittest.skipUnless(_postgres_reachable_as_superuser(), "needs a local PostgreSQL cluster and passwordless sudo to postgres")
+class DxFirehoseRoleOnARealClusterTests(_SafePatchTestCase):
+    """Runs the real statements on the local cluster with a scratch role and database."""
+
+    def _psql(self, sql, db="postgres", check=True):
+        res = subprocess.run(["sudo", "-n", "-u", "postgres", "psql", "-XAtq", "-v", "ON_ERROR_STOP=1", "-d", db],
+                             input=sql, capture_output=True, text=True, timeout=60)
+        if check and res.returncode != 0:
+            self.fail(f"psql failed: {res.stderr}")
+        return res
+
+    def setUp(self):
+        super().setUp()
+        suffix = f"{os.getpid()}_{int(time.time())}"
+        self.db = f"dx_role_test_{suffix}"
+        self.role = f"dx_role_test_reader_{suffix}"
+        self.addCleanup(self._psql, f"DROP DATABASE IF EXISTS {self.db};\nDROP ROLE IF EXISTS {self.role};\n", "postgres", False)
+        self._psql(f"CREATE DATABASE {self.db};\n")
+
+        def run(cmd, **kwargs):
+            return subprocess.run(["sudo", "-n"] + cmd[1:] if cmd[0] == "sudo" else cmd, check=True,
+                                  capture_output=True, timeout=60, **kwargs)
+
+        self.provision = lambda: infra._provision_dx_firehose_role(run, self.db, self.role)
+        self.provision()  # before the modules' tables exist: the role and CONNECT only, nothing else to grant
+        self._psql("CREATE TABLE ham_qso (id int); CREATE TABLE ham_dxcc_entity (id int); CREATE TABLE res_users (id int);\n", self.db)
+        self.provision()  # after: grants the two tables
+        self.provision()  # idempotent
+
+    def test_the_role_reads_only_its_two_tables_and_writes_nothing(self):
+        out = self._psql(f"SET ROLE {self.role};\nSELECT count(*) FROM ham_qso;\nSELECT count(*) FROM ham_dxcc_entity;\n", self.db).stdout
+        self.assertEqual(out.split(), ["0", "0"])
+        for sql in ("SELECT 1 FROM res_users;", "INSERT INTO ham_qso VALUES (1);", "DELETE FROM ham_qso;"):
+            res = self._psql(f"SET ROLE {self.role};\n{sql}\n", self.db, check=False)
+            self.assertNotEqual(res.returncode, 0, sql)
+            self.assertIn("permission denied", res.stderr, sql)
+
+    def test_the_role_has_no_password_and_no_privileges_beyond_login(self):
+        row = self._psql(f"SELECT rolpassword IS NULL, rolsuper, rolcreatedb, rolcreaterole, rolcanlogin FROM pg_authid WHERE rolname = '{self.role}';\n").stdout.strip()
+        self.assertEqual(row, "t|f|f|f|t")
 
 
 @unittest.skipUnless(_postgres_reachable_as_superuser(), "needs a local PostgreSQL cluster and passwordless sudo to postgres")
@@ -6193,23 +6268,24 @@ class DerivedEnvFileTests(_TmpDirTestCase):
         self.assertIsNone(infra._derived_env_values(os.path.join(self.tmp, "aws.env")))
 
     def test_the_derived_file_is_private_and_holds_exactly_the_group_keys(self):
-        target = self._etc({"db.env": "DB_NAME=n\nPOSTGRES_PASSWORD=super\nDB_PASS=app\nDB_HOST=h\nDB_PORT=5\nDB_USER=u\n"})
-        target = os.path.join(self.tmp, "db_app.env")
+        target = self._etc({"core.env": "DOMAIN=d\nSYSTEM_USER_AGENT=a\n", "odoo.env": "ODOO_URL=u\nODOO_ADMIN_PASSWORD=adminsecret\n",
+                            "db.env": "DB_NAME=n\nPOSTGRES_PASSWORD=super\n"})
         values = infra._derived_env_values(target)
         self.safe_patch_object(infra, "apply_permissions")
         infra._write_derived_env_file(target, values)
         with open(target, encoding="utf-8") as f:
             text = f.read()
         self.assertEqual(stat_mode(target), 0o400)
-        self.assertNotIn("POSTGRES_PASSWORD", text)
         self.assertNotIn("super", text)
-        self.assertEqual(sorted(line.split("=")[0] for line in text.splitlines()), sorted(infra.MANIFEST["env_groups"]["db_app.env"]))
+        self.assertNotIn("adminsecret", text)
+        self.assertEqual(sorted(line.split("=")[0] for line in text.splitlines()), sorted(infra.MANIFEST["env_groups"]["common.env"]))
 
-    def test_the_application_role_file_never_carries_the_superuser_password(self):
-        groups = infra.MANIFEST["env_groups"]
-        self.assertNotIn("POSTGRES_PASSWORD", groups["db_app.env"])
-        for key in groups["db_app.env"]:
-            self.assertIn(key, groups["db.env"], f"{key} must also stay in db.env: no existing unit changes")
+    def test_no_env_group_or_unit_carries_the_application_database_login_any_more(self):
+        self.assertNotIn("db_app.env", infra.MANIFEST["env_groups"])
+        self.assertEqual(infra.FAMILY_ACCOUNT_UNITS["dx.firehose.service"]["environment_files"], frozenset({"common.env"}))
+        for entry in infra.MANIFEST["static_files"]:
+            self.assertNotIn("db_app.env", entry.get("content", ""), entry["path"])
+
 
     def test_provisioning_plans_the_derived_file_instead_of_refusing(self):
         real_exists = os.path.exists

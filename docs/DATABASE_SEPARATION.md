@@ -37,7 +37,13 @@ CREATE DATABASE hams_prod OWNER odoo;
 \c hams_prod
 CREATE EXTENSION IF NOT EXISTS pg_trgm;   -- created by postgres, so the web role needs no superuser
 CREATE EXTENSION IF NOT EXISTS vector;
--- 3: the secret schema
+-- 3: the DX firehose daemon's own login (name = its OS account, so peer authentication matches; no password)
+CREATE ROLE hamsd_dx_firehose WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+GRANT CONNECT ON DATABASE hams_prod TO hamsd_dx_firehose;
+-- once the ham_logbook and ham_dx_cluster modules are installed (their tables exist):
+GRANT SELECT ON ham_qso, ham_dxcc_entity TO hamsd_dx_firehose;
+
+-- 4: the secret schema
 CREATE ROLE hams_secret_broker WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
 CREATE SCHEMA IF NOT EXISTS hams_secret AUTHORIZATION hams_secret_broker;
 REVOKE ALL ON SCHEMA hams_secret FROM PUBLIC;
@@ -60,11 +66,14 @@ Odoo must run as the OS account `odoo` (peer authentication matches the OS accou
 Order: first remove superuser (hams_com `docs/runbooks/ODOO_DB_ROLE_DEMOTION.md` is the rehearsed procedure), then:
 
 1. Move every other client that logs in as `odoo` with a password over TCP to its own role or to the socket. In this
-   project: `dx_firehose` (hams_com, `DB_USER`/`DB_PASS` from `db_app.env`) and `database_management`'s vacuum
-   (hams_open, `PGHOST`/`PGPASSWORD`). Until they move, step 2 stops them.
+   project both have moved: `dx_firehose` (hams_com) logs in over the socket as its own role `hamsd_dx_firehose` (statements
+   above; it needs no `db_app.env` and no password), and `database_management`'s vacuum runs `vacuumdb` over the socket as the
+   Odoo process (no `PGPASSWORD`). Production provisioning creates the `dx_firehose` role and grants its two tables (run
+   provisioning again after the modules are first installed; the grant skips tables that do not exist yet) and no longer
+   generates a `DB_PASS` into `db.env`; an existing `db.env` keeps the line, which nothing in production reads.
 2. Remove `db_host`, `db_port` and `db_password` values from `odoo.conf` (set them to `False`), restart Odoo, check
    it serves, then `ALTER ROLE odoo PASSWORD NULL;`.
-3. Create the secret schema with the statements above.
+3. Create the `hamsd_dx_firehose` role and the secret schema with the statements above (`DROP ROLE hamsd_dx_firehose` after revoking reverses the role).
 
 Reverse: `ALTER ROLE odoo PASSWORD :'p';` (psql, with `-v p=...` from your saved password), put the old `odoo.conf`
 lines back, restart. Dropping the empty schema reverses step 3: `DROP SCHEMA hams_secret; DROP ROLE hams_secret_broker;`.

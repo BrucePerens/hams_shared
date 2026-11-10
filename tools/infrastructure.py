@@ -1591,7 +1591,7 @@ FAMILY_ACCOUNT_UNITS = {
     },
     "dx.firehose.service": {
         "user": "hamsd_dx_firehose",
-        "environment_files": frozenset({"common.env", "db_app.env"}),
+        "environment_files": frozenset({"common.env"}),
         "no_state": True,
         "no_key": True,
     },
@@ -2115,7 +2115,7 @@ MANIFEST = {
         },
         {
             # daemons/dx_firehose: the live DX WebSocket, which holds a database connection (LISTEN/NOTIFY) as the application role and no Odoo key.
-            # Its own account, and db_app.env instead of db.env, so it never holds the PostgreSQL superuser password. It has no key file, so odoo is not
+            # Its own PostgreSQL role (same name, peer authentication on the socket), no database environment file and no password. It has no key file, so odoo is not
             # in its group. Not in hams_com: the traversal group plus the ACL entries on the directories it passes through are all it has.
             "user": "hamsd_dx_firehose",
             "group": "hamsd_dx_firehose",
@@ -3460,10 +3460,6 @@ MANIFEST = {
             "DB_PORT",
             "DB_USER",
         ],
-        # The application database role only (not the PostgreSQL superuser password db.env also holds), for the
-        # one daemon that connects to the database itself (dx.firehose). A host that has only db.env gets this file cut
-        # from it by provision.py --daemon-family; a full run writes it from the same values.
-        "db_app.env": ["DB_NAME", "DB_PASS", "DB_HOST", "DB_PORT", "DB_USER"],
         "pdns.env": [
             "PDNS_API_KEY",
             "PDNS_API_URL",
@@ -4174,9 +4170,8 @@ User=hamsd_dx_firehose
 Group=hamsd_dx_firehose
 WorkingDirectory=/opt/hams/daemons/dx_firehose
 
-# Code audit, 2026-10-04: dx_firehose/main.py reads the application database role (DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASS) for its LISTEN connection, its own DX_FIREHOSE_* settings (bind address 127.0.0.1 by default, port set in this unit) and the optional CF_ACCESS_* pair that no file sets. It holds no Odoo key. db_app.env carries the application role only: not the PostgreSQL superuser password that db.env also holds. No Redis, RabbitMQ or PowerDNS credential and none of the secrets in core.env or odoo.env is used, so none is loaded.
+# dx_firehose/main.py logs in to PostgreSQL over the local socket as its own role (peer authentication, no password: _provision_dx_firehose_role), and reads its own DX_FIREHOSE_* settings (bind address 127.0.0.1 by default, port set in this unit), DB_NAME and ODOO_URL from common.env, and the optional CF_ACCESS_* pair that no file sets. It holds no Odoo key and no database password. No Redis, RabbitMQ or PowerDNS credential and none of the secrets in core.env, odoo.env or db.env is used, so none is loaded.
 EnvironmentFile=/opt/hams/etc/common.env
-EnvironmentFile=/opt/hams/etc/db_app.env
 Environment="DX_FIREHOSE_WS_PORT=8765"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
@@ -12889,8 +12884,8 @@ def load_and_prompt_env(env_vars, is_test):
             "HamsComSyncDaemon/1.0 (+https://crawler.hams.com)",
         )
 
-        if "DB_PASS" not in env_vars:
-            env_vars["DB_PASS"] = generate_secure_password()
+        # No DB_PASS on production: the `odoo` role has no password (peer authentication over the unix socket) and the daemons that reach
+        # the database have their own roles (_provision_dx_firehose_role). A db.env that already records one keeps it.
         if "PDNS_API_KEY" not in env_vars:
             env_vars["PDNS_API_KEY"] = generate_secure_password()
         if "ODOO_SERVICE_PASSWORD" not in env_vars:
@@ -13335,6 +13330,42 @@ def _provision_secret_schema(run_cmd_func, db_name):
         )
     except Exception as e:  # audit-ignore-catch-all
         _logger.warning("[*] Could not provision the %s schema in %s: %s", SECRET_SCHEMA, db_name, e)
+
+
+# The PostgreSQL login of daemons/dx_firehose: the name of its OS account, so it logs in by peer authentication over the unix socket
+# with no password, and only the two tables its SELECT reads (daemons/dx_firehose/main.py _qso_select_sql). It used to share the `odoo`
+# role and its password over TCP.
+DX_FIREHOSE_DB_ROLE = "hamsd_dx_firehose"
+DX_FIREHOSE_TABLES = ("ham_qso", "ham_dxcc_entity")
+
+
+# [@ANCHOR: infrastructure:_provision_dx_firehose_role]
+def _provision_dx_firehose_role(run_cmd_func, db_name, role_name=None):
+    """Creates the dx_firehose login role (without a password, with ODOO_ROLE_ATTRIBUTES) when missing, lets it CONNECT to db_name, and
+    grants it SELECT on DX_FIREHOSE_TABLES that exist. The tables belong to modules Odoo installs after provisioning, so a run before
+    the first install grants nothing for them; provisioning is idempotent, so the next run (after the modules are installed) does.
+    A failure is logged and never raised, so the later provisioning steps still run. hams_shared docs/DATABASE_SEPARATION.md."""
+    role_name = role_name or DX_FIREHOSE_DB_ROLE
+    try:
+        if not _role_exists(role_name):
+            run_cmd_func(
+                ["sudo", "-u", "postgres", "psql", "-v", "ON_ERROR_STOP=1", "-v", f"role_name={role_name}"],
+                input=f'CREATE ROLE :"role_name" WITH {ODOO_ROLE_ATTRIBUTES};\n',
+                text=True,
+            )
+        tables = ", ".join(f"'{name}'" for name in DX_FIREHOSE_TABLES)
+        run_cmd_func(
+            ["sudo", "-u", "postgres", "psql", "-v", "ON_ERROR_STOP=1", "-v", f"role_name={role_name}", "-v", f"db_name={db_name}", "-d", db_name],
+            input=(
+                'GRANT CONNECT ON DATABASE :"db_name" TO :"role_name";\n'
+                "SELECT format('GRANT SELECT ON %I TO %I', t, :'role_name') FROM unnest(ARRAY["
+                + tables
+                + "]) AS t WHERE to_regclass(t) IS NOT NULL \\gexec\n"
+            ),
+            text=True,
+        )
+    except Exception as e:  # audit-ignore-catch-all
+        _logger.warning("[*] Could not provision the PostgreSQL role %s in %s: %s", role_name, db_name, e)
 
 
 # Extensions Odoo or a hams module needs in the application database. Created by the postgres superuser at provisioning time, so the
@@ -14708,6 +14739,7 @@ def provision_environment(
                 _alter_database_owner_to_odoo(run_cmd_func, db_name)
                 _precreate_odoo_extensions(run_cmd_func, db_name)
                 _provision_secret_schema(run_cmd_func, db_name)
+                _provision_dx_firehose_role(run_cmd_func, db_name)
 
                 _logger.info(
                     "[*] Provisioning cache_manager.py's own minimally-privileged "
