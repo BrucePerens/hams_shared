@@ -3908,11 +3908,11 @@ Dataclass returned by `parse_odoo_log`. Times are epoch seconds (Odoo logs UTC),
 Purpose: reads the runner's output. `lines`: iterable of str. Lines that are not Odoo log lines (banners, traceback continuations) are ignored.
 Returns a `LogMilestones`. Pure; one pass.
 
-### `[@ANCHOR: tools:template_db_compare_outcomes]` `compare_outcomes(reference, other, only_post_install=True, post_install_names=None)`
+### `[@ANCHOR: tools:template_db_compare_outcomes]` `compare_outcomes(reference, other, post_install_names=None)`
 
 Purpose: "a clone must not change test outcomes". Both arguments are `LogMilestones`. Returns `{"same", "only_in_reference", "only_in_other",
 "failed_differ"}`; the lists are sorted test names. `post_install_names`, when given, restricts both sides to those names. Same means: the same
-tests started and the same tests failed. (`only_post_install` is reserved for callers that pass no explicit name set; the harness passes the names.)
+tests started and the same tests failed. Without `post_install_names` every started test is compared.
 
 ### `[@ANCHOR: tools:template_db_equality_lines]` `equality_lines(records)`
 

@@ -498,6 +498,26 @@ class ArmTests(unittest.TestCase):
         self.assertEqual(out[out.index("-u") + 1], "a,b")
         self.assertNotIn("-i", out)
 
+    def test_a_build_command_without_d_is_refused(self):
+        cmd = [c for i, c in enumerate(self.CMD) if c != "-d" and self.CMD[i - 1] != "-d"]
+        with self.assertRaises(ValueError):
+            b.transform_odoo_command(cmd, b.arm_plan("build"), database="hams_tpl_1")
+
+    def test_the_copy_method_is_copy_or_clone_only(self):
+        self.assertEqual(b._copy_method("clone"), "clone")
+        with self.assertRaises(ValueError):
+            b._copy_method("copy; DROP DATABASE x")
+
+    def test_a_symlinked_directory_is_hashed_by_its_target_text(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, "m", "real"))
+            os.symlink("real", os.path.join(tmp, "m", "link"))
+            first = b.hash_module_sources({"m": os.path.join(tmp, "m")}, ["m"])
+            os.remove(os.path.join(tmp, "m", "link"))
+            os.symlink("elsewhere", os.path.join(tmp, "m", "link"))
+            self.assertNotEqual(first, b.hash_module_sources({"m": os.path.join(tmp, "m")}, ["m"]))
+
     def test_build_renames_database_and_removes_tests(self):
         out = b.transform_odoo_command(self.CMD, b.arm_plan("build"), database="hams_tpl_1")
         self.assertEqual(out[out.index("-d") + 1], "hams_tpl_1")
@@ -862,7 +882,7 @@ class FakeBench:
         self.sql_log.append(statement)
         if "FROM pg_database WHERE datname" in statement and "shobj" not in statement:
             return "1" if any("'%s'" % name in statement for name in self.existing) else ""
-        return "stored" if "shobj_description" in statement else "1000"
+        return sample_key().comment() if "shobj_description" in statement else "1000"
 
     def clone_microbenchmark(self, template, ram_template, reps):
         self.calls.append(("micro", template, ram_template, reps))
@@ -910,7 +930,15 @@ class CommandTests(unittest.TestCase):
         joined = " ".join(bench.sql_log)
         self.assertIn(f'CREATE DATABASE "{key.database_name()}_ram" TEMPLATE "{key.database_name()}" TABLESPACE', joined)
         self.assertIn(f'DROP DATABASE IF EXISTS "{key.database_name()}" WITH (FORCE);', joined)
-        self.assertEqual(bench.meta["template_verified"][0], False)
+        self.assertEqual(bench.meta["template_verified"][0], True)
+
+    def test_an_unverified_template_stops_the_run_before_any_clone(self):
+        FakeBench.instances.clear()
+        with patch.object(b, "Bench", FakeBench), patch.object(b, "read_loadscreen", lambda: {}), patch.object(b.subprocess, "run"), \
+                patch.object(b, "verify_template", return_value=(False, "digest differs")):
+            with self.assertRaises(SystemExit):
+                b.run_command(self.args(arms="fresh_ssd,clone_ssd", clone_micro=False))
+        self.assertEqual([c for c in FakeBench.instances[0].calls if c[0] == "arm"], [])
 
     def test_run_command_cleans_up_when_a_run_fails(self):
         FakeBench.instances.clear()
