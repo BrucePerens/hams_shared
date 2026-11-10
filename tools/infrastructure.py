@@ -11055,6 +11055,9 @@ def apply_production_directories(run_cmd_func=None, environment="prod", dest_dir
             exists = os.path.isdir(path)
             if exists and d.get("preserve_existing"):
                 continue
+            if os.path.islink(path):
+                # chown and chmod follow a link, and a directory under an account-owned parent can be swapped for one.
+                raise RuntimeError(f"refusing {path}: it is a symbolic link, not a directory the manifest created")
             if _planning():
                 if not exists:
                     _plan("mkdir", f"{path} ({d.get('owner')}, {d['provision_mode']})")
