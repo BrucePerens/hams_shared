@@ -12,6 +12,7 @@ and fails (exit 1) when:
      literal name (`Command::new("name")`) that no table of the ADR names;
   2. an installer or release script (`install_*.sh`, `packaging/**`, `tools/*.sh` of the relay) depends on a program
      it detects with `command -v name`, or a Windows script with `Get-Command name`, that no table names;
+  2b. a relay file outside `DYNAMIC_LAUNCH_FILES` starts a program with `Command::new(<expression>)`;
   3. a discovery function that locates a program started under a variable name (`find_pat_binary` and the
      Mercury, ardopcf and Direwolf finders) is gone from the source or is not named in the ADR;
   4. a row of an ADR table with a `Watched` column names an `owner/repo` that `dependency_watch.json` lacks, or
@@ -39,6 +40,14 @@ DISCOVERY_FUNCTIONS = {
     "find_mercury_binary": "src/mercury.rs",
     "find_ardopcf_binary": "src/ardop.rs",
 }
+
+# Relay source files that may start a program by an expression (`Command::new(path)`): a path found by a discovery function or a program
+# passed in by the caller, which the literal-name scan cannot see. A dynamic launch in any OTHER file is a finding: add the file here
+# in the same change that documents the program in ADR 0114.
+DYNAMIC_LAUNCH_FILES = frozenset({
+    "src/ardop.rs", "src/com0com.rs", "src/direwolf.rs", "src/gps_time.rs", "src/m17_reference.rs", "src/mercury.rs",
+    "src/relay_info.rs", "src/secret_store.rs", "src/shared_receiver/frontend_process.rs", "src/updater.rs", "src/winlink.rs",
+})
 
 _TEST_FILE = re.compile(r"(?:_tests?|^tests?|^test_[^/]*)\.rs$")
 _CFG_TEST = re.compile(r"#\[cfg\(\s*(?:all\(\s*)?test\b[^\]]*\]")
@@ -209,19 +218,29 @@ def adr_tables(adr_text):
     return tables
 
 
+PROGRAM_COLUMNS = frozenset({"program", "programs", "tool", "library"})
+# Ordinary English words of a first cell written as prose ("Chrome or Chromium with Playwright", "Debian 12 root file system"): never a program name
+# by themselves. A program that really is `file` or `go` must be named in backticks.
+PROSE_WORDS = frozenset({"a", "an", "and", "or", "on", "in", "of", "for", "the", "to", "under", "with", "file", "system", "root", "tooling", "toolchain"})
+
+
 # [@ANCHOR: ext_programs:documented_names]
 def documented_names(adr_text):
-    """Returns the lower-case program names the ADR tables name: every word inside backticks (split at spaces,
-    slashes, commas and semicolons, `.exe` removed) and the words of each row's first cell."""
+    """Returns the lower-case program names the ADR tables name: in the columns headed Program, Programs, Tool or Library only, every word
+    inside backticks (split at spaces, slashes, commas and semicolons, `.exe` removed) and, when the first column is one of those, the
+    words of each row's first cell other than `PROSE_WORDS`. A word in a Role, Notes or Pin column (`and`, `file`, `which`, a commit hash) names nothing."""
     names = set()
-    for _header, rows in adr_tables(adr_text):
+    for header, rows in adr_tables(adr_text):
+        columns = [k for k, h in enumerate(header) if h.lower() in PROGRAM_COLUMNS]
         for row in rows:
-            for cell in row:
-                for quoted in re.findall(r"`([^`]+)`", cell):
+            for k in columns:
+                if k >= len(row):
+                    continue
+                for quoted in re.findall(r"`([^`]+)`", row[k]):
                     for word in re.split(r"[\s/,;]+", quoted):
                         names.add(re.sub(r"\.exe$", "", word.lower()))
-            if row:
-                names.update(w.lower() for w in re.findall(r"[A-Za-z0-9][A-Za-z0-9_.+-]*", row[0]))
+            if row and 0 in columns:
+                names.update(w.lower() for w in re.findall(r"[A-Za-z0-9][A-Za-z0-9_.+-]*", row[0]) if w.lower() not in PROSE_WORDS)
     return names
 
 
@@ -299,7 +318,9 @@ def find_findings(repo_root, adr_path, watch_path):
         for path, rel in _relay_rust_files(relay):
             text = _read(path)
             sources[rel] = text
-            literal, _dynamic = rust_launches(text)
+            literal, dynamic = rust_launches(text)
+            if dynamic and rel not in DYNAMIC_LAUNCH_FILES:
+                findings.append(f"{RELAY_DIR}/{rel} starts a program by an expression ({dynamic} call(s)); name the program in ADR 0114 and add the file to DYNAMIC_LAUNCH_FILES")
             for name in sorted(literal):
                 if re.sub(r"\.exe$", "", name.lower()) not in names:
                     findings.append(f"{RELAY_DIR}/{rel} launches {name!r}, which no table of ADR 0114 names")
