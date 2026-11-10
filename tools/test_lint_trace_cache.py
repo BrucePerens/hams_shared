@@ -230,6 +230,23 @@ class TraceCacheEndToEndTests(unittest.TestCase):
         self.assertEqual((second.returncode, second.cached), (0, False))
         self.assertEqual(self.runs(), 3)  # untraced only, never stored
 
+    def test_a_traced_run_ends_the_moment_a_setuid_program_starts_and_takes_its_children_along(self):
+        setuid_true = os.path.join(self.tmp, "setuid_true")
+        shutil.copy("/bin/true", setuid_true)
+        os.chmod(setuid_true, 0o4755)
+        if not os.stat(setuid_true).st_mode & 0o4000:
+            self.skipTest("this file system drops the setuid bit")
+        late = os.path.join(self.tmp, "late")
+        trace_file = os.path.join(self.tmp, "a.txt")
+        started = time.monotonic()
+        script = "(sleep 3; touch %s) & %s; sleep 30" % (late, setuid_true)
+        code = subprocess.run([PY, ltc.__file__, "run", trace_file, "--", "bash", "-c", script]).returncode
+        self.assertEqual(code, ltc.ABORTED_STATUS)
+        self.assertLess(time.monotonic() - started, 15)
+        self.assertIn("setuid", ltc.aborted(trace_file))
+        time.sleep(4)
+        self.assertFalse(os.path.exists(late))  # the background child was ended with the run
+
     def test_a_timeout_that_happens_only_under_the_trace_is_decided_by_an_untraced_run(self):
         self.write("test_slow.py", "import os, sys\n"
                                    "open(os.environ['COUNTER'], 'a').write('x')\n"

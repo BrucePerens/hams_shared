@@ -290,28 +290,29 @@ def vetoes(trace, listening_before=frozenset()):
     return sorted(set(reasons))
 
 
+def privileged_program(path):
+    """Why running `path` under the trace would not behave as it does untraced (setuid/setgid bits or file capabilities: no privilege under
+    ptrace and no_new_privs; a tracer: one tracer per process), else None. Reads the file's mode and capability attribute."""
+    try:
+        mode = os.stat(path).st_mode
+    except OSError:
+        return None
+    if mode & 0o6000:
+        return "runs the setuid/setgid program %s" % path
+    try:
+        if os.getxattr(path, "security.capability"):
+            return "runs %s, which has file capabilities" % path
+    except (OSError, AttributeError):
+        pass
+    if os.path.basename(path) in TRACER_PROGRAMS:
+        return "runs the tracer %s" % path
+    return None
+
+
 # [@ANCHOR: lint_trace_cache:trace_blockers]
 def trace_blockers(trace):
-    """Why the traced run cannot stand for an untraced one: it executed a setuid/setgid program or one with file capabilities (no privilege
-    under ptrace and no_new_privs), or a tracer. [] when none. Reads the executed files' modes and capability attributes."""
-    reasons = []
-    for path in sorted(trace.execs):
-        try:
-            mode = os.stat(path).st_mode
-        except OSError:
-            continue
-        if mode & 0o6000:
-            reasons.append("runs the setuid/setgid program %s" % path)
-            continue
-        try:
-            if os.getxattr(path, "security.capability"):
-                reasons.append("runs %s, which has file capabilities" % path)
-                continue
-        except (OSError, AttributeError):
-            pass
-        if os.path.basename(path) in TRACER_PROGRAMS:
-            reasons.append("runs the tracer %s" % path)
-    return reasons
+    """Why the traced run cannot stand for an untraced one (`privileged_program` of every program it executed). [] when none."""
+    return [reason for reason in (privileged_program(path) for path in sorted(trace.execs)) if reason]
 
 
 def never_cached_reason(name):
@@ -543,13 +544,39 @@ def trace_argv(argv, trace_file, python=sys.executable):
     return [python, os.path.abspath(__file__), "run", trace_file, "--"] + list(argv)
 
 
+ABORTED_STATUS = 125
+_EXECVE = re.compile(r'^execve(?:at)?\((?:\S+, )?"((?:[^"\\]|\\.)*)"')
+
+
+def _abort(proc, trace_file, reason):
+    """Ends a traced run at once: strace (our own child) is stopped hard and its --kill-on-exit option makes the kernel end every process it
+    traces. Records why in <trace_file>.abort and returns ABORTED_STATUS; the caller reruns the step untraced."""
+    with open(trace_file + ".abort", "w", encoding="utf-8") as handle:
+        handle.write(reason + "\n")
+    proc.kill()
+    proc.wait()
+    return ABORTED_STATUS
+
+
+def aborted(trace_file):
+    """The reason `run_traced` ended a run early, else None."""
+    try:
+        with open(trace_file + ".abort", encoding="utf-8") as handle:
+            return handle.read().strip() or "aborted"
+    except OSError:
+        return None
+
+
 # [@ANCHOR: lint_trace_cache:run_traced]
 def run_traced(trace_file, argv, poll=0.2):
     """Runs `argv` under `strace -f` writing `trace_file`, and returns its exit status as soon as the MAIN process has ended: a plain run does
     not wait for background processes the step leaves behind (they hold no pipe of ours), but strace waits for every tracee, so when the main
     process's exit appears in the trace strace is told to stop (SIGTERM: it detaches and the leftovers run on untraced, as without the trace).
-    A main process killed by a signal gives 128 + the signal number, as a shell reports it."""
-    command = ["strace", "-I", "1", "-f", "-q", "-y", "-s", "4096", "--seccomp-bpf", "-e", "trace=" + STRACE_SYSCALLS, "-o", trace_file, "--"] + list(argv)
+    A main process killed by a signal gives 128 + the signal number, as a shell reports it. The moment any traced process starts a program
+    that behaves differently under the trace (`privileged_program`: sudo and other setuid programs, tracers) the run is ended (`_abort`) and
+    ABORTED_STATUS returned, so the caller loses seconds, not the whole step, before it reruns the step untraced."""
+    command = ["strace", "-I", "1", "--kill-on-exit", "-f", "-q", "-y", "-s", "4096", "--seccomp-bpf", "-e", "trace=" + STRACE_SYSCALLS,
+               "-o", trace_file, "--"] + list(argv)
     proc = subprocess.Popen(command)
     main_pid, status, offset, partial = None, None, 0, ""
     while status is None:
@@ -569,6 +596,10 @@ def run_traced(trace_file, argv, poll=0.2):
                 continue
             if main_pid is None and match.group(2).startswith("execve("):
                 main_pid = match.group(1)
+            program = _EXECVE.match(match.group(2))
+            reason = privileged_program(_unescape(program.group(1))) if program else None
+            if reason:
+                return _abort(proc, trace_file, reason)
             if match.group(1) == main_pid:
                 done = re.match(r"\+\+\+ (?:exited with (\d+)|killed by (SIG[A-Z0-9]+))", match.group(2))
                 if done and done.group(1) is not None:
@@ -606,6 +637,7 @@ class TraceCache:
             self.max_age = MAX_AGE_SECONDS
         self.hasher = Hasher()
         self.git_memo = {}
+        self._names = {}
         self.usable = strace_usable()
 
     @staticmethod
@@ -620,7 +652,9 @@ class TraceCache:
         env = sorted((k, self.roots.normalise(v)) for k, v in environ.items() if not ENV_IGNORED.match(k))
         text = json.dumps([SCHEMA, step.name, [self.roots.normalise(a) for a in step.argv or ()],
                            self.roots.normalise(step.cwd or ""), env, self.versions])
-        return hashlib.sha256(text.encode("utf-8", "surrogateescape")).hexdigest()
+        key = hashlib.sha256(text.encode("utf-8", "surrogateescape")).hexdigest()
+        self._names[key] = step.name
+        return key
 
     def _path(self, key):
         return os.path.join(self.directory, key[:2], key + ".json")
@@ -663,7 +697,10 @@ class TraceCache:
 
 
     def _marker(self, key):
-        return os.path.join(self.directory, key[:2], key + ".untraceable.json")
+        """Kept per step NAME, not per step key: a step that runs sudo keeps doing so when its file list or environment changes, and
+        finding it out again costs a traced start each time."""
+        name = self._names.get(key, key)
+        return os.path.join(self.directory, "untraceable", hashlib.sha256(name.encode("utf-8", "surrogateescape")).hexdigest() + ".json")
 
     def untraceable(self, key, now=None):
         """The reason the step must run untraced (a marker younger than UNTRACEABLE_DAYS), else None."""

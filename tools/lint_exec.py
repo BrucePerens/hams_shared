@@ -894,6 +894,10 @@ def traced_work(step, trace_cache, run):
         listening = lint_trace_cache.listening_ports()
         started, started_ns = time.time(), time.time_ns()
         result = run(lambda argv: lint_trace_cache.trace_argv(argv, trace_file))
+        stopped = lint_trace_cache.aborted(trace_file)
+        if stopped:  # a program that behaves differently under the trace started: the traced run was ended, the untraced run decides
+            trace_cache.mark_untraceable(key, step, [stopped])
+            return run(None)
         trace = trace_cache.read_trace(trace_file)
         blockers = lint_trace_cache.trace_blockers(trace) if trace is not None else []
         if not blockers and result.returncode != 0 and (result.timed_out or TIMEOUT_TEXT.search(result.output or "")):
@@ -908,8 +912,9 @@ def traced_work(step, trace_cache, run):
             trace_cache.record(step, key, result, trace, listening, started, started_ns)
         return result
     finally:
-        with contextlib.suppress(OSError):
-            os.unlink(trace_file)
+        for path in (trace_file, trace_file + ".abort"):
+            with contextlib.suppress(OSError):
+                os.unlink(path)
 
 
 # [@ANCHOR: lint_exec:execute]
