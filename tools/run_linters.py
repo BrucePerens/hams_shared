@@ -313,7 +313,7 @@ def _parse_args(argv):
         default="",
         help="comma-separated modules to scope the per-module checkers to (default: all)",
     )
-    # Half the CPUs for a lone run; with several lint slots each run takes its share, so that all slots together stay at half the CPUs.
+    # Half the CPUs for a lone run; with several lint slots each run takes its share of three quarters of the CPUs.
     default_jobs = int(os.environ.get("HAMS_LINT_JOBS", "0")) or lint_lock.jobs_per_slot(os.cpu_count() or 2, lint_lock.slot_count())
     parser.add_argument(
         "-j",

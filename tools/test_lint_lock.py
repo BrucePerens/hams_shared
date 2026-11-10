@@ -398,7 +398,7 @@ class SlotTests(Base):
             handle.write("lots\n")
         self.assertEqual(lint_lock.slot_count(dict(env, HAMS_LINT_MACHINE="devbox")), 1, "a typo is one slot, not the inventory's 4")
 
-    def test_jobs_are_shared_out_so_all_slots_together_stay_at_half_the_cpus(self):
+    def test_jobs_are_shared_out_so_all_slots_together_stay_at_three_quarters_of_the_cpus(self):
         """Tests [@ANCHOR: lint_lock:jobs_per_slot]"""
         self.assertEqual(lint_lock.jobs_per_slot(32, 1), 16)
         self.assertEqual(lint_lock.jobs_per_slot(32, 4), 6)

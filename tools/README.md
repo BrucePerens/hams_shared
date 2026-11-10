@@ -973,7 +973,7 @@ default). Argument `environ`: dict or `None` for `os.environ`. No side effects. 
 
 Purpose: the default `-j` of a lint run. A lone run starts half the CPUs of parallel steps; with several slots each run takes its share of three quarters of the CPUs (the dev box: 32 threads, 4 slots, 6 each; 4 until 2026-11-08, when a hams_shared run was measured
 at 445 s wall against a 225 s longest step because its fifth heavy step waited for a free job). The runs are niced and start only when the processors are not saturated. Arguments: `cpu_count` int, `slots` int. Returns an int, at least 2 with several slots, at least 1 always.
-`$HAMS_LINT_JOBS` and `-j` still override. Pure. Tests: `test_jobs_are_shared_out_so_all_slots_together_stay_at_half_the_cpus` in `test_lint_lock.py`.
+`$HAMS_LINT_JOBS` and `-j` still override. Pure. Tests: `test_jobs_are_shared_out_so_all_slots_together_stay_at_three_quarters_of_the_cpus` in `test_lint_lock.py`.
 
 ### `[@ANCHOR: lint_lock:cpu_stall]` `cpu_stall(path="/proc/pressure/cpu")`
 
