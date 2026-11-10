@@ -178,7 +178,7 @@ class TraceCacheEndToEndTests(unittest.TestCase):
         self.assertEqual((again.returncode, again.cached), (1, False))  # a failure is never stored
         self.write("data/a.txt", "alpha\n")  # back to the passing content: the stored pass is valid again
         self.assertTrue(self.run_once()[0].cached)
-        self.assertEqual(self.runs(), 3)
+        self.assertEqual(self.runs(), 5)  # 1 pass + 2 failures, each failure confirmed by an untraced run
 
     def test_negative_control_an_injected_failing_test_file_is_never_served_from_the_cache(self):
         self.run_once()
@@ -276,6 +276,30 @@ class TraceCacheEndToEndTests(unittest.TestCase):
         self.assertEqual(self.runs(), 2)
         cache = self.cache()
         self.assertIsNotNone(cache.untraceable(cache.step_key(step)))
+
+    def test_any_failure_under_the_trace_is_decided_by_an_untraced_run(self):
+        # test_agent_procs read a child's state as "t" (traced) instead of S or R and failed under the trace (measured 2026-11-09).
+        self.write("test_state.py", "import os, sys\n"
+                                    "open(os.environ['COUNTER'], 'a').write('x')\n"
+                                    "traced = any(l.startswith('TracerPid:') and l.split()[1] != '0' for l in open('/proc/self/status'))\n"
+                                    "sys.exit('AssertionError: state t' if traced else 0)\n")
+        step = self.step(script="test_state.py")
+        result, out = self.run_once(step)
+        self.assertEqual(result.returncode, 0, out)
+        cache = self.cache()
+        self.assertIn("passed untraced", cache.untraceable(cache.step_key(step)))
+
+    def test_a_step_that_can_never_be_cached_runs_untraced_from_then_on(self):
+        self.write("test_net3.py", "import os, socket\n"
+                                   "open(os.environ['COUNTER'], 'a').write('x')\n"
+                                   "socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(b'x', ('192.0.2.3', 9))\n")
+        step = self.step(script="test_net3.py")
+        self.run_once(step)
+        cache = self.cache()
+        self.assertIn("never cacheable: network", cache.untraceable(cache.step_key(step)))
+        second, _ = self.run_once(step)
+        self.assertEqual((second.returncode, second.cached), (0, False))
+        self.assertEqual(self.runs(), 2)
 
     def test_a_real_failure_mentioning_a_timeout_stays_a_failure(self):
         self.write("test_bad.py", "import sys\nsys.exit('TimeoutError: timed out for real')\n")

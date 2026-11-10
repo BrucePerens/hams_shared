@@ -700,10 +700,10 @@ class TraceCache:
         return True
 
 
-    def _marker(self, key):
+    def _marker(self, key, name=None):
         """Kept per step NAME, not per step key: a step that runs sudo keeps doing so when its file list or environment changes, and
         finding it out again costs a traced start each time."""
-        name = self._names.get(key, key)
+        name = name or self._names.get(key, key)
         return os.path.join(self.directory, "untraceable", hashlib.sha256(name.encode("utf-8", "surrogateescape")).hexdigest() + ".json")
 
     def untraceable(self, key, now=None):
@@ -719,7 +719,8 @@ class TraceCache:
         return data.get("reason") or "untraceable"
 
     def mark_untraceable(self, key, step, reasons):
-        path = self._marker(key)
+        """The step runs untraced for UNTRACEABLE_DAYS: it behaves differently under the trace, or it can never be cached."""
+        path = self._marker(key, step.name)
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
             tmp = "%s.%d.tmp" % (path, os.getpid())
@@ -743,8 +744,9 @@ class TraceCache:
         if trace is None:
             return self._not_stored(step, ["trace unreadable"])
         reasons = vetoes(trace, listening)
-        if reasons:
-            return self._not_stored(step, reasons)
+        if reasons:  # it can never be served from the cache: tracing it again only costs time and risks a trace-made failure
+            self.mark_untraceable(None, step, ["never cacheable: " + "; ".join(reasons[:3])])
+            return False
         manifest, problems = build_manifest(trace, self.roots, self.hasher, started_ns)
         if problems:
             return self._not_stored(step, problems)

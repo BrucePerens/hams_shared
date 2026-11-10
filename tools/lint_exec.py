@@ -900,10 +900,10 @@ def traced_work(step, trace_cache, run):
             return run(None)
         trace = trace_cache.read_trace(trace_file)
         blockers = lint_trace_cache.trace_blockers(trace) if trace is not None else []
-        if not blockers and result.returncode != 0 and (result.timed_out or TIMEOUT_TEXT.search(result.output or "")):
+        if not blockers and result.returncode != 0:  # the trace never decides a failure: the untraced run does
             again = run(None)
             if again.returncode == 0:
-                trace_cache.mark_untraceable(key, step, ["failed with a timeout under the trace and passed untraced"])
+                trace_cache.mark_untraceable(key, step, ["failed under the trace and passed untraced"])
             return again
         if blockers:
             trace_cache.mark_untraceable(key, step, blockers)

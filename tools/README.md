@@ -4671,8 +4671,10 @@ any step where strace cannot trace. Why a pass was not stored goes to `~/.cache/
 for at most 24 h (`HAMS_LINT_TRACE_CACHE_MAX_AGE`). Off: `run_linters.py --no-cache`, `HAMS_LINT_NO_CACHE=1`, `HAMS_LINT_TRACE_CACHE=0`.
 The trace never decides a verdict on its own: a traced run that executed a setuid/setgid program or one with file capabilities (sudo gets
 no privileges under ptrace and under the no_new_privs flag of strace's seccomp filter; found when `test_provision`'s `sudo` failed under the
-trace), or a tracer (gdb, py-spy, ...), or that FAILED with a timeout under the trace, is rerun untraced at once and the untraced result
-counts; that step then runs untraced for 7 days (`results/untraceable/<sha256 of the step name>.json`, per name so a changed file list does
+trace), or a tracer (gdb, py-spy, ...), or that FAILED in any way under the trace (a timeout from the slower syscalls; `test_agent_procs`
+saw a child's state as `t`, traced, instead of S or R), is rerun untraced at once and the untraced result counts; a step whose passing run
+was vetoed (it can never be cached: PostgreSQL, network, Chromium's hardware probe, Hypothesis) is not traced again either, since tracing
+it only costs time and risk. Such a step runs untraced for 7 days (`results/untraceable/<sha256 of the step name>.json`, per name so a changed file list does
 not cost the discovery again). A privileged program or tracer ends the traced run the moment it starts (`run_traced` watches the trace,
 stops strace, whose `--kill-on-exit` ends its tracees, and returns 125), so the discovery costs seconds, not a whole step: measured on
 `pytest tools/[4of4]`, whose `test_provision` runs sudo, the full traced run plus the untraced rerun cost about 500 s extra before this. sendto/sendmsg are traced (an unconnected UDP datagram to a
