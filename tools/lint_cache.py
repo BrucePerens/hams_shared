@@ -438,7 +438,16 @@ def drop_unused_dirs(base, keep, days=UNUSED_DAYS, now=None):
 # [@ANCHOR: lint_cache:prepare_cargo_target]
 def prepare_cargo_target(target_dir, environ=None, log=None, budget=None):
     """Enforce the budget on `target_dir` before a build. Call while holding `locked(target_dir)`. Returns the log
-    lines (also passed to `log`). Never raises for lack of space."""
+    lines (also passed to `log`). Never raises for lack of space. Its walks of the cache directories are bookkeeping, not inputs of
+    the step: hidden from the lint's result-cache trace (`trace_marker`)."""
+    trace_marker("pause")
+    try:
+        return _prepare_cargo_target(target_dir, environ, log, budget)
+    finally:
+        trace_marker("resume")
+
+
+def _prepare_cargo_target(target_dir, environ=None, log=None, budget=None):
     environ = os.environ if environ is None else environ
     lines = []
 
@@ -668,6 +677,18 @@ def sync_tree(source, destination, skip=WORK_SKIP, submodules=()):
             shutil.rmtree(directory, ignore_errors=True)
 
 
+TRACE_MARK = "/proc/self/hams-lint-trace-"
+
+
+def trace_marker(word):
+    """Opens a path that never exists (`TRACE_MARK` + word): a no-op, except that the lint's result-cache trace sees the failed open and
+    pauses or resumes recording this process's reads (lint_trace_cache.parse_trace)."""
+    try:
+        open(TRACE_MARK + word, "rb").close()
+    except OSError:
+        pass
+
+
 # [@ANCHOR: lint_cache:work_checkout]
 def work_checkout(repo_root, name, target, environ=None, log=None):
     """A copy of the checkout `repo_root` at a FIXED path, `<cache>/hams-lint/work/<target directory name>/<name>`, or None when the
@@ -692,7 +713,13 @@ def work_checkout(repo_root, name, target, environ=None, log=None):
         import tree_files
 
         submodules = {path for path in tree_files._submodule_paths(repo_root)}
-        sync_tree(repo_root, work, submodules=submodules)
+        # Under the lint's result-cache trace the copy's own reads are not inputs (what cargo and the tests then read from the copy is,
+        # mapped back to the checkout): the trace skips this process's reads between the two markers (lint_trace_cache.trace_marker).
+        trace_marker("pause")
+        try:
+            sync_tree(repo_root, work, submodules=submodules)
+        finally:
+            trace_marker("resume")
     except (OSError, ImportError) as error:
         if log:
             log(f"lint cache: work checkout {work} not made ({error}); building in {repo_root}")

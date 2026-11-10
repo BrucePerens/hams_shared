@@ -22,6 +22,7 @@ import batch_queue
 import check_target
 import lint_cache
 import lint_exec
+import lint_trace_cache
 import lint_batch
 import relay_structural
 import pytest_impact
@@ -2815,8 +2816,10 @@ def main():
                 step.env = dict(step.env, **slot_env)
     # Longest critical path first, by the median measured duration of each step over every recorded run (not only this checkout's).
     # Extra workers join while the machine is mostly idle (lint_lock's burst rule): one run used about two cores on average.
+    # Test steps go through the result cache keyed by the files they really read (lint_trace_cache.py); --no-cache bypasses it.
+    trace_cache = lint_trace_cache.open_cache(repo_root, tools_dir, fingerprints.versions() if fingerprints else lint_exec.tool_versions())
     results = lint_exec.execute(steps, options.jobs, cache=cache, fingerprints=fingerprints, durations=batch_durations or lint_lock.known_durations(),
-                                extra=lint_exec.elastic_jobs(options.jobs))
+                                extra=lint_exec.elastic_jobs(options.jobs), trace_cache=trace_cache)
     fallback_lock = [run_lock]
 
     def execute_here(wanted):

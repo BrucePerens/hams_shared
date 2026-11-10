@@ -29,6 +29,7 @@ import queue
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -472,10 +473,11 @@ def timeout_suspect(result):
 
 
 # [@ANCHOR: lint_exec:run_step]
-def run_step(step, locks, recent=(), deadline=None):
+def run_step(step, locks, recent=(), deadline=None, wrap=None):
     """Run one step; never raises for a checker failure. It runs at most `hang_guard.step_limit` seconds (from its `recent` durations; also
     at most until `deadline`, a `time.monotonic()` value, the whole run's cap): past that a hang report is written, the step's own process
-    group is stopped and the result is a TIMED OUT failure naming the report."""
+    group is stopped and the result is a TIMED OUT failure naming the report. `wrap`, when given, maps the command line to the one run
+    (the result cache's trace, `lint_trace_cache.trace_argv`)."""
     started = time.monotonic()
     if step.argv is None:
         elapsed = time.monotonic() - started
@@ -497,8 +499,9 @@ def run_step(step, locks, recent=(), deadline=None):
                 env = dict(environ, HAMS_LINT_TIMEOUT_SCALE=str(scale))
                 if "faulthandler_timeout" not in env.get("PYTEST_ADDOPTS", ""):  # a hung pytest test dumps every thread's stack by itself
                     env["PYTEST_ADDOPTS"] = (env.get("PYTEST_ADDOPTS", "") + f" -o faulthandler_timeout={int(min(limit, 600))}").strip()
+                argv = with_xdist(step, _xdist_workers[0])
                 res, report, timed_out = hang_guard.run_limited(
-                    with_xdist(step, _xdist_workers[0]), limit, step.name, hang_guard.report_dir(environ), cwd=step.cwd, env=env)
+                    wrap(argv) if wrap else argv, limit, step.name, hang_guard.report_dir(environ), cwd=step.cwd, env=env)
         except FileNotFoundError:
             if step.missing_msg is None:
                 raise
@@ -870,12 +873,40 @@ def machine_headroom(environ=None):
     return headroom, spacing
 
 
+# [@ANCHOR: lint_exec:traced_work]
+def traced_work(step, trace_cache, run):
+    """The Result of a test step through the result cache: a stored pass whose every input is unchanged is returned as a cache hit (its
+    original output plus a note); otherwise the step runs (`run(wrap)`) under the trace when strace can trace here, and a pass with no
+    veto (network, host services, hardware, environment, randomness; inputs changed while it ran) is stored. A failure is never stored and
+    never replaced by a stored pass."""
+    import lint_trace_cache
+    key = trace_cache.step_key(step)
+    entry = trace_cache.lookup(step, key)
+    if entry is not None:
+        return Result(step.name, 0, (entry.get("output") or "") + lint_trace_cache.cache_hit_note(entry), 0.0, cached=True)
+    if not trace_cache.usable:
+        return run(None)
+    handle, trace_file = tempfile.mkstemp(prefix="lint-trace-", suffix=".txt")
+    os.close(handle)
+    try:
+        listening = lint_trace_cache.listening_ports()
+        started, started_ns = time.time(), time.time_ns()
+        result = run(lambda argv: lint_trace_cache.trace_argv(argv, trace_file))
+        if result.returncode == 0 and not result.timed_out:
+            trace_cache.record(step, key, result, trace_file, listening, started, started_ns)
+        return result
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(trace_file)
+
+
 # [@ANCHOR: lint_exec:execute]
-def execute(steps, jobs, cache=None, fingerprints=None, out=None, durations=None, extra=0, admission=None):
+def execute(steps, jobs, cache=None, fingerprints=None, out=None, durations=None, extra=0, admission=None, trace_cache=None):
     """Run `steps` on `jobs` workers, scheduled as a dependency graph longest-critical-path first (`_Scheduler`; `durations` is step
     name -> measured median seconds, see `step_estimates`); print each step's output in declaration order as soon as every earlier
     step has been printed. Up to `extra` more workers join while the machine is mostly idle (`admission`, an `_Admission`; by default
-    lint_lock's burst rule): each takes one step per admission. Returns the list of Results (declaration order).
+    lint_lock's burst rule): each takes one step per admission. Test steps are looked up in and recorded to `trace_cache` (a
+    `lint_trace_cache.TraceCache`; see `traced_work`) instead of `cache`. Returns the list of Results (declaration order).
     """
     out = out or sys.stdout
     # side by side: no more steps than there are to run (one pytest step alone may use the whole machine)
@@ -891,6 +922,9 @@ def execute(steps, jobs, cache=None, fingerprints=None, out=None, durations=None
     def work(index):
         step = steps[index]
         key = None
+        if trace_cache is not None and step.argv is not None and trace_cache.traced(step.name):
+            recent = cache.recent_seconds(step.name) if cache is not None else ()
+            return index, traced_work(step, trace_cache, lambda wrap: run_step(step, locks, recent, deadline, wrap=wrap)), None
         if cache is not None and fingerprints is not None and step.cacheable:
             if step.argv is not None:
                 key = fingerprints.step_key(step)
