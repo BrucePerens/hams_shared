@@ -4644,6 +4644,12 @@ cgroup limits and CPU topology); a randomised step (reads a `.hypothesis` databa
 in `NEVER_CACHED` with their reasons (date-dependent certificate tests, load-dependent timing tests, host-bound and GitHub-bound suites);
 any step where strace cannot trace. Why a pass was not stored goes to `~/.cache/hams-lint/results/not_stored.log`. A stored pass is used
 for at most 24 h (`HAMS_LINT_TRACE_CACHE_MAX_AGE`). Off: `run_linters.py --no-cache`, `HAMS_LINT_NO_CACHE=1`, `HAMS_LINT_TRACE_CACHE=0`.
+The trace never decides a verdict on its own: a traced run that executed a setuid/setgid program or one with file capabilities (sudo gets
+no privileges under ptrace and under the no_new_privs flag of strace's seccomp filter; found when `test_provision`'s `sudo` failed under the
+trace), or a tracer (gdb, py-spy, ...), or that FAILED with a timeout under the trace, is rerun untraced at once and the untraced result
+counts; that step then runs untraced for 7 days (`<key>.untraceable.json`). sendto/sendmsg are not traced (every TCP write is a sendto: a
+byte-drip timing test of relay_signer timed out under the trace); remote contact is seen at connect, and an unconnected UDP sender is
+caught by its read of the DNS resolver configuration (`RESOLVER_FILES`, a veto).
 Leftover background processes: the traced run ends when the step's main process ends (`run_traced` stops strace, which detaches), as an
 untraced run would.
 
@@ -4652,6 +4658,9 @@ A `Trace` (reads, directory listings, absent paths, writes, programs, bound Unix
 
 ### `[@ANCHOR: lint_trace_cache:vetoes]` `vetoes(trace, listening_before=frozenset())`
 The reasons a traced pass must not be stored; [] when it may.
+
+### `[@ANCHOR: lint_trace_cache:trace_blockers]` `trace_blockers(trace)`
+Why a traced run cannot stand for an untraced one: setuid/setgid or capability programs, tracers. [] when none.
 
 ### `[@ANCHOR: lint_trace_cache:build_manifest]` `build_manifest(trace, roots, hasher, started_ns)`
 The manifest of a passing run and the problems (inputs changed while it ran, unreadable git state) that forbid storing it.

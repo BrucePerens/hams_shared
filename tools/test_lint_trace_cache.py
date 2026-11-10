@@ -59,7 +59,7 @@ class ParseAndVetoTests(unittest.TestCase):
         trace = ltc.Trace()
         trace.contacts = [("inet", ("127.0.0.1", 5432)), ("inet", ("127.0.0.1", 40000)), ("unix", "/var/run/postgresql/.s.PGSQL.5432"),
                           ("unix", "/run/systemd/userdb/io.systemd.DynamicUser")]
-        trace.reads = {"/dev/ttyUSB0", "/proc/net/route", "/proc/self/status", "/proc/meminfo", "/proc/pressure/cpu", "/dev/shm", "/sys/fs/cgroup/cpu.max", "/dev/urandom", "/dev/pts/3",
+        trace.reads = {"/dev/ttyUSB0", "/proc/net/route", "/etc/resolv.conf", "/proc/self/status", "/proc/meminfo", "/proc/pressure/cpu", "/dev/shm", "/sys/fs/cgroup/cpu.max", "/dev/urandom", "/dev/pts/3",
                        "/repo/.hypothesis/examples/ab"}
         reasons = ltc.vetoes(trace, listening_before={5432})
         self.assertEqual(reasons, sorted([
@@ -67,6 +67,7 @@ class ParseAndVetoTests(unittest.TestCase):
             "host service: connected to the Unix socket /var/run/postgresql/.s.PGSQL.5432",
             "hardware: read /dev/ttyUSB0",
             "environment: read /proc/net/route",
+            "network: read the DNS resolver configuration /etc/resolv.conf",
             "randomised: read the Hypothesis example database /repo/.hypothesis/examples/ab",
         ]))
 
@@ -184,7 +185,8 @@ class TraceCacheEndToEndTests(unittest.TestCase):
     def test_a_step_that_touches_the_network_is_never_stored(self):
         self.write("test_net.py", "import socket\n"
                                   "s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\n"
-                                  "s.sendto(b'x', ('192.0.2.1', 9))\n"
+                                  "s.connect(('192.0.2.1', 9))\n"
+                                  "s.send(b'x')\n"
                                   "print('sent')\n")
         step = self.step(script="test_net.py")
         self.assertFalse(self.run_once(step)[0].cached)
@@ -206,6 +208,47 @@ class TraceCacheEndToEndTests(unittest.TestCase):
         self.run_once(step)
         self.write("copied.txt", "changed, but only the copy read it\n")
         self.assertTrue(self.run_once(step)[0].cached)
+
+    # Tests [@ANCHOR: lint_trace_cache:trace_blockers]
+    def test_a_step_that_runs_a_setuid_program_is_rerun_untraced_and_never_traced_again(self):
+        setuid_true = os.path.join(self.tmp, "setuid_true")
+        shutil.copy("/bin/true", setuid_true)
+        os.chmod(setuid_true, 0o4755)
+        if not os.stat(setuid_true).st_mode & 0o4000:
+            self.skipTest("this file system drops the setuid bit")
+        self.write("test_priv.py", "import os, subprocess\n"
+                                   "open(os.environ['COUNTER'], 'a').write('x')\n"
+                                   "subprocess.run([%r], check=True)\n"
+                                   "print('privileged ok')\n" % setuid_true)
+        step = self.step(script="test_priv.py")
+        first, out = self.run_once(step)
+        self.assertEqual((first.returncode, first.cached), (0, False), out)
+        self.assertEqual(self.runs(), 2)  # traced, then the untraced run whose result counts
+        cache = self.cache()
+        self.assertIn("setuid", cache.untraceable(cache.step_key(step)))
+        second, _ = self.run_once(step)
+        self.assertEqual((second.returncode, second.cached), (0, False))
+        self.assertEqual(self.runs(), 3)  # untraced only, never stored
+
+    def test_a_timeout_that_happens_only_under_the_trace_is_decided_by_an_untraced_run(self):
+        self.write("test_slow.py", "import os, sys\n"
+                                   "open(os.environ['COUNTER'], 'a').write('x')\n"
+                                   "traced = any(l.startswith('TracerPid:') and l.split()[1] != '0' for l in open('/proc/self/status'))\n"
+                                   "if traced:\n"
+                                   "    sys.exit('TimeoutError: timed out')\n"
+                                   "print('fast enough')\n")
+        step = self.step(script="test_slow.py")
+        result, out = self.run_once(step)
+        self.assertEqual(result.returncode, 0, out)
+        self.assertEqual(self.runs(), 2)
+        cache = self.cache()
+        self.assertIsNotNone(cache.untraceable(cache.step_key(step)))
+
+    def test_a_real_failure_mentioning_a_timeout_stays_a_failure(self):
+        self.write("test_bad.py", "import sys\nsys.exit('TimeoutError: timed out for real')\n")
+        result, out = self.run_once(self.step(script="test_bad.py"))
+        self.assertEqual((result.returncode, result.cached), (1, False))
+        self.assertIn("timed out for real", out)
 
     def test_an_expired_pass_is_not_used(self):
         self.run_once()

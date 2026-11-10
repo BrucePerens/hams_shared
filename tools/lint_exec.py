@@ -878,13 +878,15 @@ def traced_work(step, trace_cache, run):
     """The Result of a test step through the result cache: a stored pass whose every input is unchanged is returned as a cache hit (its
     original output plus a note); otherwise the step runs (`run(wrap)`) under the trace when strace can trace here, and a pass with no
     veto (network, host services, hardware, environment, randomness; inputs changed while it ran) is stored. A failure is never stored and
-    never replaced by a stored pass."""
+    never replaced by a stored pass. The trace never decides a verdict on its own: a run that executed a privileged program or a tracer
+    (`lint_trace_cache.trace_blockers`), or that failed with a timeout under the trace, is rerun untraced at once and that result counts;
+    such a step then runs untraced (`TraceCache.untraceable`)."""
     import lint_trace_cache
     key = trace_cache.step_key(step)
     entry = trace_cache.lookup(step, key)
     if entry is not None:
         return Result(step.name, 0, (entry.get("output") or "") + lint_trace_cache.cache_hit_note(entry), 0.0, cached=True)
-    if not trace_cache.usable:
+    if not trace_cache.usable or trace_cache.untraceable(key):
         return run(None)
     handle, trace_file = tempfile.mkstemp(prefix="lint-trace-", suffix=".txt")
     os.close(handle)
@@ -892,8 +894,18 @@ def traced_work(step, trace_cache, run):
         listening = lint_trace_cache.listening_ports()
         started, started_ns = time.time(), time.time_ns()
         result = run(lambda argv: lint_trace_cache.trace_argv(argv, trace_file))
+        trace = trace_cache.read_trace(trace_file)
+        blockers = lint_trace_cache.trace_blockers(trace) if trace is not None else []
+        if not blockers and result.returncode != 0 and (result.timed_out or TIMEOUT_TEXT.search(result.output or "")):
+            again = run(None)
+            if again.returncode == 0:
+                trace_cache.mark_untraceable(key, step, ["failed with a timeout under the trace and passed untraced"])
+            return again
+        if blockers:
+            trace_cache.mark_untraceable(key, step, blockers)
+            return run(None)
         if result.returncode == 0 and not result.timed_out:
-            trace_cache.record(step, key, result, trace_file, listening, started, started_ns)
+            trace_cache.record(step, key, result, trace, listening, started, started_ns)
         return result
     finally:
         with contextlib.suppress(OSError):
