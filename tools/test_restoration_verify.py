@@ -6,7 +6,9 @@ import os
 import socket
 
 import infrastructure as infra
+from restoration_system import accounts
 from restoration_system import classify as cl
+from restoration_system import code_layer
 from restoration_system import coverage as cov
 from restoration_system import profile as prof
 from restoration_system import units as un
@@ -224,8 +226,16 @@ def test_coverage_reports_gaps_and_distinguishes_sources():
     profile = prof.load()
     local = cov.build_coverage(infra, profile, "local")
     b2 = cov.build_coverage(infra, profile, "b2")
-    assert {g[0] for g in local["gaps"]} >= {"accounts_not_in_backups", "package_list_not_in_backups", "code_not_in_backups", "built_artifacts_not_in_backups"}
+    structural = {"accounts_not_in_backups", "package_list_not_in_backups", "code_not_in_backups", "built_artifacts_not_in_backups"}
+    assert not structural & {g[0] for g in local["gaps"]}  # the config set carries passwd/group, dpkg status and DEPLOYED_COMMITS
+    assert structural <= {g[0] for g in b2["gaps"]}
     assert "b2_no_system_config" in {g[0] for g in b2["gaps"]} and "b2_no_system_config" not in {g[0] for g in local["gaps"]}
     assert "/opt/hams/etc" in " ".join(local["from_backups"]) or local["from_backups"]
     assert len(local["from_backups"]) > len(b2["from_backups"])
     assert "COVERAGE" in cov.render(local, "local")
+
+
+def test_captured_accounts_and_deployed_commits():
+    users, groups = accounts.captured_ids("root:x:0:0::/root:/bin/bash\nhams_com:x:998:997::/opt/hams:/bin/bash\n", "root:x:0:\nhams_com:x:997:odoo\n")
+    assert users == {"root": 0, "hams_com": 998} and groups == {"root": 0, "hams_com": 997}
+    assert code_layer.parse_deployed_commits("hams_com=9976e1bd\nhams_open=6925c203\nhams_shared=fa775f3\n")["hams_open"] == "6925c203"

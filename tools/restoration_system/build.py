@@ -9,6 +9,7 @@ import tempfile
 from .runner import RestorationError
 from . import accounts as acc
 from . import assemble as asm
+from . import code_layer as code
 from . import provision_layer as pl
 from . import sourceset as ss
 from . import units as un
@@ -80,7 +81,8 @@ def restore_files(bs, items, stage, work, runner, say):
             if not found:
                 raise RestorationError("%s holds no config archive" % item.label)
             archive = os.path.join(dest, found[-1])
-            ex = ["--exclude=./var/lib/dpkg", "--exclude=./etc/passwd", "--exclude=./etc/group", "--exclude=./etc/shadow", "--exclude=./etc/gshadow"]
+            ex = ["--exclude=./var/lib/dpkg", "--exclude=./etc/passwd", "--exclude=./etc/group", "--exclude=./etc/shadow", "--exclude=./etc/gshadow",
+                  "--exclude=var/lib/dpkg", "--exclude=etc/passwd", "--exclude=etc/group", "--exclude=etc/subuid", "--exclude=etc/subgid"]
             runner.run(["tar", "--zstd", "-xpf", archive, "--numeric-owner", "--xattrs", "--same-owner", *ex, "-C", stage])
             archives.append(archive)
             say("config archive %s extracted" % found[-1])
@@ -113,6 +115,8 @@ def build_image(source, out, profile, runner, secrets, target_time=None, say=pri
         db_meta = asm.restore_database(bs, plan, stage, profile, target_time, runner, work)
         backup_status = config_member_text(runner, archives[-1], "var/lib/dpkg/status") if archives else None
         backup_packages = asm.parse_dpkg_status(backup_status) if backup_status else None
+        passwd_text, group_text = (config_member_text(runner, archives[-1], m) if archives else None for m in ("etc/passwd", "etc/group"))
+        deployed_text = config_member_text(runner, archives[-1], "opt/hams/src/DEPLOYED_COMMITS") if archives else None
         say("stage 3/9: Debian %s base system into %s" % (profile["debian_suite"], out))
         chroot = asm.Chroot(runner, out)
         asm.debootstrap(profile, out, runner)
@@ -121,21 +125,26 @@ def build_image(source, out, profile, runner, secrets, target_time=None, say=pri
         say("stage 4/9: accounts with the numbers the restored files carry")
         use_manifest = profile.get("use_manifest", True)
         claims = acc.manifest_owner_claims(infra.MANIFEST) if use_manifest else []
-        observed = acc.tree_owners(stage, [c[0] for c in claims])
-        users, groups, conflicts = acc.derive_ids(claims, observed)
-        if conflicts:
-            raise RestorationError("account numbers in the backups conflict: " + "; ".join(conflicts))
+        if passwd_text and group_text:
+            users, groups = acc.captured_ids(passwd_text, group_text)
+        else:
+            observed = acc.tree_owners(stage, [c[0] for c in claims])
+            users, groups, conflicts = acc.derive_ids(claims, observed)
+            if conflicts:
+                raise RestorationError("account numbers in the backups conflict: " + "; ".join(conflicts))
         commands, unresolved = acc.account_commands(infra.MANIFEST if use_manifest else {}, users, groups)
         acc.create_accounts(chroot, commands)
         say("stage 5/9: Debian packages from the network (unpinned)")
         asm.setup_apt(profile, out, runner, fetch)
         packages = asm.package_list(infra, profile, backup_packages)
         asm.install_packages(chroot, packages, runner)
+        code_report = code.install_code(profile, out, deployed_text, say)
         pinned = asm.install_pinned_downloads(infra, out, chroot, work, {"KOPIA_ARCH": "x64", "DEB_TARGET_ARCH_CPU": "amd64"}) if use_manifest else []
         say("stage 6/9: the restored data and configuration over the package defaults")
         asm.wipe_default_datadir(out, profile["database"]["datadir"])
         asm.overlay_stage(stage, out, runner)
         asm.chown_database(out, db_meta)
+        code_report["built"] = code.build_artifacts(infra, out, chroot, say) if code_report["installed"] else []
         say("stage 7/9: provisioning layer, units and enablement")
         classes = un.host_class_list(out, profile.get("host_classes", []))
         env_values = {"DOMAIN": profile.get("domain", "hams.com"), "DB_NAME": profile["database"]["name"],
@@ -163,7 +172,7 @@ def build_image(source, out, profile, runner, secrets, target_time=None, say=pri
         wanted = asm.write_post_step_files(out, base_users, base_groups, runner)
         chroot.run(["apt-get", "clean"])
         meta = {"built_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"), "profile": profile["name"],
-                "source": bs.describe(), "database": db_meta, "packages": packages, "pinned_downloads": pinned,
+                "source": bs.describe(), "database": db_meta, "packages": packages, "pinned_downloads": pinned, "code": code_report,
                 "accounts": {"unresolved_ids": unresolved, "image_accounts": len(wanted["users"])}, "provision": report,
                 "removed_machine_specific": removed, "host_classes": classes}
         asm.write_exclude(out, profile)

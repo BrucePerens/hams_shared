@@ -42,8 +42,14 @@
     "etc/systemd/system", "etc/hams", "etc/letsencrypt", "etc/pagerduty", "etc/redis", "etc/rabbitmq", "etc/wireguard",
     "etc/ssh/sshd_config", "etc/ssh/sshd_config.d", "etc/sudoers", "etc/sudoers.d", "etc/cron.d", "etc/crontab",
     "var/spool/cron/crontabs", "etc/fstab", "etc/hosts", "etc/nftables.conf", "etc/logrotate.d", "usr/local/sbin",
+    "etc/passwd", "etc/group", "etc/subuid", "etc/subgid", "var/lib/dpkg/status", "etc/apt/sources.list", "etc/apt/sources.list.d",
+    "opt/hams/src/DEPLOYED_COMMITS",
     "var/lib/odoo/hams_crypto.secret"
   ],
+  "code_repos": {
+    "hams_open": "https://github.com/BrucePerens/hams_open.git",
+    "hams_com": "https://github.com/BrucePerens/hams_com.git"
+  },
   "machine_specific": [
     "etc/fstab", "etc/hostname", "etc/machine-id", "var/lib/dbus/machine-id", "etc/hosts", "etc/network", "etc/netplan",
     "etc/systemd/network", "etc/resolv.conf", "etc/ssh/ssh_host_*", "etc/adjtime", "etc/mtab", "boot", "etc/default/grub",
