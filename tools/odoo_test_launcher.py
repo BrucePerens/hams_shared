@@ -8,6 +8,7 @@ import sys
 import odoo.cli
 import odoo.netsvc
 
+import chrome_teardown
 import odoo_warning_policy
 
 # Running as a script put this tools/ directory first on sys.path, only so the line above could import the
@@ -18,4 +19,7 @@ if sys.path and os.path.abspath(sys.path[0]) == os.path.dirname(os.path.abspath(
 
 if __name__ == "__main__":
     odoo_warning_policy.install(odoo.netsvc)
+    import odoo.tests.common
+
+    chrome_teardown.install(odoo.tests.common)
     odoo.cli.main()
