@@ -245,6 +245,8 @@ STEP_META = {
     "check_float_isfinite": {"suffixes": _PY},
     # Reads every .py and .sh file of both repositories and its own known list (boundary_hazards_known.json).
     "check_boundary_hazards": {"suffixes": frozenset({".py", ".sh", ".json"})},
+    # A secret written to ir.config_parameter or kept in a model field instead of the secret store (2026-11-09).
+    "check_secret_storage": {"suffixes": frozenset({".py", ".xml", ".json"})},
     "check_untyped_utility_files": {
         "suffixes": frozenset({".py", ".ini", ".cfg", ".toml", ".pyi"})
     },
@@ -2584,6 +2586,16 @@ def main():
     _add(
         "check_boundary_hazards",
         [python_exec, os.path.join(dir_path, "tools", "check_boundary_hazards.py"), *_pair_roots],
+        print_ok=False,
+    )
+
+    # check_secret_storage -- a secret written to ir.config_parameter (set_param, config_parameter=, an XML data record) or held in a
+    # Char/Text/Binary field named like a secret, instead of the secret store (hams_open zero_sudo/daemon/secret_store.py): the web
+    # process, a database dump and a settings read over RPC can all read those. Secrets not migrated yet sit in
+    # secret_storage_known.json with an owner and a reason; an entry that no longer matches a finding fails. Both roots, one process.
+    _add(
+        "check_secret_storage",
+        [python_exec, os.path.join(dir_path, "tools", "check_secret_storage.py"), *_pair_roots],
         print_ok=False,
     )
 
