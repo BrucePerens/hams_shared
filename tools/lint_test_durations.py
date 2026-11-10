@@ -193,7 +193,7 @@ def main(argv):
         table = load_table()
         seconds = estimate(files, table)
         for index, chunk in enumerate(balanced_chunks(files, count, table), 1):
-            print(f"chunk {index}: {len(chunk)} files, ~{sum(seconds[f] for f in chunk):.0f} s")
+            print(f"chunk {index}: {len(chunk)} files, ~{sum(seconds.get(f, 0.0) for f in chunk):.0f} s")
         return 0
     print(__doc__)
     return 2
