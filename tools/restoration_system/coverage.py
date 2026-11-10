@@ -6,6 +6,10 @@ It reads no backup and changes no backup configuration. Each GAP is a fact to be
 """
 
 # GAPs that follow from the structure of the backups and the provisioning, with the evidence that makes them gaps.
+# CLOSED_BY: a gap is closed when its member is in the backup set (the builder uses it: captured account numbers, dpkg status, the deployed
+# commits from which it clones the code and rebuilds the binaries).
+CLOSED_BY = {"accounts_not_in_backups": "etc/passwd", "package_list_not_in_backups": "var/lib/dpkg/status",
+             "code_not_in_backups": "opt/hams/src/DEPLOYED_COMMITS", "built_artifacts_not_in_backups": "opt/hams/src/DEPLOYED_COMMITS"}
 STRUCTURAL = [
     ("accounts_not_in_backups", "/etc/passwd, /etc/group (user and group numbers) are in no backup scope",
      "Restored files carry numeric owners. The builder infers each MANIFEST account's number from the owner of a path the MANIFEST says it "
@@ -57,7 +61,7 @@ def build_coverage(infra, profile, kind, classes=(), unresolved_accounts=()):
         sample = ", ".join(sorted(needs_code)[:5])
         gaps.append(("deployed_code_copies", "%d MANIFEST paths are copies of code (for example %s) that is itself in no backup" % (len(needs_code), sample),
                      "Provisioning copies them from the code checkout; the backups hold neither."))
-    gaps = [g for g in STRUCTURAL] + (B2_ONLY if kind == "b2" else []) + gaps
+    gaps = [g for g in STRUCTURAL if not covered(CLOSED_BY[g[0]], prefixes)] + (B2_ONLY if kind == "b2" else []) + gaps
     if unresolved_accounts:
         gaps.append(("accounts_without_id_evidence", "Accounts with no recoverable number: %s" % ", ".join(sorted(unresolved_accounts)[:12]),
                      "No path owned by them was found in the backups."))

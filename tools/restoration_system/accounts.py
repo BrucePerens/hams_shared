@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Accounts of the image: user and group numbers recovered from the backups' own files, then created from the MANIFEST.
 
-The backups carry owners as numbers. The production /etc/passwd is in no backup scope, so the number of each MANIFEST account is
-inferred from the owner of a path the MANIFEST says that account owns (a directory or a static file). Two accounts on one number, or
+The backups carry owners as numbers. When the config set carries production's /etc/passwd and /etc/group those numbers are used as they are;
+an older set without them has the number of each MANIFEST account inferred from the owner of a path the MANIFEST says that account owns (a directory or a static file). Two accounts on one number, or
 one account on two numbers, are conflicts and stop the build. Accounts with no evidence get ordinary new numbers and are reported.
 """
 import os
@@ -45,6 +45,13 @@ def manifest_owner_claims(manifest):
             user, group = owner.split(":", 1)
             claims.append((spec["path"], user, group))
     return claims
+
+
+def captured_ids(passwd_text, group_text):
+    """(users {name: uid}, groups {name: gid}) from the captured production /etc/passwd and /etc/group (config set members)."""
+    def table(text):
+        return {row.split(":")[0]: int(row.split(":")[2]) for row in (text or "").splitlines() if row.count(":") >= 2 and not row.startswith("#")}
+    return table(passwd_text), table(group_text)
 
 
 def derive_ids(claims, observed):
