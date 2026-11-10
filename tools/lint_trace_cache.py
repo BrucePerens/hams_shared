@@ -37,6 +37,7 @@ CLI: `lint_trace_cache.py run TRACE_FILE -- COMMAND...` runs a step traced (`run
 import fcntl
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -631,10 +632,7 @@ class TraceCache:
         self.roots = roots
         self.versions = versions
         environ = os.environ if environ is None else environ
-        try:
-            self.max_age = float(environ.get("HAMS_LINT_TRACE_CACHE_MAX_AGE", MAX_AGE_SECONDS))
-        except ValueError:
-            self.max_age = MAX_AGE_SECONDS
+        self.max_age = max_age_seconds(environ)
         self.hasher = Hasher()
         self.git_memo = {}
         self._names = {}
@@ -791,6 +789,16 @@ def open_cache(repo_root, tools_dir, versions, environ=None):
     base = os.path.join(lint_cache.cache_root(environ), "hams-lint")
     roots = Roots(roots_for(repo_root, tools_dir), work_base=os.path.join(base, "work"), scratch=scratch_dirs(environ))
     return TraceCache(os.path.join(base, "results"), roots, versions, environ)
+
+
+def max_age_seconds(environ):
+    """HAMS_LINT_TRACE_CACHE_MAX_AGE in seconds when it is a finite number of at least 0, else MAX_AGE_SECONDS ("inf" or "nan" would keep
+    or reject every pass for ever)."""
+    try:
+        value = float(environ.get("HAMS_LINT_TRACE_CACHE_MAX_AGE", MAX_AGE_SECONDS))
+    except ValueError:
+        return MAX_AGE_SECONDS
+    return value if math.isfinite(value) and value >= 0 else MAX_AGE_SECONDS
 
 
 def cache_hit_note(entry):
