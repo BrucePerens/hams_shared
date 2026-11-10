@@ -1,0 +1,21 @@
+{
+  "name": "synthetic",
+  "debian_suite": "trixie",
+  "debian_mirror": "http://deb.debian.org/debian",
+  "use_manifest": false,
+  "database": {"name": "synth", "pg_major": 18, "stanza": "synth", "datadir": "/var/lib/postgresql/18/main", "pgbackrest_repo_path_b2": "/synth",
+               "cipher_type": "aes-256-cbc", "count_tables": ["items"], "time_table": "items"},
+  "b2": {"bucket": "none", "endpoint": "none", "region": "none", "kopia_prefix": "none/"},
+  "local": {"kopia_repo": "synth-kopia", "pgbackrest_repo": "synth-pgbackrest"},
+  "b2_kopia_paths": [], "b2_kopia_files": {},
+  "local_files_sources": {"site": "/var/www/synth"},
+  "config_tar_scope": ["etc/nginx/conf.d", "opt/hams/etc"],
+  "machine_specific": ["etc/fstab", "etc/hostname", "etc/machine-id", "var/lib/dbus/machine-id", "etc/hosts", "etc/resolv.conf", "etc/ssh/ssh_host_*", "boot", "lib/modules"],
+  "apt_repositories": [{"name": "pgdg", "key_url": "https://www.postgresql.org/media/keys/ACCC4CF8.asc", "keyring": "postgresql-keyring.gpg",
+                        "line": "deb [signed-by=/usr/share/keyrings/postgresql-keyring.gpg] https://apt.postgresql.org/pub/repos/apt/ {suite}-pgdg main"}],
+  "extra_packages": ["postgresql-18", "nginx", "redis-server", "python3"],
+  "package_not_in_archive": [],
+  "verify": {"http_checks": [{"url": "http://127.0.0.1:8080/", "status": 200, "contains": "synthetic site"}],
+             "must_be_active": ["postgresql@18-main.service", "nginx.service", "redis-server.service"], "journal_wait_seconds": 120,
+             "recovery_wait_seconds": 120, "memory_mb": 2048, "cpus": 2, "http_retries": 20, "start_timeout_seconds": 400, "log_files": ["/var/log/postgresql/postgresql-18-main.log"]}
+}
