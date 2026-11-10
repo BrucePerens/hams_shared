@@ -82,6 +82,17 @@ class TerminateGroupTests(unittest.TestCase):
         joined = "\n".join(self.capture.records)
         self.assertIn("still alive", joined)
 
+    def test_the_survivor_log_names_the_program_and_not_its_arguments(self):
+        proc = spawn(f"trap '' TERM; touch {self.ready}; while :; do sleep 0.1; done", self.ready)
+        ct.terminate_group(proc, cap=0.3, logger=self.logger)
+        joined = "\n".join(self.capture.records)
+        self.assertIn("still alive", joined)
+        self.assertNotIn(self.ready, joined)
+
+    def test_program_drops_the_arguments(self):
+        self.assertEqual(ct._program("/usr/bin/chrome --password=x --flag"), "chrome")
+        self.assertEqual(ct._program("[Web Content]"), "[Web Content]")
+
     def test_descendant_in_another_group_is_waited_for(self):
         # like `setsid -w unshare ... chrome`: the real browser is in a DIFFERENT process group than the leader
         script = f"setsid sleep 60 & touch {self.ready}; wait"
