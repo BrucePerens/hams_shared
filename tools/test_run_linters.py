@@ -474,6 +474,7 @@ class StepsWithoutResultTests(unittest.TestCase):
         return run_linters.lint_exec.Result(name, code, "", 0.0)
 
     def test_a_selected_step_with_no_result_is_named(self):
+        # Tests [@ANCHOR: run_linters:steps_without_result]
         results = [self._result("flake8"), self._result("verify_anchors")]
         self.assertEqual(run_linters.steps_without_result(["flake8", "check_js_syntax", "verify_anchors", "eslint"], results), ["check_js_syntax", "eslint"])
 
