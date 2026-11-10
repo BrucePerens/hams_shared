@@ -4624,6 +4624,54 @@ Each step's own estimate plus the longest chain of steps that need it; `needs` n
 ### `[@ANCHOR: lint_exec:execute]` `execute(steps, jobs, cache=None, fingerprints=None, out=None, durations=None)`
 Runs the steps as described above (cache hits are served as before) and returns Results in declaration order.
 
+## Result cache of the test steps, keyed by the files they really read (`lint_trace_cache.py`)
+
+The test steps (`pytest ...` sessions and `relay structural tests`, `TRACED_STEP_PREFIXES`) run under `strace -f`, which records every file
+the step and its children open, every program they run and every socket they reach. A passing run is stored as a manifest under
+`~/.cache/hams-lint/results/`: git blob ids of the repository files read and listings of the repository directories read (relative to
+hams_com, hams_open or hams_shared, so another worktree, a merge-queue tree or a Cargo work copy of the same content matches), size and
+mtime of the files outside the repositories (interpreters, site-packages, the Cargo registry, the toolchain), the paths looked up and not
+found, and the git state when `.git` was read (HEAD's tree, the diff against it, untracked files, origin/main). A later run with the same
+step identity (name, command line, working directory, environment with checkout paths replaced by repository names, tool versions) and
+every recorded input unchanged is reported as `cached`, with the original output and a line naming the time of the pass it reuses.
+These steps no longer use the stat-keyed cache (`lint_exec.Cache`) for their verdict; the scanners still do.
+
+Never cached, by design (the module docstring has the full list): a failure or timeout (only passes are stored, and a hit needs identical
+inputs, so a failure can never become a pass); a step that touched the network or a host service (connect/sendto off loopback, to a
+loopback port that was listening before the step started, or to a Unix socket it did not bind); a step that read hardware (`/dev` nodes
+other than null/zero/random/urandom/tty/ptmx/pts/shm/fd) or host environment state (`/proc`, `/sys` outside the process's own entries,
+cgroup limits and CPU topology); a randomised step (reads a `.hypothesis` database); a step whose inputs changed while it ran; the steps
+in `NEVER_CACHED` with their reasons (date-dependent certificate tests, load-dependent timing tests, host-bound and GitHub-bound suites);
+any step where strace cannot trace. Why a pass was not stored goes to `~/.cache/hams-lint/results/not_stored.log`. A stored pass is used
+for at most 24 h (`HAMS_LINT_TRACE_CACHE_MAX_AGE`). Off: `run_linters.py --no-cache`, `HAMS_LINT_NO_CACHE=1`, `HAMS_LINT_TRACE_CACHE=0`.
+Leftover background processes: the traced run ends when the step's main process ends (`run_traced` stops strace, which detaches), as an
+untraced run would.
+
+### `[@ANCHOR: lint_trace_cache:parse_trace]` `parse_trace(lines)`
+A `Trace` (reads, directory listings, absent paths, writes, programs, bound Unix sockets, network contacts) from `strace -f -y` output.
+
+### `[@ANCHOR: lint_trace_cache:vetoes]` `vetoes(trace, listening_before=frozenset())`
+The reasons a traced pass must not be stored; [] when it may.
+
+### `[@ANCHOR: lint_trace_cache:build_manifest]` `build_manifest(trace, roots, hasher, started_ns)`
+The manifest of a passing run and the problems (inputs changed while it ran, unreadable git state) that forbid storing it.
+
+### `[@ANCHOR: lint_trace_cache:verify]` `verify(manifest, roots, hasher, git_memo=None)`
+None when every recorded input is unchanged, else the first difference.
+
+### `[@ANCHOR: lint_trace_cache:step_key]` `TraceCache.step_key(step)`
+The step's identity, independent of where the checkout is.
+
+### `[@ANCHOR: lint_trace_cache:trace_argv]` `trace_argv(argv, trace_file, python=sys.executable)`
+The command line that runs a step traced.
+
+### `[@ANCHOR: lint_trace_cache:run_traced]` `run_traced(trace_file, argv, poll=0.2)`
+Runs the command under strace and returns the main process's exit status when it ends (128 + signal when killed), without waiting for
+processes it left in the background.
+
+### `[@ANCHOR: lint_exec:traced_work]` `traced_work(step, trace_cache, run)`
+A test step through the result cache: a hit, or a traced run whose pass is stored when nothing forbids it.
+
 ## Wall-clock limits and hang reports (`hang_guard.py`)
 
 Every lint step (`lint_exec.run_step`) and every Odoo test run (`test.py run_cmd`) has a wall-clock limit. A step over its limit is
