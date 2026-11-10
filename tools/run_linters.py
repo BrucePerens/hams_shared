@@ -2814,7 +2814,9 @@ def main():
             if slot_env and step.env is not None:  # steps whose environment was captured before the slot was known
                 step.env = dict(step.env, **slot_env)
     # Longest critical path first, by the median measured duration of each step over every recorded run (not only this checkout's).
-    results = lint_exec.execute(steps, options.jobs, cache=cache, fingerprints=fingerprints, durations=batch_durations or lint_lock.known_durations())
+    # Extra workers join while the machine is mostly idle (lint_lock's burst rule): one run used about two cores on average.
+    results = lint_exec.execute(steps, options.jobs, cache=cache, fingerprints=fingerprints, durations=batch_durations or lint_lock.known_durations(),
+                                extra=lint_exec.elastic_jobs(options.jobs))
     fallback_lock = [run_lock]
 
     def execute_here(wanted):

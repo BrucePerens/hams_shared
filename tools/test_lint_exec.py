@@ -225,6 +225,42 @@ class SchedulerTests(unittest.TestCase):
             self.assertLessEqual(end1, start2)
 
 
+class ElasticWorkerTests(unittest.TestCase):
+    """Extra workers join only while the machine has headroom, one admission per step."""
+
+    # Tests [@ANCHOR: lint_exec:elastic_jobs]
+    def test_elastic_jobs_doubles_by_default_and_stays_within_half_the_processors(self):
+        self.assertEqual(lint_exec.elastic_jobs(4, {}, cpus=32), 4)
+        self.assertEqual(lint_exec.elastic_jobs(4, {}, cpus=10), 1)
+        self.assertEqual(lint_exec.elastic_jobs(4, {"HAMS_LINT_ELASTIC_JOBS": "0"}, cpus=32), 0)
+        self.assertEqual(lint_exec.elastic_jobs(4, {"HAMS_LINT_ELASTIC_JOBS": "x"}, cpus=32), 4)
+
+    def test_admission_needs_headroom_and_spacing(self):
+        now = [100.0]
+        room = [True]
+        gate = lint_exec._Admission(lambda: room[0], 20.0, clock=lambda: now[0])
+        self.assertTrue(gate.admit())
+        self.assertFalse(gate.admit())  # 0 s after the last admission
+        now[0] += 21
+        room[0] = False
+        self.assertFalse(gate.admit())  # spaced, but the machine is busy
+        room[0] = True
+        self.assertTrue(gate.admit())
+
+    def _wall(self, admit):
+        steps = [py_step(f"nap{i}", "import time; time.sleep(0.6)") for i in range(3)]
+        started = time.monotonic()
+        results = lint_exec.execute(steps, 1, out=io.StringIO(), extra=2, admission=lint_exec._Admission(lambda: admit, 0.0))
+        self.assertTrue(all(r.returncode == 0 for r in results))
+        return time.monotonic() - started
+
+    def test_admitted_extra_workers_run_steps_side_by_side(self):
+        self.assertLess(self._wall(True), 1.5)
+
+    def test_refused_extra_workers_run_nothing(self):
+        self.assertGreaterEqual(self._wall(False), 1.8)
+
+
 class TimingTableTests(unittest.TestCase):
     def test_table_lists_every_step_slowest_first_with_status(self):
         results = [

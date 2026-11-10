@@ -776,8 +776,9 @@ class _Scheduler:
             return False
         return all(other in self.ended for other in self.needs[index])
 
-    def take(self):
-        """The next step index to run, or None when every step has been handed out. Blocks while steps wait only on running ones."""
+    def take(self, block=True):
+        """The next step index to run, or None when every step has been handed out. Blocks while steps wait only on running ones;
+        with `block` False returns None at once instead (`has_waiting` tells the two Nones apart)."""
         with self.cond:
             while True:
                 if not self.waiting:
@@ -791,7 +792,13 @@ class _Scheduler:
                         self.held.add(step.lock)
                         self.lock_left[step.lock] -= self.estimates[index]
                     return index
+                if not block:
+                    return None
                 self.cond.wait()
+
+    def has_waiting(self):
+        with self.cond:
+            return bool(self.waiting)
 
     def done(self, index):
         with self.cond:
@@ -801,12 +808,74 @@ class _Scheduler:
                 self.held.discard(lock)
             self.cond.notify_all()
 
+    def pause(self, seconds):
+        """Sleep up to `seconds`, waking early when a step ends."""
+        with self.cond:
+            if self.waiting:
+                self.cond.wait(seconds)
+
+
+ELASTIC_POLL_SECONDS = 10.0
+
+
+# [@ANCHOR: lint_exec:elastic_jobs]
+def elastic_jobs(jobs, environ=None, cpus=None):
+    """How many EXTRA workers a run may add while the machine is mostly idle: HAMS_LINT_ELASTIC_JOBS when it is a whole number (0 turns it
+    off), else `jobs` (a run may double), never more than leaves the run at half the processors. Pure. Full entry: tools/README.md."""
+    environ = os.environ if environ is None else environ
+    cpus = cpus or os.cpu_count() or 2
+    try:
+        wanted = int(environ.get("HAMS_LINT_ELASTIC_JOBS", jobs))
+    except ValueError:
+        wanted = jobs
+    return max(0, min(wanted, cpus // 2 - jobs))
+
+
+class _Admission:
+    """Admits one extra worker at a time: at least `spacing` seconds after the previous admission (a step that has just started has not
+    loaded the processors yet) and only while `headroom()` holds (lint_lock's burst test: processors under 60 % busy, CPU stall under 10 %,
+    24 GiB free, the same numbers that open a burst slot)."""
+
+    def __init__(self, headroom, spacing, clock=time.monotonic):
+        self.headroom = headroom
+        self.spacing = spacing
+        self.clock = clock
+        self.last = None
+        self.lock = threading.Lock()
+
+    def admit(self):
+        with self.lock:
+            now = self.clock()
+            if self.last is not None and now - self.last < self.spacing:
+                return False
+            if not self.headroom():
+                return False
+            self.last = now
+            return True
+
+
+def machine_headroom(environ=None):
+    """(headroom function, spacing seconds) from lint_lock's burst rule; a function that always refuses when lint_lock cannot be imported."""
+    try:
+        import lint_lock
+    except ImportError:
+        return (lambda: False), 60.0
+    environ = os.environ if environ is None else environ
+    busy_limit, psi_limit, min_mem, spacing = lint_lock.burst_limits(environ)
+
+    def headroom():
+        ok, _why = lint_lock.burst_headroom(lint_lock.cpu_busy_percent(), lint_lock.cpu_stall(), lint_lock.mem_available_gb(),
+                                            busy_limit, psi_limit, min_mem)
+        return ok
+    return headroom, spacing
+
 
 # [@ANCHOR: lint_exec:execute]
-def execute(steps, jobs, cache=None, fingerprints=None, out=None, durations=None):
+def execute(steps, jobs, cache=None, fingerprints=None, out=None, durations=None, extra=0, admission=None):
     """Run `steps` on `jobs` workers, scheduled as a dependency graph longest-critical-path first (`_Scheduler`; `durations` is step
     name -> measured median seconds, see `step_estimates`); print each step's output in declaration order as soon as every earlier
-    step has been printed. Returns the list of Results (declaration order).
+    step has been printed. Up to `extra` more workers join while the machine is mostly idle (`admission`, an `_Admission`; by default
+    lint_lock's burst rule): each takes one step per admission. Returns the list of Results (declaration order).
     """
     out = out or sys.stdout
     # side by side: no more steps than there are to run (one pytest step alone may use the whole machine)
@@ -834,23 +903,56 @@ def execute(steps, jobs, cache=None, fingerprints=None, out=None, durations=None
     scheduler = _Scheduler(steps, step_estimates(steps, durations, cache))
     finished = queue.Queue()
 
+    def guarded(body):
+        """A worker that dies of a bug in the runner hands the error to the main thread (which would otherwise wait for ever)."""
+        def run():
+            try:
+                body()
+            except BaseException as error:
+                finished.put((None, error, None))
+        return run
+
+    @guarded
     def worker():
         while True:
             index = scheduler.take()
             if index is None:
                 return
-            try:
-                finished.put(work(index))
-            except BaseException as error:  # a bug in the runner itself: hand it to the main thread, never hang it
-                finished.put((index, error, None))
-            finally:
-                scheduler.done(index)
+            run_one(index)
+
+    def run_one(index):
+        try:
+            finished.put(work(index))
+        except BaseException as error:  # a bug in the runner itself: hand it to the main thread, never hang it
+            finished.put((index, error, None))
+        finally:
+            scheduler.done(index)
+
+    if extra and admission is None:
+        admission = _Admission(*machine_headroom())
+
+    @guarded
+    def extra_worker():
+        """Runs a step only when admitted, one admission per step: when the machine fills up the extra workers fall idle again."""
+        while scheduler.has_waiting():
+            if not admission.admit():
+                scheduler.pause(ELASTIC_POLL_SECONDS)
+                continue
+            index = scheduler.take(block=False)
+            if index is None:
+                scheduler.pause(ELASTIC_POLL_SECONDS)
+                continue
+            run_one(index)
 
     printed = 0
     pending = {}
-    with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
-        for _ in range(max(1, min(jobs, len(steps)))):
+    base = max(1, min(jobs, len(steps)))
+    extra = max(0, min(extra, len(steps) - base))
+    with ThreadPoolExecutor(max_workers=base + extra) as pool:
+        for _ in range(base):
             pool.submit(worker)
+        for _ in range(extra):
+            pool.submit(extra_worker)
         for _ in range(len(steps)):
             index, result, key = finished.get()
             if isinstance(result, BaseException):

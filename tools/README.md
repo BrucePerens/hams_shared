@@ -4610,6 +4610,14 @@ never measured counts `UNKNOWN_STEP_SECONDS` (30 s). A worker never waits on a l
 step (the old pool queued every step at once in a fixed order, so a worker could sit blocked on the cargo lock while shorter steps waited).
 Output is still printed in declaration order.
 
+Elastic workers: a run may add up to `elastic_jobs` extra workers (default as many again as `-j`, `HAMS_LINT_ELASTIC_JOBS`, 0 = off), each taking one
+step per admission, and admitted only while the machine is mostly idle by the rule that opens a burst slot (`lint_lock.burst_headroom`: processors
+under 60 % busy, CPU stall under 10 %, 24 GiB free) and at least `HAMS_LINT_BURST_SPACING_SECONDS` (20 s) after the previous admission. Measured
+before: one run used about two of 32 cores on average.
+
+### `[@ANCHOR: lint_exec:elastic_jobs]` `elastic_jobs(jobs, environ=None, cpus=None)`
+The number of extra workers: `HAMS_LINT_ELASTIC_JOBS` when a whole number, else `jobs`, never more than `cpus // 2 - jobs`.
+
 ### `[@ANCHOR: lint_exec:critical_paths]` `critical_paths(steps, estimates)`
 Each step's own estimate plus the longest chain of steps that need it; `needs` names not in the run are dropped; a cycle raises ValueError naming it.
 
