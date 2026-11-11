@@ -33,6 +33,7 @@ Tests [@ANCHOR: agent_procs:write_record]
 Tests [@ANCHOR: agent_procs:read_record]
 Tests [@ANCHOR: agent_procs:list_records]
 Tests [@ANCHOR: agent_procs:pid_alive]
+Tests [@ANCHOR: agent_procs:signal_same_process]
 Tests [@ANCHOR: agent_procs:job_state]
 Tests [@ANCHOR: agent_procs:forward_signal]
 Tests [@ANCHOR: agent_procs:wrapper_main]
@@ -59,6 +60,7 @@ Tests [@ANCHOR: agent_procs:main]
 import io
 import json
 import os
+import pathlib
 import shutil
 import signal
 import subprocess
@@ -973,6 +975,29 @@ class JobTests(ProcTestCase):
         finally:
             child.kill()
             child.wait()
+
+    def test_signal_same_process_signals_only_the_same_process(self):
+        child = subprocess.Popen(["sleep", "60"])
+        try:
+            info = ap.read_proc(child.pid)
+            with self.assertRaises(ProcessLookupError):
+                ap.signal_same_process(child.pid, info.start_ticks + 1, signal.SIGTERM)  # "reused" pid
+            self.assertIsNone(child.poll())
+            ap.signal_same_process(child.pid, info.start_ticks, signal.SIGTERM)
+            self.assertEqual(child.wait(timeout=10), -signal.SIGTERM)
+        finally:
+            child.kill()
+            child.wait()
+
+    def test_wrapper_forwards_quit_and_usr1_to_the_command(self):
+        for name in ("QUIT", "USR1"):
+            job = "fw" + name
+            cli("run", job, "--", "sleep", "60", env=self.env)
+            rec = ap.read_record(job, self.jobs)
+            self.until(lambda: pathlib.Path(f"/proc/{rec.pid}/task/{rec.pid}/children").read_text().strip())  # command runs
+            ap.signal_same_process(rec.pid, rec.start_ticks, ap.ALLOWED_SIGNALS[name])
+            self.until(lambda: ap.read_record(job, self.jobs).exit_code is not None)
+            self.assertEqual(ap.read_record(job, self.jobs).exit_code, 128 + int(ap.ALLOWED_SIGNALS[name]))
 
     def test_wrapper_main_refuses_to_run_without_the_go_line(self):
         code = subprocess.run([sys.executable, TOOL, "_wrap", "never", "--", "touch", os.path.join(self.tmp, "ran")],
