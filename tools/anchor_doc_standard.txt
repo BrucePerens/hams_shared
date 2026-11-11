@@ -81,6 +81,7 @@ daemons/hams_auth_gateway/fuzz/fuzz_targets
 daemons/hams_auth_gateway/tests
 daemons/hams_data_relay/README.md
 daemons/hams_event_enrichment_mcp
+daemons/hams_local_relay/docs/stories/relay_allstar_iax2_call.md
 daemons/hams_local_relay/docs/stories/relay_bridge_connection_handlers.md
 daemons/hams_local_relay/docs/stories/relay_bundle_store.md
 daemons/hams_local_relay/docs/stories/relay_certificate_enrollment_and_saved_radios.md
@@ -90,11 +91,13 @@ daemons/hams_local_relay/docs/stories/relay_deep_scan_own_ports.md
 daemons/hams_local_relay/docs/stories/relay_digital_decoder.md
 daemons/hams_local_relay/docs/stories/relay_direwolf_and_clock.md
 daemons/hams_local_relay/docs/stories/relay_explicit_state_paths.md
+daemons/hams_local_relay/docs/stories/relay_function_anchors_3.md
 daemons/hams_local_relay/docs/stories/relay_function_anchors_4.md
 daemons/hams_local_relay/docs/stories/relay_function_anchors_5.md
 daemons/hams_local_relay/docs/stories/relay_function_anchors_6.md
 daemons/hams_local_relay/docs/stories/relay_function_anchors_7.md
 daemons/hams_local_relay/docs/stories/relay_function_anchors_8.md
+daemons/hams_local_relay/docs/stories/relay_function_anchors_access.md
 daemons/hams_local_relay/docs/stories/relay_host_tuning_and_privilege.md
 daemons/hams_local_relay/docs/stories/relay_keying_execution.md
 daemons/hams_local_relay/docs/stories/relay_lan_pairing.md
