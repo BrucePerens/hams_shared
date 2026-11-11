@@ -1,7 +1,4 @@
 [
-  "ham_base/tests/credentials.py::read_credential",
-  "ham_base/tests/credentials.py::write_credentials",
-  "ham_base/tests/site_eligibility.py::make_site_eligible",
   "ham_classifieds/tests/consent_fixture.py::enroll_if_consent_installed",
   "ham_communications_consent/tests/consent_flow_helper.py::make_minor",
   "ham_communications_consent/tests/consent_flow_helper.py::prepare_for_checkout",
