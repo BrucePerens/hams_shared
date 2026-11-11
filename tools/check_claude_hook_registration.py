@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """
-Every repository checkout registers the signal guard hook and the backup-secrets guard hook (Bruce, 2026-11-09).
+Every repository checkout registers the signal guard hook (Bruce, 2026-11-09).
 
 On 2026-11-09 an agent ran `kill $pp` on its own parent (the `systemd --user` that started it) because the PreToolUse hook
 `hams_shared/tools/claude_hooks/guard_signals.py` was not active: it was registered only in the `.claude/settings.json` of
@@ -13,8 +13,7 @@ settings of the directory it runs in, so each of the three checkouts (hams_com, 
 
 `REPO_DIR` defaults to the checkout this script lives in (the parent of `tools/`). A repository passes when
 `.claude/settings.json` exists, is tracked by git (when `REPO_DIR` is inside a git work tree), is valid JSON, and its
-`hooks.PreToolUse` has, for each hook in HOOKS, an entry per required tool (`guard_signals.py`: Bash; `guard_backup_secrets.py`: Bash,
-Write, Edit, MultiEdit, NotebookEdit, Read, Grep, Artifact) whose `matcher` matches that tool name and which holds a `command` hook that runs
+`hooks.PreToolUse` has, for each hook in HOOKS, an entry per required tool (`guard_signals.py`: Bash) whose `matcher` matches that tool name and which holds a `command` hook that runs
 the script by a path that does not depend on the current directory (`$HOME/...`, `$CLAUDE_PROJECT_DIR/...` or an absolute path). Documentation: tools/README.md "Guard hook registration check".
 """
 
@@ -27,11 +26,9 @@ import sys
 import check_target
 
 HOOK_SCRIPT = "claude_hooks/guard_signals.py"
-BACKUP_HOOK_SCRIPT = "claude_hooks/guard_backup_secrets.py"
 # script -> the tool names whose PreToolUse matcher must reach it (the matcher is a regex on the tool name).
 HOOKS = {
     HOOK_SCRIPT: ("Bash",),
-    BACKUP_HOOK_SCRIPT: ("Bash", "Write", "Edit", "MultiEdit", "NotebookEdit", "Read", "Grep", "Artifact"),
 }
 SETTINGS = os.path.join(".claude", "settings.json")
 _ANCHOR_PREFIX = r"""(?<![\w./~$-])(?:\$HOME|\$\{HOME\}|\$CLAUDE_PROJECT_DIR|\$\{CLAUDE_PROJECT_DIR\}|~|/)[^\s"';]*"""
@@ -40,7 +37,7 @@ _ANCHORED_PATH_RE = re.compile(_ANCHOR_PREFIX + re.escape(HOOK_SCRIPT))
 
 # [@ANCHOR: check_claude_hook_registration:command_runs]
 def command_runs(command, script):
-    """True when the hook `command` text runs `script` (one of the HOOKS keys, e.g. `claude_hooks/guard_backup_secrets.py`) by an anchored path
+    """True when the hook `command` text runs `script` (one of the HOOKS keys, e.g. `claude_hooks/guard_signals.py`) by an anchored path
     (`$HOME`, `~`, `$CLAUDE_PROJECT_DIR` or absolute), so it works from a worktree and from any directory."""
     return isinstance(command, str) and re.search(_ANCHOR_PREFIX + re.escape(script), command) is not None
 

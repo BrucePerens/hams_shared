@@ -97,7 +97,6 @@
   "test_generate_odoo_core_stubs.py": 1.99,
   "test_generate_pot.py": 0.02,
   "test_gitlink_change_is_code.py": 0.22,
-  "test_guard_backup_secrets.py": 4.7,
   "test_guard_signals.py": 1.42,
   "test_hams_lint_bin.py": 1.96,
   "test_hang_guard.py": 7.47,

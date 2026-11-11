@@ -56,7 +56,7 @@ class PureTests(unittest.TestCase):
         for path in ("tools/provision.py", "tools/infrastructure.py", "tools/b2_backup.py", "backup_management/models/backup_config.py", "daemon_key_manager/models/key_registry.py",
                      "devbox_tools/hams1-base-backup.service", "devbox_tools/hams1_storage_backup.py", "tools/pgbackrest_setup.sh", "devbox_tools/mirror_repos_to_b2.py"):
             self.assertTrue(chk.relevant_path(path), path)
-        for path in ("tools/test_b2_backup.py", "backup_management/tests/test_backup.py", "tools/claude_hooks/guard_backup_secrets.py", "tools/README.md",
+        for path in ("tools/test_b2_backup.py", "backup_management/tests/test_backup.py", "tools/claude_hooks/guard_signals.py", "tools/README.md",
                      "docs/runbooks/b2_backup.md", "backup_management/static/src/x.js", "tools/run_linters.py", "zero_sudo/models/security_utils.py",
                      "backup_management/views/backup_config_views.xml", "tools/check_backup_encryption_changes.py"):
             self.assertFalse(chk.relevant_path(path), path)
