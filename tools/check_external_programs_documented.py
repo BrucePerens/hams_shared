@@ -54,6 +54,9 @@ _CFG_TEST = re.compile(r"#\[cfg\(\s*(?:all\(\s*)?test\b[^\]]*\]")
 _REPO = re.compile(r"`([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)`")
 _LITERAL_LAUNCH = re.compile(r'Command::new\(\s*"([^"\\]+)"\s*\)')
 _ANY_LAUNCH = re.compile(r"Command::new\(")
+# Files whose launch takes the program as a parameter, and the call shapes whose first argument is that program.
+CALLER_LAUNCH_FILES = frozenset({"src/gps_time.rs", "src/relay_info.rs"})
+_CALLER_LAUNCH = re.compile(r'\b(?:read_chrony_with|\.run)\(\s*"([^"\\]+)"')
 _SHELL_DETECT = re.compile(r"\bcommand\s+-v\s+([A-Za-z][A-Za-z0-9_.+-]*)")
 _PS_DETECT = re.compile(r"\bGet-Command\s+['\"]?([A-Za-z][A-Za-z0-9_.+-]*)")
 
@@ -179,6 +182,20 @@ def rust_launches(text):
         else:
             dynamic += 1
     return names, dynamic
+
+
+# [@ANCHOR: ext_programs:caller_launches]
+def caller_launches(text):
+    """Returns the set of program names the Rust source `text` passes as the first argument, as a string literal, to a
+    function that launches its argument (`read_chrony_with("chronyc", ...)`, `reader.run("sysctl", ...)`), outside comments
+    and `#[cfg(test)]` items. These are the launches `rust_launches` cannot see because `Command::new` gets a parameter."""
+    masked = code_mask(text)
+    spans = test_spans(masked)
+    names = set()
+    for m in _CALLER_LAUNCH.finditer(text):
+        if not any(a <= m.start() < b for a, b in spans) and masked[m.start()] != " ":  # a comment is blanked in the mask
+            names.add(program_name(m.group(1)))
+    return names
 
 
 # [@ANCHOR: ext_programs:script_dependencies]
@@ -321,6 +338,8 @@ def find_findings(repo_root, adr_path, watch_path):
             literal, dynamic = rust_launches(text)
             if dynamic and rel not in DYNAMIC_LAUNCH_FILES:
                 findings.append(f"{RELAY_DIR}/{rel} starts a program by an expression ({dynamic} call(s)); name the program in ADR 0114 and add the file to DYNAMIC_LAUNCH_FILES")
+            if rel in CALLER_LAUNCH_FILES:
+                literal = literal | caller_launches(text)
             for name in sorted(literal):
                 if re.sub(r"\.exe$", "", name.lower()) not in names:
                     findings.append(f"{RELAY_DIR}/{rel} launches {name!r}, which no table of ADR 0114 names")
