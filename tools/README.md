@@ -276,6 +276,34 @@ Special concerns: loads `asset_gate.py` from the tree (it is not on `sys.path` a
 of its `test_companions` function breaks this call; no writes; no network. See also `AddTestCompanionsTests` in
 `test_test.py` and hams_com's `asset_gate_test_companions`.
 
+### `[@ANCHOR: test:default_worktree_trees]` `default_worktree_trees(base_dir, environ=None)`
+
+Purpose: makes a run from a worktree use that worktree's own pair of repositories. Run from `.../hams_com` (or `hams_open`), it sets
+`HAMS_OPEN_TREE` (or `HAMS_COM_TREE`) to the sibling directory beside it, unless the variable is already set (an explicit choice wins).
+Without it a linked worktree resolved the sibling through its git directory to the shared `~/workspace` checkout, and the run tested that
+checkout's code. `main()` calls it first and prints `test.py trees: hams_com=... hams_open=...` as the first output line.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `base_dir` | str | The checkout under test (the working directory). Only a directory named `hams_com` or `hams_open` is paired. |
+| `environ` | mapping or `None` | Environment to read and set; `None` means `os.environ` (set in place, so the re-exec'd phases inherit it). |
+
+Returns `(com_tree, open_tree)` paths, `None` for one that does not exist. No errors raised; no locks; writes only `environ`.
+
+### `[@ANCHOR: test:link_missing_cloudflared_ffi]` `link_missing_cloudflared_ffi(open_tree, home=None, workspace=None)`
+
+Purpose: the gitignored `daemons/cloudflared-ffi/libcloudflared.so` is missing in every fresh worktree, so the cloudflare tests errored.
+When `open_tree` has `daemons/cloudflared-ffi/main.go` but no library, copies the newest host-architecture build found in
+`~/.cache/hams-lint/work/*/hams_open/...`, `~/workspace/tmp/gate_*/hams_open/...` or the shared `~/workspace/hams_open/...`, and `main()` prints
+the source. An existing library (even a stale one) is never replaced; `check_cloudflared_ffi_library()` still reports a stale or foreign one.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `open_tree` | str or `None` | The hams_open checkout; `None` does nothing. |
+| `home`, `workspace` | str or `None` | Where to search; default `~` and `~/workspace`. |
+
+Returns the source path that was copied, or `None` (nothing needed, or no fitting build: the later ffi check reports it). A copy of about 10 MB with a fresh mtime, so it is not "older than main.go".
+
 ### `[@ANCHOR: test:anchor_scan_sibling_dir]` `anchor_scan_sibling_dir(base_dir, other_repo_name, environ=None)`
 
 Purpose: finds the other repository's checkout (hams_open for a hams_com run, and the reverse) so the pre-flight anchor scan
