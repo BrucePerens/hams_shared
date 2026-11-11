@@ -1,7 +1,5 @@
 [
   "ham_classifieds/tests/consent_fixture.py::enroll_if_consent_installed",
-  "ham_communications_consent/tests/consent_flow_helper.py::make_minor",
-  "ham_communications_consent/tests/consent_flow_helper.py::prepare_for_checkout",
   "ham_demo_mode/tests/fixtures.py::DemoModeFixtures.demo_off",
   "ham_demo_mode/tests/fixtures.py::DemoModeFixtures.demo_on",
   "ham_demo_mode/tests/fixtures.py::DemoModeFixtures.use_conf",
