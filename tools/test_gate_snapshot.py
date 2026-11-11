@@ -272,6 +272,15 @@ class CreateTests(SnapshotTestBase):
         self.assertTrue(all(isinstance(v, (int, float)) and v >= 0 for v in data.values()))
 
     # Tests [@ANCHOR: gate_snapshot:make_shards]
+    def test_bundled_seconds_balance_four_shards_to_the_longest_single_module(self):
+        path = os.path.join(os.path.dirname(os.path.abspath(gs.__file__)), "gate_module_seconds.json")
+        with open(path, encoding="utf-8") as handle:
+            seconds = json.load(handle)
+        loads = [sum(seconds[m] for m in s) for s in gs.make_shards(sorted(seconds), 4, None, seconds)]
+        self.assertLessEqual(max(loads), max(max(seconds.values()), 1.1 * sum(seconds.values()) / 4))
+        self.assertGreaterEqual(min(loads), 0.75 * max(loads))
+
+    # Tests [@ANCHOR: gate_snapshot:make_shards]
     def test_shards_cover_every_module_once_and_keep_old_placement(self):
         modules = ["a", "b", "c", "d", "e"]
         dealt = gs.make_shards(modules, 2)

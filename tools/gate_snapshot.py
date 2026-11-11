@@ -416,7 +416,7 @@ def verify_snapshot(gate_dir, fetch=True, environ=None, cargo_target_dir=None):
 
 
 def _create_snapshot_once(workspace=DEFAULT_WORKSPACE, parent=None, shards=DEFAULT_SHARDS, shards_file=None, fetch=True,
-                    build=True, cargo_target_dir=None, run=None, out=print, hostname=None, balance=False):
+                    build=True, cargo_target_dir=None, run=None, out=print, hostname=None, balance=None):
     """One attempt of `create_snapshot`; raises `SnapshotBehind` when the finished snapshot verifies except that origin/main moved on."""
     refuse_production(hostname)
     parent = os.path.abspath(parent or os.path.join(workspace, "tmp"))
@@ -443,6 +443,8 @@ def _create_snapshot_once(workspace=DEFAULT_WORKSPACE, parent=None, shards=DEFAU
             raise SnapshotError("%s: cannot read the shard file: %s" % (shards_file, error)) from error
         if not (isinstance(previous, list) and all(isinstance(s, list) for s in previous)):
             raise SnapshotError("%s: expected a JSON list of lists of module names" % shards_file)
+    if balance is None:  # round_gate.py calls with no arguments and used to get round-robin shards: 4043 s vs 834 s in round 14
+        balance = not shards_file
     seconds = None
     if balance:
         with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "gate_module_seconds.json"), encoding="utf-8") as handle:
@@ -479,7 +481,7 @@ def _create_snapshot_once(workspace=DEFAULT_WORKSPACE, parent=None, shards=DEFAU
 
 # [@ANCHOR: gate_snapshot:create_snapshot]
 def create_snapshot(workspace=DEFAULT_WORKSPACE, parent=None, shards=DEFAULT_SHARDS, shards_file=None, fetch=True,
-                    build=True, cargo_target_dir=None, run=None, out=print, hostname=None, balance=False):
+                    build=True, cargo_target_dir=None, run=None, out=print, hostname=None, balance=None):
     """Builds the gate tree for the current `origin/main` commits and returns its manifest (also written to
     `<gate>/gate_snapshot.json`, with `gate_shards.json` beside it). Steps: refuse on a production host; fetch and read the
     three commits; make the worktrees; build every artifact (unless `build` is False); choose the shards (from `shards_file`,
