@@ -380,12 +380,14 @@ def shard_command(trees, shard, log_directory, relay_binary, extra_env=None, tag
     invoking user (the full pipeline: `test.py` takes a slot, a private network namespace and its own databases), at `nice -n 10`,
     with `HAMS_OPEN_TREE` and the relay binary set, queued (`--wait`), and with `HAMS_TEST_BATCH=off`: a snapshot run tests exactly
     the snapshot's commits, so it must not join a combined batch of other branches. No `sudo -u odoo`, no `HAMS_ISOLATED_NS`, no
-    `HAMS_CI_LOAD_GATE_RATIO` (those stall runs). Returns the string. Pure."""
+    `HAMS_CI_LOAD_GATE_RATIO` (those stall runs). `--preflight-done`: the lint gate runs the anchor scan and linters on its own; a
+    lint-red snapshot must still run its tests (the first real canary, 2026-11-10, ran no test at all: every shard stopped in test.py's
+    pre-flight on a main that was lint-red). Returns the string. Pure."""
     env = {OPEN_TREE_ENV: shlex.quote(trees.open), RELAY_BIN_ENV: shlex.quote(relay_binary), "HAMS_TEST_BATCH": "off"}
     env.update(extra_env or {})
     assignments = " ".join("%s=%s" % (k, v) for k, v in env.items())
     return (
-        "cd %s && source %s && %s nice -n 10 python3 hams_shared/tools/test.py --wait -l %s -u %s%s"
+        "cd %s && source %s && %s nice -n 10 python3 hams_shared/tools/test.py --wait --preflight-done -l %s -u %s%s"
         % (shlex.quote(trees.com), ENV_FILE, assignments, shlex.quote(log_directory), ",".join(shard),
            " --test-tags %s" % shlex.quote(tags) if tags else "")
     )
