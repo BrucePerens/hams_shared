@@ -402,6 +402,45 @@ def _patch_ban_errors(filename):
         errors, _warnings = scan_file(str(full_path), is_odoo_module=False)
     return [e for e in errors if "Native patch decorators" in e]
 
+def _patch_ban_hits(source):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        full_path = Path(tmpdir) / "mod" / "tests" / "test_example.py"
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        full_path.write_text(source, encoding="utf-8")
+        errors, _warnings = scan_file(str(full_path), is_odoo_module=False)
+    return [e for e in errors if "Native patch decorators" in e]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "    r = session.patch(url, json=data)\n",
+        "    r = self.session.patch(url, json=data)\n",
+        "    r = requests.patch(url)\n",
+    ],
+)
+def test_patch_ban_ignores_http_patch_method_calls(line):
+    assert _patch_ban_hits("def test_x(self):\n" + line) == []
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "    with patch('a.b'):\n        pass\n",
+        "    with patch.object(A, 'm'):\n        pass\n",
+        "    with mock.patch('a.b'):\n        pass\n",
+        "    with unittest.mock.patch('a.b'):\n        pass\n",
+        "    with mock.patch.object(A, 'm'):\n        pass\n",
+    ],
+)
+def test_patch_ban_still_flags_mock_patching(line):
+    assert _patch_ban_hits("def test_x(self):\n" + line) != []
+
+
+@pytest.mark.parametrize("deco", ["@patch('a.b')", "@mock.patch('a.b')", "@unittest.mock.patch('a.b')"])
+def test_patch_ban_still_flags_patch_decorators(deco):
+    assert _patch_ban_hits(deco + "\ndef test_x(self, m):\n    pass\n") != []
+
 
 def test_patch_ban_exempts_a_top_level_daemon_test():
     errors = _patch_ban_errors("daemons/au_callsign_sync/test_au_callsign_sync.py")
