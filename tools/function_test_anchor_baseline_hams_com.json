@@ -1,5 +1,4 @@
 [
-  "ham_forum_extension/tests/consent_helper.py::grant_comm_consent_if_installed",
   "ham_training/tests/verify_sanitizer.py::main",
   "ham_training/tests/verify_story_components.py::main"
 ]
