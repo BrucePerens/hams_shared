@@ -3430,7 +3430,7 @@ Purpose: classify a job. Returns `"exited"` (an exit code was recorded; it has p
 
 ### `[@ANCHOR: agent_procs:forward_signal]` `forward_signal(holder, signum, _frame)`
 
-Purpose: the wrapper's signal handler (installed with `functools.partial(forward_signal, holder)` for SIGTERM, SIGINT, SIGHUP). `holder[0]` is the `Popen` of the command or `None`; the signal is passed to the command if it still runs, errors from a command that just ended are ignored. The wrapper itself keeps running, so it always records the exit code. Runs in signal-handler context; touches no lock.
+Purpose: the wrapper's signal handler (installed with `functools.partial(forward_signal, holder)` for every signal in `ALLOWED_SIGNALS`: TERM, INT, HUP, QUIT, USR1, USR2). `holder[0]` is the `Popen` of the command or `None`; the signal is passed to the command if it still runs, errors from a command that just ended are ignored. The wrapper itself keeps running, so it always records the exit code. Runs in signal-handler context; touches no lock.
 
 ### `[@ANCHOR: agent_procs:wrapper_main]` `wrapper_main(name, argv, directory=None)`
 
@@ -3472,6 +3472,10 @@ Order: read the record; find members by group and session (none: "not running", 
 ### `[@ANCHOR: agent_procs:authorize_kill]` `authorize_kill(info, start_ticks, cwd_under, directory=None)`
 
 Purpose: the identity proof for `kill_pid`. Returns `"recorded job"` (a record names this pid and start time), `"start time confirmed"` (the caller's `start_ticks` equals the process's) or `"cwd under <path>"`. `start_ticks` is read by `parse_start_time`. Raises `ProcError` code 3 when the pid now belongs to a later process (reused) or when there is no proof at all, code 2 for a start time that cannot be this pid.
+
+### `[@ANCHOR: agent_procs:signal_same_process]` `signal_same_process(pid, start_ticks, signum)`
+
+Purpose: the one place `kill_pid` sends a signal. Opens a pidfd for `pid`, re-checks through `pid_alive` that it is still the process with start time `start_ticks`, then `signal.pidfd_send_signal`, so a pid reused between the last /proc read and the signal cannot be hit. Falls back to check-then-`os.kill` where pidfds do not exist. Arguments: `pid` int, `start_ticks` int from /proc (the start time recorded when the process was verified), `signum` a signal number. Returns nothing. Raises `ProcessLookupError` when the process is gone or is a different one. No locks, no files.
 
 ### `[@ANCHOR: agent_procs:kill_pid]` `kill_pid(pid, start_ticks=None, cwd_under=None, grace=10, force=False, owner_checked=False, sig="TERM", out=sys.stdout, directory=None, sleep=..., clock=...)`
 
