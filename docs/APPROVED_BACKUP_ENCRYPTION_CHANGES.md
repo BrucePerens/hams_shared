@@ -10,7 +10,6 @@ Format, one line per approval (the date is Bruce's, real, and not in the future)
     - <file path or glob> | <rules: cipher, stanza, kopia-repo, keygen, secret-write, or *> | approved by Bruce on YYYY-MM-DD | <why>
 
 Add an entry only with Bruce's own words in the pull request; the reviewer checks them. Agents never add one on their own.
-The Claude Code hook `tools/claude_hooks/guard_backup_secrets.py` separately stops agents from touching the live keys on any host.
 
 ## Approvals
 
