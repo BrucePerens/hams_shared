@@ -66,7 +66,7 @@ a download is trusted only through hams.com's reviewed mirror with a checked has
 | hidapi | macOS Mercury and Direwolf, vendored in the Mercury source tree | as in the Mercury commit | BSD/GPL | no |
 | libopus | Opus codec through the `opus` crate | crate 0.4 (vendored Opus build, see `Cargo.toml`) | BSD | via cargo |
 | RADE / FreeDV (`rade_c`) | FreeDV RADE codec | vendored in `daemons/hams_local_relay/rade_c` | see its LICENSE | no |
-| Transformers.js | the console's voice and translation, served by hams.com | `@xenova/transformers` 2.16.0 (ONNX runtime wasm files) | Apache-2.0 | no |
+| Transformers.js | the console's voice and translation, served by hams.com | `@xenova/transformers` 2.16.0 (ONNX runtime wasm files) | Apache-2.0 | yes (`huggingface/transformers.js`, release 2.16.0; held, see `dependency_watch.json`) |
 | Whisper tiny, NLLB | console speech-to-text and translation models, served by hams.com | `Xenova/whisper-tiny`, NLLB (see `ml_assets.rs`) | MIT / CC-BY-NC (check before any change) | no |
 
 ### System tools and services the relay calls or depends on (not pinned)
@@ -117,7 +117,7 @@ The device worker (`device_worker_launch.rs`) is the one launch whose program is
 `HAMS_LOCAL_RELAY_DEVICE_WORKER_COMMAND` (unset means nothing starts), so the file is in `DYNAMIC_LAUNCH_FILES`.
 
 ## Known gaps (to-dos)
-- hidapi, RADE, Transformers.js and the model files have no upstream check.
+- hidapi (vendored in the Mercury tree, follows its pin), RADE (`rade_c` was copied in whole with no recorded upstream commit, so there is nothing honest to pin) and the model files (Hugging Face repositories, not GitHub releases) have no upstream check.
 - Inno Setup, MinGW-w64, wine and the container images are not pinned beyond what the release preflight
   prints; record the exact versions the next release uses.
 - Pat is not installable on macOS; the mirror has no macOS build yet.

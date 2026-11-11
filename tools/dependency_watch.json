@@ -81,5 +81,16 @@
     "pinned": "v19.7.0",
     "pinned_via": "hams_com macOS Direwolf static build (PortAudio source pa_stable_v190700_20210406.tgz, SHA-256 47efbf42c77c19a05d22e627d42873e991ec0c1357219c0d74ce6a2948cb2def, see ADR 0114 libraries table)",
     "notes": "Added 2026-11-09 (ADR 0114 known gap; to-do external-programs-inventory-enforcement-and-watch-gaps item 4). `gh api repos/PortAudio/portaudio/releases/latest` on that day: v19.7.0, identical to the pin."
+  },
+  "transformers-js": {
+    "repo": "huggingface/transformers.js",
+    "mode": "release",
+    "pinned": "2.16.0",
+    "pinned_via": "the console's ONNX runtime wasm files and @xenova/transformers 2.16.0 served by hams.com (ADR 0114 libraries table)",
+    "hold": {
+      "reason": "Added 2026-11-11 with upstream at 4.3.2. Moving from 2.16.0 to 4.x is a package rename (@xenova/transformers to @huggingface/transformers) and an API change for the console's speech-to-text and translation workers, and the Whisper and NLLB model files were validated against 2.16.0; an upgrade needs its own change and a browser test pass. Held at 2.16.0 until then.",
+      "until": "2027-02-08"
+    },
+    "notes": "Added 2026-11-11 (ADR 0114 known gap; to-do external-programs-inventory-enforcement-and-watch-gaps item 4). `gh api repos/huggingface/transformers.js/releases/latest` that day: 4.3.2 (tag 2.16.0 exists, so the pin is comparable). Renew or bump the hold before it expires."
   }
 }
