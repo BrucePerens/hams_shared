@@ -90,6 +90,7 @@ daemons/hams_local_relay/docs/stories/relay_deep_scan_own_ports.md
 daemons/hams_local_relay/docs/stories/relay_digital_decoder.md
 daemons/hams_local_relay/docs/stories/relay_direwolf_and_clock.md
 daemons/hams_local_relay/docs/stories/relay_explicit_state_paths.md
+daemons/hams_local_relay/docs/stories/relay_function_anchors_3.md
 daemons/hams_local_relay/docs/stories/relay_function_anchors_5.md
 daemons/hams_local_relay/docs/stories/relay_function_anchors_6.md
 daemons/hams_local_relay/docs/stories/relay_function_anchors_7.md
