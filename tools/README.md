@@ -3746,8 +3746,9 @@ Cost: reads every byte; about 0.5 s for the 45 modules of the `parking` closure 
 ### `[@ANCHOR: tools:template_db_tests_define_models]` `tests_define_models(module_dirs, names)`
 
 Purpose: finds modules whose tests define ORM models. Such a model's table is only created when the module is installed with tests enabled, so a
-template built without tests would lack it. Returns a sorted-by-module list of names (empty = the key may ignore test files). A heuristic: a
-file under `tests/` that mentions `models.Model`, `TransientModel` or `AbstractModel` and has an `_name =` line.
+template built without tests would lack it. Returns a sorted-by-module list of names (empty = the key may ignore test files). Found by parsing
+each file under `tests/`: a class with a `_name =` assignment (any base class or import spelling), or a class with `_inherit =` plus a
+`fields.X(...)` attribute (a stored field added by a test). A file that does not parse counts as an offender.
 
 ### `[@ANCHOR: tools:template_db_key]` `TemplateKey`
 

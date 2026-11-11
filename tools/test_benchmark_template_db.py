@@ -183,6 +183,17 @@ class SourceTreeTests(unittest.TestCase):
         write(os.path.join(self.root, "lib", "tests", "models.py"), "# models.Model is mentioned only in a comment\n")
         self.assertEqual(b.tests_define_models(self.dirs, ["lib"]), [])
 
+    def test_other_spellings_and_stored_field_extensions_are_reported(self):
+        path = os.path.join(self.root, "lib", "tests", "models.py")
+        write(path, "from odoo.models import Model as M\nclass T(M):\n    _name = 'x.t'\n")
+        self.assertEqual(b.tests_define_models(self.dirs, ["lib"]), ["lib"])
+        write(path, "from odoo import models, fields\nclass T(models.Model):\n    _inherit = 'res.partner'\n    extra = fields.Char()\n")
+        self.assertEqual(b.tests_define_models(self.dirs, ["lib"]), ["lib"])
+        write(path, "from odoo import models\nclass T(models.Model):\n    _inherit = 'res.partner'\n    def f(self):\n        return 1\n")
+        self.assertEqual(b.tests_define_models(self.dirs, ["lib"]), [])
+        write(path, "def broken(:\n")
+        self.assertEqual(b.tests_define_models(self.dirs, ["lib"]), ["lib"])
+
 
 def sample_key(**changes):
     fields = dict(modules=("base", "app"), source_hash="aa", odoo_version="19.0-20261107", postgres_major="18", vector_version="0.8.1", options=("demo",), crypto_key_fingerprint="ff")

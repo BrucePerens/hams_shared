@@ -157,29 +157,46 @@ def hash_module_sources(module_dirs, names, include_tests=True):
 
 # [@ANCHOR: tools:template_db_tests_define_models]
 def tests_define_models(module_dirs, names):
-    """Module names whose `tests` directory defines an ORM model (`_name = ` in a class deriving from `models.*Model`).
+    """Module names whose `tests` directory defines an ORM model or adds a stored field to one.
 
-    Such a model's table is created only when the module is installed or updated with tests enabled, so a template built
-    without tests would lack it and a plain-load clone could not run those tests. An empty result is what lets the key
-    ignore test files."""
+    Such a model's table or column is created only when the module is installed or updated with tests enabled, so a template built
+    without tests would lack it and a plain-load clone could not run those tests. Found by parsing each test file: a class with a
+    `_name = ...` assignment (whatever spelling the base class or import has), or a class with `_inherit = ...` that also assigns a
+    `fields.<Type>(...)` attribute. A file that does not parse counts as an offender (it cannot be shown clean). An empty result is
+    what lets the key ignore test files."""
     offenders = []
-    pattern = re.compile(r"^\s*_name\s*=", re.MULTILINE)
     for name in sorted(names):
         tests_dir = os.path.join(module_dirs[name], "tests")
+        found = False
         for current, _dirs, files in os.walk(tests_dir):
             for filename in files:
-                if not filename.endswith(".py"):
-                    continue
-                with open(os.path.join(current, filename), encoding="utf-8", errors="replace") as handle:
-                    text = handle.read()
-                if "models.Model" in text or "models.TransientModel" in text or "models.AbstractModel" in text:
-                    if pattern.search(text):
-                        offenders.append(name)
-                        break
-            else:
-                continue
-            break
+                if filename.endswith(".py"):
+                    with open(os.path.join(current, filename), encoding="utf-8", errors="replace") as handle:
+                        found = found or _defines_model(handle.read())
+        if found:
+            offenders.append(name)
     return offenders
+
+
+def _defines_model(source):
+    """True when the Python `source` has a class that declares `_name`, or `_inherit` together with a `fields.X(...)` attribute."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return True
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        targets = set()
+        has_field = False
+        for item in node.body:
+            if isinstance(item, ast.Assign):
+                targets.update(t.id for t in item.targets if isinstance(t, ast.Name))
+                call = item.value
+                has_field = has_field or (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name) and call.func.value.id == "fields")
+        if "_name" in targets or ("_inherit" in targets and has_field):
+            return True
+    return False
 
 
 # [@ANCHOR: tools:template_db_key]
