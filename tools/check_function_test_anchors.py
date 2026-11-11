@@ -68,6 +68,10 @@ EXCLUDE_DIRS = {
     # of daemons/'s own gaps inside this one vendored subtree, none of
     # them real first-party code needing Stage 1 coverage.
     "cloudflared",
+    # ratet27_captures: throwaway one-off analysis scripts for the RATE T27 captures
+    # (daemons/ham_digital_modes/docs/references/). Bruce decided 2026-11-11 to exclude them
+    # from the function anchor scan rather than anchor ~100 functions that will not be reused.
+    "ratet27_captures",
 }
 
 DEFAULT_BASELINE_FILENAME = "function_test_anchor_baseline.json"

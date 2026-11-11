@@ -289,6 +289,18 @@ class ScanTreeAndBaselineTests(unittest.TestCase):
         gaps = cfta.scan_tree(self.tmp)
         self.assertEqual(gaps, {})
 
+    def test_ratet27_captures_directory_is_not_scanned(self):
+        _write(
+            os.path.join(
+                self.tmp, "daemons", "ham_digital_modes", "docs", "references",
+                "ratet27_captures", "analyze_amplitude_sweep.py",
+            ),
+            "def golay_decode():\n    pass\n",
+        )
+        _init_git_repo(self.tmp)
+        gaps = cfta.scan_tree(self.tmp)
+        self.assertEqual(gaps, {})
+
     def test_a_fixture_recording_script_under_tests_is_not_scanned(self):
         _write(
             os.path.join(self.tmp, "daemons", "x", "tests", "usb_fixtures", "capture.py"),
