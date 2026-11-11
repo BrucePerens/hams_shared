@@ -81,6 +81,11 @@ ANCHOR_TAG_START = "[@ANCHOR"
 CODE_ISLANDS_UNDER_DOCS = [
     "docs/patent_disclosures/filed_applications/_pipeline",
     "docs/proposals/patent_disclosures/filed_applications/_pipeline",
+    # Hand-run harness scripts that carry ADR 0090 anchors and tests of their own: the Raspberry
+    # Pi qualification scripts (docs/proposals/*.py) and the Pacificon deck builder. Their
+    # Markdown files are still scanned as docs; only these directories' code is added.
+    "docs/proposals",
+    "docs/talks/pacificon",
 ]
 
 # Directories every os.walk below prunes before descending -- never real, first-party source or
