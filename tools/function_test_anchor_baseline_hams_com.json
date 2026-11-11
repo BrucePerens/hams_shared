@@ -233,7 +233,6 @@
   "ham_club_management/wizard/club_dedupe_wizard.py::HamClubDedupeLine._compute_name",
   "ham_club_management/wizard/club_dedupe_wizard.py::HamClubDedupeLine._compute_tier_rank",
   "ham_club_management/wizard/club_dedupe_wizard.py::HamClubDedupeLine._unsafe_reason",
-  "ham_club_management/wizard/club_dedupe_wizard.py::HamClubDedupeWizard._check_staff",
   "ham_club_management/wizard/club_dedupe_wizard.py::HamClubDedupeWizard._compute_counts",
   "ham_club_management/wizard/club_dedupe_wizard.py::HamClubDedupeWizard._reopen",
   "ham_communications_consent/tests/consent_flow_helper.py::make_minor",
