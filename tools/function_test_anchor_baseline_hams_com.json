@@ -1,10 +1,4 @@
 [
-  "content_security_policy/controllers/developer_pages.py::ProfilingDeveloperPages.profile_config",
-  "content_security_policy/controllers/developer_pages.py::ProfilingDeveloperPages.speedscope",
-  "content_security_policy/controllers/developer_pages.py::WebClientDeveloperPages.test_suite",
-  "content_security_policy/controllers/developer_pages.py::WebClientDeveloperPages.unit_tests_suite",
-  "content_security_policy/models/ir_http.py::IrHttp._strip_debug_from_anonymous_error",
-  "content_security_policy/models/security_utils.py::ZeroSudoSecurityUtils._get_param_read_whitelist",
   "daemons/adif_ingress/main.py::run",
   "daemons/amsat_tle_sync/main.py::count_derived",
   "daemons/au_acma_sync/main.py::count_derived",
