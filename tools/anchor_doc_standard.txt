@@ -81,6 +81,7 @@ daemons/hams_auth_gateway/fuzz/fuzz_targets
 daemons/hams_auth_gateway/tests
 daemons/hams_data_relay/README.md
 daemons/hams_event_enrichment_mcp
+daemons/hams_local_relay/docs/stories/relay_allstar_iax2_call.md
 daemons/hams_local_relay/docs/stories/relay_bridge_connection_handlers.md
 daemons/hams_local_relay/docs/stories/relay_bundle_store.md
 daemons/hams_local_relay/docs/stories/relay_certificate_enrollment_and_saved_radios.md
