@@ -94,6 +94,7 @@ daemons/hams_local_relay/docs/stories/relay_function_anchors_5.md
 daemons/hams_local_relay/docs/stories/relay_function_anchors_6.md
 daemons/hams_local_relay/docs/stories/relay_function_anchors_7.md
 daemons/hams_local_relay/docs/stories/relay_function_anchors_8.md
+daemons/hams_local_relay/docs/stories/relay_function_anchors_winkeyer_daemon.md
 daemons/hams_local_relay/docs/stories/relay_host_tuning_and_privilege.md
 daemons/hams_local_relay/docs/stories/relay_keying_execution.md
 daemons/hams_local_relay/docs/stories/relay_log_spot_setting.md
