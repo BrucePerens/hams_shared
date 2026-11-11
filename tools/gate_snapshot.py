@@ -287,14 +287,70 @@ def discover_modules(trees):
 
 
 # [@ANCHOR: gate_snapshot:make_shards]
-def make_shards(modules, count, previous=None, seconds=None):
+def make_shards(modules, count, previous=None, seconds=None, splits=None):
     """Splits `modules` into `count` shards (lists, in `gate_shards.json` form). With `previous` (a list of lists from an
     earlier file) every module keeps its old shard, modules that no longer exist are dropped, and a new module goes to the
     smallest shard; otherwise the sorted modules are dealt round robin. Every module appears in exactly one shard; a shard
     may end up empty only when there are fewer modules than shards (it is then omitted).
     With `seconds` ({module: measured test seconds}, see gate_module_seconds.json) the shards are balanced instead: longest
     module first onto the currently lightest shard (a module without a measurement counts as the median), `previous` is
-    ignored. Only WHERE a module runs changes, never whether: each module is still in exactly one shard."""
+    ignored. Only WHERE a module runs changes, never whether. With `splits` too (see `make_split_shards`) a module listed
+    there may appear in several shards, each running part of its test classes. Returns the module lists only."""
+    return make_split_shards(modules, count, previous, seconds, splits)[0]
+
+
+# [@ANCHOR: gate_snapshot:make_split_shards]
+def make_split_shards(modules, count, previous=None, seconds=None, splits=None):
+    """`make_shards` that also returns, per shard, the `--test-tags` selector it needs (None when every module in the shard
+    runs whole): `(shards, tags)`. `splits` is `{module: {TestClass: seconds}}` (gate_module_splits.json): the one module that
+    is bigger than a fair shard (theme_hams, two browser contrast classes) is balanced as several parts, one per listed class
+    plus the rest of the module (its measured seconds minus the classes'), so no shard is pinned by one module. The parts of a
+    module that land in the same shard are run together again as the whole module; a split module's tags are
+    `/module:Class` per class part and `/module,-/module:A` (minus the class parts that run in other shards) for the rest part, so the parts together run every
+    test of the module exactly once."""
+    if not (seconds and splits):
+        shards = make_shards_plain(modules, count, previous, seconds)
+        return shards, [None] * len(shards)
+    units = []  # (module, class or None for the whole module/rest, seconds)
+    split = {m: splits[m] for m in modules if m in splits and m in seconds}
+    known = sorted(seconds[m] for m in modules if m in seconds)
+    median = known[len(known) // 2] if known else 1.0
+    for module in modules:
+        if module in split:
+            for cls, sec in sorted(split[module].items()):
+                units.append((module, cls, float(sec)))
+            units.append((module, None, max(1.0, seconds[module] - sum(split[module].values()))))
+        else:
+            units.append((module, None, seconds.get(module, median)))
+    parts = [[] for _ in range(max(1, count))]
+    load = [0.0] * len(parts)
+    for unit in sorted(units, key=lambda u: (-u[2], u[0], u[1] or "")):
+        index = load.index(min(load))
+        parts[index].append(unit)
+        load[index] += unit[2]
+    shards, tags = [], []
+    for part in parts:
+        if not part:
+            continue
+        specs, partial = [], False
+        for module in sorted({u[0] for u in part}):
+            mine = [u for u in part if u[0] == module]
+            if module not in split or len(mine) == len(split[module]) + 1:
+                specs.append("/" + module)  # the whole module, or every part of it
+                continue
+            partial = True
+            here = {u[1] for u in mine}
+            if None in here:  # the rest part: the module minus the classes that run in other shards (Odoo subtracts excludes last)
+                specs += ["/" + module] + ["-/%s:%s" % (module, cls) for cls in sorted(split[module]) if cls not in here]
+            else:
+                specs += ["/%s:%s" % (module, cls) for cls in sorted(here)]
+        shards.append(sorted({u[0] for u in part}))
+        tags.append(",".join(specs) if partial else None)
+    return shards, tags
+
+
+def make_shards_plain(modules, count, previous=None, seconds=None):
+    """The one-module-one-shard dealing `make_shards` describes."""
     if seconds:
         known = sorted(seconds[m] for m in modules if m in seconds)
         median = known[len(known) // 2] if known else 1.0
@@ -319,7 +375,7 @@ def make_shards(modules, count, previous=None, seconds=None):
 
 
 # [@ANCHOR: gate_snapshot:shard_command]
-def shard_command(trees, shard, log_directory, relay_binary, extra_env=None):
+def shard_command(trees, shard, log_directory, relay_binary, extra_env=None, tags=None):
     """The exact shell command line that runs one shard: from the gate's hams_com tree, the test environment sourced, as the
     invoking user (the full pipeline: `test.py` takes a slot, a private network namespace and its own databases), at `nice -n 10`,
     with `HAMS_OPEN_TREE` and the relay binary set, queued (`--wait`), and with `HAMS_TEST_BATCH=off`: a snapshot run tests exactly
@@ -329,8 +385,9 @@ def shard_command(trees, shard, log_directory, relay_binary, extra_env=None):
     env.update(extra_env or {})
     assignments = " ".join("%s=%s" % (k, v) for k, v in env.items())
     return (
-        "cd %s && source %s && %s nice -n 10 python3 hams_shared/tools/test.py --wait -l %s -u %s"
-        % (shlex.quote(trees.com), ENV_FILE, assignments, shlex.quote(log_directory), ",".join(shard))
+        "cd %s && source %s && %s nice -n 10 python3 hams_shared/tools/test.py --wait -l %s -u %s%s"
+        % (shlex.quote(trees.com), ENV_FILE, assignments, shlex.quote(log_directory), ",".join(shard),
+           " --test-tags %s" % shlex.quote(tags) if tags else "")
     )
 
 
@@ -445,11 +502,14 @@ def _create_snapshot_once(workspace=DEFAULT_WORKSPACE, parent=None, shards=DEFAU
             raise SnapshotError("%s: expected a JSON list of lists of module names" % shards_file)
     if balance is None:  # round_gate.py calls with no arguments and used to get round-robin shards: 4043 s vs 834 s in round 14
         balance = not shards_file
-    seconds = None
+    seconds = splits = None
     if balance:
-        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "gate_module_seconds.json"), encoding="utf-8") as handle:
+        here = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(here, "gate_module_seconds.json"), encoding="utf-8") as handle:
             seconds = json.load(handle)
-    shard_lists = make_shards(discover_modules(trees), shards, previous, seconds)
+        with open(os.path.join(here, "gate_module_splits.json"), encoding="utf-8") as handle:
+            splits = json.load(handle)
+    shard_lists, shard_tags = make_split_shards(discover_modules(trees), shards, previous, seconds, splits)
     if not shard_lists:
         # No module found in either tree (a wrong checkout, an empty sparse tree): a snapshot with nothing to test would give the canary a vacuous green.
         raise SnapshotError("no Odoo module (no __manifest__.py at the root of %s or %s): there is nothing to test" % (trees.com, trees.open))
@@ -459,7 +519,7 @@ def _create_snapshot_once(workspace=DEFAULT_WORKSPACE, parent=None, shards=DEFAU
         log_directory = os.path.join(trees.parent, "logs", "shard%d" % number)
         os.makedirs(log_directory, exist_ok=True)
         os.chmod(log_directory, 0o755)  # the shard command runs as the invoking user; nobody else may replace the verdict files
-        commands.append(shard_command(trees, shard, log_directory, relay))
+        commands.append(shard_command(trees, shard, log_directory, relay, tags=shard_tags[number - 1]))
     manifest = {
         "version": MANIFEST_VERSION, "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "workspace": workspace,
         "trees": dataclasses.asdict(trees), "cargo_target_dir": cargo_target_dir, "shards": shard_lists, "commands": commands,
