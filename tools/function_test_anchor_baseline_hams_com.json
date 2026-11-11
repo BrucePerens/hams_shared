@@ -1,5 +1,4 @@
 [
-  "ham_classifieds/tests/consent_fixture.py::enroll_if_consent_installed",
   "ham_demo_mode/tests/fixtures.py::DemoModeFixtures.demo_off",
   "ham_demo_mode/tests/fixtures.py::DemoModeFixtures.demo_on",
   "ham_demo_mode/tests/fixtures.py::DemoModeFixtures.use_conf",
