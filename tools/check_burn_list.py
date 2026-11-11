@@ -403,7 +403,13 @@ GENERAL_ERROR_RULES = [
         # `(?:^|/)tools/` does not already cover this: it anchors to an exact "tools" path SEGMENT, and "devbox_tools" is one segment,
         # not "devbox" + "tools", so it never matched.
         r"^(?!.*daemons?/)(?!.*(?:^|/)ingest/)(?!.*(?:^|/)tools/)(?!.*(?:^|/)scripts/)(?!.*(?:^|/)\.github/self-hosted-runner/)(?!.*(?:^|/)devbox_tools/).*test_.*\.py$",
-        re.compile(r"(?:@(?:mock\.)?patch\b|\b(?:mock\.)?patch(?:\.object)?\s*\()"),
+        # Mock patching only: a bare `patch(`, `mock.patch(`, `unittest.mock.patch(`, `patch.object(`,
+        # or an `@patch` decorator. `(?<![\w.])` keeps an attribute call on any other
+        # object (an HTTP session's `session.patch(`, `requests.patch(`) from matching.
+        re.compile(
+            r"(?:@(?:(?:unittest\.)?mock\.)?patch\b"
+            r"|(?<![\w.])(?:(?:unittest\.)?mock\.)?patch(?:\.object)?\s*\()"
+        ),
         "CRITICAL ARCHITECTURE: Native patch decorators and context managers are forbidden. Use self.safe_patch() or self.safe_patch_object().",
     ),
     (
