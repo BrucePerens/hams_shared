@@ -512,6 +512,30 @@ def pid_alive(pid, start_ticks):
     return info is not None and info.start_ticks == start_ticks and info.state not in ("Z", "X")
 
 
+# [@ANCHOR: agent_procs:signal_same_process]
+def signal_same_process(pid, start_ticks, signum):
+    """Send `signum` to `pid` only if it is still the process that started at `start_ticks`, with no window for pid reuse.
+
+    Opens a pidfd (a handle that keeps naming that one process even if the number is reused), re-checks the start time
+    through it, then signals the handle. Where pidfds are unavailable (old kernel or Python) it checks and calls
+    `os.kill`. Raises `ProcessLookupError` when the process is gone or is a different one."""
+    try:
+        fd = os.pidfd_open(pid)
+    except ProcessLookupError:
+        raise
+    except (AttributeError, OSError):
+        if not pid_alive(pid, start_ticks):
+            raise ProcessLookupError(pid)
+        os.kill(pid, signum)
+        return
+    try:
+        if not pid_alive(pid, start_ticks):
+            raise ProcessLookupError(pid)
+        signal.pidfd_send_signal(fd, signum)
+    finally:
+        os.close(fd)
+
+
 # [@ANCHOR: agent_procs:job_state]
 def job_state(rec):
     """`"exited"` when the wrapper recorded an exit code, `"running"` when the recorded pid is alive with the recorded start
@@ -540,11 +564,11 @@ def wrapper_main(name, argv, directory=None):
     Waits for the line `go` on standard input (so the record exists before the command runs), runs `argv` with standard input
     from /dev/null and output inherited (the log), waits for it, and writes `exit_code` (128+N for death by signal N, 127 when
     the program was not found) and `ended_at` into the job's record when the record still names this process. Returns that
-    exit code. SIGTERM/SIGINT/SIGHUP are forwarded to the command and do not stop the wrapper."""
+    exit code. SIGTERM, SIGINT, SIGHUP, SIGQUIT, SIGUSR1 and SIGUSR2 (`ALLOWED_SIGNALS`) are forwarded to the command and do not stop the wrapper."""
     if sys.stdin.readline().strip() != "go":
         return 126
     holder = [None]
-    for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+    for signum in ALLOWED_SIGNALS.values():
         signal.signal(signum, functools.partial(forward_signal, holder))
     try:
         holder[0] = subprocess.Popen(argv, stdin=subprocess.DEVNULL)
@@ -845,7 +869,11 @@ def kill_pid(pid, start_ticks=None, cwd_under=None, grace=DEFAULT_GRACE, force=F
     if reason and not (owner_checked and how == "recorded job"):
         raise ProcError(f"REFUSED: pid {pid}: {reason}", EX_REFUSED)
     print(ps_line(info), file=out)
-    os.kill(pid, ALLOWED_SIGNALS[sig])
+    try:
+        signal_same_process(pid, info.start_ticks, ALLOWED_SIGNALS[sig])
+    except ProcessLookupError:
+        print(f"pid {pid} is gone or was reused before the signal (nothing sent)", file=out)
+        return EX_OK
     print(f"sent SIG{sig} to pid {pid} ({how})", file=out, flush=True)
     deadline = clock() + grace
     while pid_alive(pid, info.start_ticks) and clock() < deadline:
@@ -854,7 +882,10 @@ def kill_pid(pid, start_ticks=None, cwd_under=None, grace=DEFAULT_GRACE, force=F
         if not force:
             print(f"pid {pid} is still running after {grace:g}s; add --force to send SIGKILL to this pid", file=out)
             return EX_FAILED
-        os.kill(pid, signal.SIGKILL)
+        try:
+            signal_same_process(pid, info.start_ticks, signal.SIGKILL)
+        except ProcessLookupError:
+            return EX_OK
         print(f"sent SIGKILL to pid {pid} (same start time)", file=out, flush=True)
         deadline = clock() + 5
         while pid_alive(pid, info.start_ticks) and clock() < deadline:
