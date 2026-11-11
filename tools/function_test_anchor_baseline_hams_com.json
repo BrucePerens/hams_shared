@@ -219,8 +219,6 @@
   "daemons/hams_simulated_bots/wordlist_screen.py::load_configured_extra",
   "daemons/hams_ticket_triage_mcp/main.py::_run_git",
   "daemons/hams_ticket_triage_mcp/main.py::_truncate_description_for_listing",
-  "daemons/hams_turn/lab/chrome_pair.py::put",
-  "daemons/hams_turn/lab/chrome_pair.py::wait_file",
   "daemons/ised_canada_sync/main.py::count_derived",
   "daemons/noaa_swpc_sync/main.py::count_derived",
   "daemons/nz_rsm_sync/main.py::count_derived",
