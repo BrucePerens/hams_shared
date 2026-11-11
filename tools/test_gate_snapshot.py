@@ -280,6 +280,62 @@ class CreateTests(SnapshotTestBase):
         self.assertLessEqual(max(loads), max(max(seconds.values()), 1.1 * sum(seconds.values()) / 4))
         self.assertGreaterEqual(min(loads), 0.75 * max(loads))
 
+    @staticmethod
+    def _parts_run(module, classes, tag):
+        """The parts of a split module a --test-tags selector runs, the way Odoo reads it: includes, minus excludes."""
+        specs = tag.split(",")
+        out = {cls for cls in classes if "/%s:%s" % (module, cls) in specs}
+        if "/" + module in specs:
+            out |= {cls for cls in classes if "-/%s:%s" % (module, cls) not in specs}
+            out.add(None)  # the rest of the module
+        return out
+
+    # Tests [@ANCHOR: gate_snapshot:make_split_shards]
+    def test_the_bundled_split_balances_four_shards_within_1_2_of_the_mean(self):
+        here = os.path.dirname(os.path.abspath(gs.__file__))
+        with open(os.path.join(here, "gate_module_seconds.json"), encoding="utf-8") as handle:
+            seconds = json.load(handle)
+        with open(os.path.join(here, "gate_module_splits.json"), encoding="utf-8") as handle:
+            splits = json.load(handle)
+        shards, tags = gs.make_split_shards(sorted(seconds), 4, None, seconds, splits)
+        loads, seen = [], []
+        for shard, tag in zip(shards, tags):
+            load = sum(seconds[m] for m in shard if m not in splits or not tag)
+            for module in (m for m in shard if m in splits and tag):
+                run = self._parts_run(module, splits[module], tag)
+                seen += run
+                load += sum(splits[module][c] for c in run if c) + ((seconds[module] - sum(splits[module].values())) if None in run else 0)
+            loads.append(load)
+        self.assertLessEqual(max(loads), 1.2 * sum(seconds.values()) / 4)
+        self.assertEqual(sorted(seen, key=str), sorted(list(splits["theme_hams"]) + [None], key=str))
+
+    # Tests [@ANCHOR: gate_snapshot:make_split_shards]
+    def test_split_parts_together_run_every_test_of_the_module_exactly_once(self):
+        seconds = {"big": 100.0, "a": 30.0, "b": 30.0, "c": 20.0}
+        splits = {"big": {"TestX": 40.0, "TestY": 35.0}}
+        shards, tags = gs.make_split_shards(["a", "b", "big", "c"], 3, None, seconds, splits)
+        self.assertEqual(len(shards), 3)
+        seen = []
+        for shard, tag in zip(shards, tags):
+            if "big" in shard:
+                seen += self._parts_run("big", splits["big"], tag) if tag else ["whole"]
+        self.assertEqual(sorted(seen, key=str), sorted(["TestX", "TestY", None], key=str))
+        # plain make_shards lists each module's shards as module names, a split module in each shard that runs a part
+        self.assertEqual(sum("a" in s for s in gs.make_shards(["a", "b", "big", "c"], 3, None, seconds, splits)), 1)
+
+    # Tests [@ANCHOR: gate_snapshot:make_split_shards]
+    def test_parts_that_land_in_one_shard_run_as_the_whole_module(self):
+        shards, tags = gs.make_split_shards(["big"], 1, None, {"big": 100.0}, {"big": {"TestX": 40.0}})
+        self.assertEqual((shards, tags), ([["big"]], [None]))
+
+    # Tests [@ANCHOR: gate_snapshot:shard_command]
+    def test_shard_command_adds_test_tags_only_when_given(self):
+        trees = unittest.mock.Mock(com="/c", open="/o")
+        plain = gs.shard_command(trees, ["a"], "/l", "/r")
+        self.assertNotIn("--test-tags", plain)
+        tagged = gs.shard_command(trees, ["a"], "/l", "/r", tags="/a:TestX,/b")
+        self.assertTrue(tagged.endswith("-u a --test-tags /a:TestX,/b"))
+
     # Tests [@ANCHOR: gate_snapshot:make_shards]
     def test_shards_cover_every_module_once_and_keep_old_placement(self):
         modules = ["a", "b", "c", "d", "e"]
