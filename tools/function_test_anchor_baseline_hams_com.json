@@ -271,7 +271,6 @@
   "ham_onboarding/tests/otp_mail.py::latest_otp_code",
   "ham_onboarding/tests/otp_mail.py::otp_mails",
   "ham_repeater_dir/backfill/club_page_registry.py::_count",
-  "ham_repeater_dir/backfill/gateway_transport.py::backfill_transport",
   "ham_repeater_dir/backfill/repeater_adoption.py::_column_exists",
   "ham_repeater_dir/backfill/repeater_adoption.py::migrate_all",
   "ham_repeater_dir/wizard/ham_repeater_import_queue_wizard.py::HamRepeaterImportQueueWizard.default_get",
