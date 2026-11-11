@@ -2149,6 +2149,10 @@ Purpose: the shard split. Returns a list of lists of module names, each module i
 
 Purpose: the exact command line of one shard: `cd <gate hams_com> && source /etc/profile.d/hams_test_environment.sh && HAMS_OPEN_TREE=<gate hams_open> HAMS_CONSOLE_TEST_RELAY_BIN=<binary> HAMS_TEST_BATCH=off nice -n 10 python3 hams_shared/tools/test.py --wait -l <log directory> -u <modules>`. The full pipeline as the invoking user (a slot, a private network namespace, its own databases), queued (`--wait`) behind other runs; `HAMS_TEST_BATCH=off` because a snapshot run must test exactly the snapshot's commits and not join a batch of other branches. No `sudo -u odoo`, `HAMS_ISOLATED_NS` or `HAMS_CI_LOAD_GATE_RATIO`: those stalled runs. Pure; the string is run by a shell.
 
+### `[@ANCHOR: gate_snapshot:only_notes_ahead]` `only_notes_ahead(repo, snapshot, head)`
+
+Purpose: lets the snapshot check tolerate to-do notes pushed straight to hams_com main (Bruce, 2026-11-10). True when `snapshot` is an ancestor of `head` and `git diff --name-only snapshot head` lists only paths under `night_shift_todo/`, `night_shift_history/` or `night_shift_questions/`. Used by `verify_snapshot` for the hams_com tree only (so `create_snapshot`, `cycle_run.py` and `round_gate.py` accept it too); any other difference is still "behind origin/main".
+
 ### `[@ANCHOR: gate_snapshot:verify_snapshot]` `verify_snapshot(gate_dir, fetch=True, environ=None, cargo_target_dir=None)`
 
 Purpose: the refusal. Returns every problem listed above (empty: current and complete). `fetch` refreshes `origin/main` of the repositories first; `environ` is where `HAMS_OPEN_TREE` is read (default `os.environ`). Raises `SnapshotError` for an unreadable manifest. A stale
@@ -2157,7 +2161,7 @@ input is a returned problem, never an exception, so one call names all of them.
 ### `[@ANCHOR: gate_snapshot:create_snapshot]` `create_snapshot(workspace, parent, shards, shards_file, fetch, build, cargo_target_dir, run, out, hostname)`
 
 Purpose: `create`. Returns the manifest dictionary (`version`, `created`, `workspace`, `trees`, `cargo_target_dir`, `shards`, `commands`). Raises `SnapshotError` for a production host, a failed step, a malformed shard file, or a snapshot that does not verify afterwards.
-Takes no test slot and starts no test.
+If origin/main moved while the snapshot was built, it is made again at the new commits (re-fetch, up to 3 attempts; then the "behind origin/main" error). Takes no test slot and starts no test.
 
 ### `[@ANCHOR: gate_snapshot:prune_snapshots]` `prune_snapshots(parent, keep=1, out=print)`
 

@@ -334,12 +334,35 @@ def shard_command(trees, shard, log_directory, relay_binary, extra_env=None):
     )
 
 
+SNAPSHOT_TRIES = 3
+
+
+class SnapshotBehind(SnapshotError):
+    """The snapshot is complete but origin/main moved past it while it was built."""
+
+
+NOTE_PATHS = ("night_shift_todo/", "night_shift_history/", "night_shift_questions/")
+
+
+# [@ANCHOR: gate_snapshot:only_notes_ahead]
+def only_notes_ahead(repo, snapshot, head):
+    """True when `head` is ahead of `snapshot` (the snapshot is an ancestor of it) and every path that differs between them lies
+    under `night_shift_todo/`, `night_shift_history/` or `night_shift_questions/`: to-do notes pushed straight to hams_com main,
+    which change no code or test. Any other difference, or a snapshot that is not an ancestor of `head`, is False."""
+    ancestor = subprocess.run(["git", "-c", "safe.directory=" + repo, "-C", repo, "merge-base", "--is-ancestor", snapshot, head],
+                              capture_output=True, timeout=600)
+    if ancestor.returncode != 0:
+        return False
+    paths = _git(repo, "diff", "--name-only", snapshot, head, check=False).splitlines()
+    return bool(paths) and all(path.startswith(NOTE_PATHS) for path in paths)
+
+
 # [@ANCHOR: gate_snapshot:verify_snapshot]
 def verify_snapshot(gate_dir, fetch=True, environ=None, cargo_target_dir=None):
     """Every reason the snapshot in `gate_dir` must not be used; an empty list means it is current and complete.
 
     Checks, from `gate_snapshot.json`: each of the three trees exists, is at its recorded commit, has no uncommitted change,
-    and that commit is still `origin/main` of its repository (hams_shared: the gitlink of hams_open's `origin/main`), the last
+    and that commit is still `origin/main` of its repository (hams_com may be ahead by notes-only commits, see `only_notes_ahead`; hams_shared: the gitlink of hams_open's `origin/main`), the last
     after a fetch when `fetch`; `HAMS_OPEN_TREE` in `environ` names the gate's hams_open;
     the hams_com tree's `hams_shared` link resolves into the gate; every shard module has a manifest in a tree; and every
     artifact passes `artifact_problems`. Never raises for a stale input (that is a returned problem); raises `SnapshotError`
@@ -374,7 +397,7 @@ def verify_snapshot(gate_dir, fetch=True, environ=None, cargo_target_dir=None):
             problems.append("%s tree %s is at %s, the snapshot says %s" % (key, path, head[:12], commit[:12]))
         if _git(path, "status", "--porcelain", "--untracked-files=no", check=False):
             problems.append("%s tree %s has uncommitted changes" % (key, path))
-        if key in expected and expected[key] != commit:
+        if key in expected and expected[key] != commit and not (key == "com" and only_notes_ahead(mains["com"], commit, expected[key])):
             problems.append("%s is behind origin/main: snapshot %s, origin/main %s" % (key, commit[:12], expected[key][:12]))
     pointed = environ.get(OPEN_TREE_ENV)
     if not pointed:
@@ -392,15 +415,9 @@ def verify_snapshot(gate_dir, fetch=True, environ=None, cargo_target_dir=None):
     return problems
 
 
-# [@ANCHOR: gate_snapshot:create_snapshot]
-def create_snapshot(workspace=DEFAULT_WORKSPACE, parent=None, shards=DEFAULT_SHARDS, shards_file=None, fetch=True,
+def _create_snapshot_once(workspace=DEFAULT_WORKSPACE, parent=None, shards=DEFAULT_SHARDS, shards_file=None, fetch=True,
                     build=True, cargo_target_dir=None, run=None, out=print, hostname=None, balance=False):
-    """Builds the gate tree for the current `origin/main` commits and returns its manifest (also written to
-    `<gate>/gate_snapshot.json`, with `gate_shards.json` beside it). Steps: refuse on a production host; fetch and read the
-    three commits; make the worktrees; build every artifact (unless `build` is False); choose the shards (from `shards_file`,
-    a list of lists, when given); verify. Raises `SnapshotError` when any step fails or the finished snapshot does not verify
-    (nothing is returned for a stale one). The manifest holds `trees`, `workspace`, `cargo_target_dir`, `shards`, `commands`
-    and `created`. `run` and `hostname` are for tests."""
+    """One attempt of `create_snapshot`; raises `SnapshotBehind` when the finished snapshot verifies except that origin/main moved on."""
     refuse_production(hostname)
     parent = os.path.abspath(parent or os.path.join(workspace, "tmp"))
     cargo_target_dir = cargo_target_dir or os.environ.get("CARGO_TARGET_DIR") or os.path.expanduser("~/.cache/hams-test/gate/cargo-target")
@@ -450,11 +467,35 @@ def create_snapshot(workspace=DEFAULT_WORKSPACE, parent=None, shards=DEFAULT_SHA
         handle.write("\n")
     with open(os.path.join(trees.parent, SHARDS_NAME), "w", encoding="utf-8") as handle:
         json.dump(shard_lists, handle)
-    problems = verify_snapshot(trees.parent, fetch=False, environ={OPEN_TREE_ENV: trees.open, RELAY_BIN_ENV: relay},
+    problems = verify_snapshot(trees.parent, fetch=fetch, environ={OPEN_TREE_ENV: trees.open, RELAY_BIN_ENV: relay},
                                cargo_target_dir=cargo_target_dir)
+    message = "the new snapshot does not verify:\n  " + "\n  ".join(problems)
+    if problems and all("is behind origin/main" in problem for problem in problems):
+        raise SnapshotBehind(message)
     if problems:
-        raise SnapshotError("the new snapshot does not verify:\n  " + "\n  ".join(problems))
+        raise SnapshotError(message)
     return manifest
+
+
+# [@ANCHOR: gate_snapshot:create_snapshot]
+def create_snapshot(workspace=DEFAULT_WORKSPACE, parent=None, shards=DEFAULT_SHARDS, shards_file=None, fetch=True,
+                    build=True, cargo_target_dir=None, run=None, out=print, hostname=None, balance=False):
+    """Builds the gate tree for the current `origin/main` commits and returns its manifest (also written to
+    `<gate>/gate_snapshot.json`, with `gate_shards.json` beside it). Steps: refuse on a production host; fetch and read the
+    three commits; make the worktrees; build every artifact (unless `build` is False); choose the shards (from `shards_file`,
+    a list of lists, when given); verify. Raises `SnapshotError` when any step fails or the finished snapshot does not verify
+    (nothing is returned for a stale one). The manifest holds `trees`, `workspace`, `cargo_target_dir`, `shards`, `commands`
+    and `created`. `run` and `hostname` are for tests.
+    When origin/main moved while the snapshot was being built (merges during the build), the snapshot is made again at the new
+    commits: re-fetch, new trees, up to `SNAPSHOT_TRIES` attempts; if main still moves, the last attempt's `SnapshotError`
+    ("... is behind origin/main ...") is raised. Without `fetch` nothing can be seen to move, so there is one attempt."""
+    for attempt in range(1, SNAPSHOT_TRIES + 1):
+        try:
+            return _create_snapshot_once(workspace, parent, shards, shards_file, fetch, build, cargo_target_dir, run, out, hostname, balance)
+        except SnapshotBehind as error:
+            if attempt == SNAPSHOT_TRIES:
+                raise SnapshotError(str(error)) from error
+            out("gate_snapshot: origin/main moved during the snapshot (attempt %d of %d), making it again" % (attempt, SNAPSHOT_TRIES))
 
 
 # [@ANCHOR: gate_snapshot:prune_snapshots]

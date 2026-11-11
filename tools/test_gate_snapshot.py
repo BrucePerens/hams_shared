@@ -122,8 +122,9 @@ class SnapshotTestBase(unittest.TestCase):
 
     def create(self, **kwargs):
         kwargs.setdefault("build", True)
+        kwargs.setdefault("run", fake_run)
         return gs.create_snapshot(
-            self.ws.root, os.path.join(self.tmp.name, "gates"), 2, run=fake_run, out=self.out.append, hostname="devbox",
+            self.ws.root, os.path.join(self.tmp.name, "gates"), 2, out=self.out.append, hostname="devbox",
             cargo_target_dir=self.cargo, **kwargs
         )
 
@@ -197,6 +198,30 @@ class CreateTests(SnapshotTestBase):
             hostname="devbox", cargo_target_dir=self.cargo,
         )
         self.assertEqual(built, [])
+
+    def racing_run(self, moves):
+        """A build step that merges to hams_com main (a race) during the first `moves` builds."""
+        state = {"left": moves}
+
+        def run(command, cwd, env):
+            if state["left"]:
+                state["left"] -= 1
+                self.ws.advance("hams_com", "com", "race%d.txt" % state["left"])
+            return fake_run(command, cwd, env)
+        return run
+
+    # Tests [@ANCHOR: gate_snapshot:create_snapshot]
+    def test_a_merge_during_the_build_makes_the_snapshot_again_at_the_new_commit(self):
+        manifest = self.create(run=self.racing_run(1))
+        self.assertEqual(manifest["trees"]["com_commit"], git(self.ws.path("hams_com"), "rev-parse", "origin/main"))
+        self.assertTrue(any("moved during the snapshot" in line for line in self.out))
+
+    # Tests [@ANCHOR: gate_snapshot:create_snapshot]
+    def test_main_that_keeps_moving_fails_after_three_tries_with_the_behind_message(self):
+        with self.assertRaises(gs.SnapshotError) as caught:
+            self.create(run=self.racing_run(9))
+        self.assertIn("com is behind origin/main", str(caught.exception))
+        self.assertEqual(sum("moved during the snapshot" in line for line in self.out), 2)
 
     # Tests [@ANCHOR: gate_snapshot:create_snapshot]
     def test_create_refuses_on_the_production_host_and_for_a_missing_build(self):
@@ -282,6 +307,34 @@ class VerifyTests(SnapshotTestBase):
     def test_a_stale_hams_com_and_a_stale_shared_commit_are_refused(self):
         self.ws.advance("hams_com", "com")
         self.assertTrue(any("com is behind origin/main" in p for p in self.problems()))
+
+    def push_com(self, filename):
+        repo = self.ws.path("hams_com")
+        write(os.path.join(repo, filename), str(time.time()))
+        git(repo, "add", filename)
+        git(repo, "commit", "-q", "-m", "note")
+        git(repo, "push", "-q", "origin", "main")
+
+    # Tests [@ANCHOR: gate_snapshot:only_notes_ahead]
+    # Tests [@ANCHOR: gate_snapshot:verify_snapshot]
+    def test_a_com_main_ahead_by_notes_only_is_tolerated_and_any_other_path_is_not(self):
+        for name in ("night_shift_todo/a.md", "night_shift_history/b.md", "night_shift_questions/c.md"):
+            self.push_com(name)
+        self.assertEqual(self.problems(), [])
+        self.push_com("night_shift_other/d.md")
+        self.assertTrue(any("com is behind origin/main" in p for p in self.problems()))
+
+    # Tests [@ANCHOR: gate_snapshot:only_notes_ahead]
+    def test_notes_tolerance_is_only_for_hams_com_and_only_when_the_snapshot_is_an_ancestor(self):
+        com = self.ws.path("hams_com")
+        old = git(com, "rev-parse", "HEAD")
+        self.push_com("night_shift_todo/a.md")
+        new = git(com, "rev-parse", "HEAD")
+        self.assertTrue(gs.only_notes_ahead(com, old, new))
+        self.assertFalse(gs.only_notes_ahead(com, new, old))
+        self.assertFalse(gs.only_notes_ahead(com, new, new))
+        self.ws.advance("hams_open", "open")
+        self.assertTrue(any("open is behind origin/main" in p for p in self.problems()))
 
     # Tests [@ANCHOR: gate_snapshot:verify_snapshot]
     def test_a_moved_origin_is_not_seen_without_a_fetch_and_is_with_one(self):
