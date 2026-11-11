@@ -2985,6 +2985,55 @@ class AddTestCompanionsTests(unittest.TestCase):
         self.assertEqual((modules, note), (["events"], ""))
 
 
+class DefaultWorktreeTreesTests(unittest.TestCase):
+    # Tests [@ANCHOR: test:default_worktree_trees]
+    def test_the_sibling_beside_the_worktree_is_the_default_and_an_explicit_tree_wins(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            com, opn = os.path.join(tmp, "hams_com"), os.path.join(tmp, "hams_open")
+            os.makedirs(com)
+            os.makedirs(opn)
+            environ = {}
+            self.assertEqual(_test_runner.default_worktree_trees(com, environ), (com, opn))
+            self.assertEqual(environ, {"HAMS_OPEN_TREE": opn})
+            environ = {}
+            self.assertEqual(_test_runner.default_worktree_trees(opn, environ), (com, opn))
+            self.assertEqual(environ, {"HAMS_COM_TREE": com})
+            environ = {"HAMS_OPEN_TREE": "/elsewhere/hams_open"}
+            self.assertEqual(_test_runner.default_worktree_trees(com, environ), (com, "/elsewhere/hams_open"))
+            self.assertEqual(_test_runner.default_worktree_trees(tmp, {}), (None, None))
+
+
+class LinkMissingCloudflaredFfiTests(unittest.TestCase):
+    # Tests [@ANCHOR: test:link_missing_cloudflared_ffi]
+    def test_a_missing_library_is_copied_from_the_newest_host_matching_build_and_an_existing_one_is_kept(self):
+        with tempfile.TemporaryDirectory() as home:
+            workspace = os.path.join(home, "workspace")
+            lib = _test_runner.infrastructure.CFFI_LIB_NAME
+            tail = os.path.join("hams_open", "daemons", "cloudflared-ffi", lib)
+            old = os.path.join(workspace, "tmp", "gate_a_b", tail)
+            new = os.path.join(home, ".cache", "hams-lint", "work", "x", tail)
+            for path, mtime in ((old, 1000), (new, 2000)):
+                os.makedirs(os.path.dirname(path))
+                with open(path, "w") as handle:
+                    handle.write(path)
+                os.utime(path, (mtime, mtime))
+            tree = os.path.join(home, "wt", "hams_open")
+            ffi = os.path.join(tree, "daemons", "cloudflared-ffi")
+            os.makedirs(ffi)
+            with patch.object(_test_runner.infrastructure, "cffi_elf_machine", return_value="x"), \
+                    patch.object(_test_runner.infrastructure, "cffi_host_machine", return_value="x"):
+                self.assertIsNone(_test_runner.link_missing_cloudflared_ffi(tree, home, workspace))  # no main.go: not an FFI tree
+                open(os.path.join(ffi, "main.go"), "w").close()
+                self.assertEqual(_test_runner.link_missing_cloudflared_ffi(tree, home, workspace), new)
+                with open(os.path.join(ffi, lib)) as handle:
+                    self.assertEqual(handle.read(), new)
+                self.assertIsNone(_test_runner.link_missing_cloudflared_ffi(tree, home, workspace))  # present: untouched
+            os.remove(os.path.join(ffi, lib))
+            with patch.object(_test_runner.infrastructure, "cffi_elf_machine", return_value="x"), \
+                    patch.object(_test_runner.infrastructure, "cffi_host_machine", return_value="y"):
+                self.assertIsNone(_test_runner.link_missing_cloudflared_ffi(tree, home, workspace))  # wrong architecture
+
+
 class AnchorScanSiblingDirTests(unittest.TestCase):
     """Tests [@ANCHOR: test:anchor_scan_sibling_dir]
 

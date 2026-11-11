@@ -3272,6 +3272,49 @@ def check_host_apt_packages():
         sys.exit(1)
 
 
+# [@ANCHOR: test:default_worktree_trees]
+def default_worktree_trees(base_dir, environ=None):
+    """Points the sibling-tree variable at the repository next to the checkout under test, unless it is already set.
+
+    Run from a worktree `.../hams_com` (or `hams_open`), HAMS_OPEN_TREE (or HAMS_COM_TREE) defaults to the sibling beside it, not to the
+    shared ~/workspace checkout that resolve_repo_layout() finds through a linked worktree's git directory: a run in a worktree used to
+    test the shared hams_open's code. Returns (com_tree, open_tree) as this run will use them (None when there is none)."""
+    environ = os.environ if environ is None else environ
+    base_dir = os.path.abspath(base_dir)
+    other = {"hams_com": "hams_open", "hams_open": "hams_com"}.get(os.path.basename(base_dir))
+    if other:
+        beside = os.path.join(os.path.dirname(base_dir), other)
+        variable = f"{other.upper()}_TREE"
+        if os.path.isdir(beside) and not environ.get(variable, "").strip():
+            environ[variable] = beside
+    own = {os.path.basename(base_dir): base_dir}
+    return tuple(own.get(name) or environ.get(f"{name.upper()}_TREE", "").strip() or None for name in ("hams_com", "hams_open"))
+
+
+# [@ANCHOR: test:link_missing_cloudflared_ffi]
+def link_missing_cloudflared_ffi(open_tree, home=None, workspace=None):
+    """Copies a libcloudflared.so built for this host into the hams_open tree when it has none (the library is gitignored, so every new
+    worktree lacks it and the cloudflare tests errored). Takes the newest of the lint work trees under ~/.cache, ~/workspace/tmp/gate_*
+    and the shared ~/workspace checkout. Returns the source path, or None when nothing was needed or nothing fits."""
+    if not open_tree:
+        return None
+    ffi_dir = os.path.join(open_tree, "daemons", "cloudflared-ffi")
+    target = os.path.join(ffi_dir, infrastructure.CFFI_LIB_NAME)
+    if not os.path.isfile(os.path.join(ffi_dir, "main.go")) or os.path.exists(target):
+        return None
+    home = home or os.path.expanduser("~")
+    workspace = workspace or os.path.join(home, "workspace")
+    tail = os.path.join("hams_open", "daemons", "cloudflared-ffi", infrastructure.CFFI_LIB_NAME)
+    found = glob.glob(os.path.join(home, ".cache", "hams-lint", "work", "*", tail))
+    found += glob.glob(os.path.join(workspace, "tmp", "gate_*", tail)) + [os.path.join(workspace, tail)]
+    found = [path for path in found if os.path.isfile(path) and infrastructure.cffi_elf_machine(path) == infrastructure.cffi_host_machine()]
+    if not found:
+        return None
+    source = max(found, key=os.path.getmtime)
+    shutil.copy(source, target)
+    return source
+
+
 # [@ANCHOR: test:check_cloudflared_ffi_library]
 def check_cloudflared_ffi_library(addons_path, install_modules):
     """Reports a missing or wrong-architecture libcloudflared.so up front, with the fix.
@@ -4506,6 +4549,12 @@ def main():
     refuse_to_run_on_production_host()
     # Reject a bad command line before anything else: not after the lock queue or a long build.
     early_args = parse_runner_args()
+    if not (early_args.internal_ns_init or early_args.preflight_done):
+        trees = default_worktree_trees(os.getcwd())
+        print(f"test.py trees: hams_com={trees[0]} hams_open={trees[1]}", flush=True)
+        copied = link_missing_cloudflared_ffi(trees[1])
+        if copied:
+            print(f"test.py: libcloudflared.so was missing in the hams_open tree; copied from {copied}", flush=True)
     queue_opts = lock_queue.wait_options_from_argv(sys.argv[1:])
     # How many runs this machine allows at once. Only a fresh invocation reads the configuration
     # (--slots, HAMS_TEST_SLOTS, /opt/hams/etc/test_slots); the re-exec'd phases (the root process and the
