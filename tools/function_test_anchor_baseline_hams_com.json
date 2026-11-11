@@ -31,7 +31,6 @@
   "ham_onboarding/tests/otp_mail.py::give_official_email",
   "ham_onboarding/tests/otp_mail.py::latest_otp_code",
   "ham_onboarding/tests/otp_mail.py::otp_mails",
-  "ham_repeater_dir/backfill/gateway_transport.py::backfill_transport",
   "ham_training/tests/verify_sanitizer.py::main",
   "ham_training/tests/verify_story_components.py::main"
 ]
