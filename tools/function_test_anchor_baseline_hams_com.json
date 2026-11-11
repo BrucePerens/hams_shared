@@ -1,8 +1,4 @@
 [
-  "ham_demo_mode/tests/fixtures.py::DemoModeFixtures.demo_off",
-  "ham_demo_mode/tests/fixtures.py::DemoModeFixtures.demo_on",
-  "ham_demo_mode/tests/fixtures.py::DemoModeFixtures.use_conf",
-  "ham_demo_mode/tests/fixtures.py::DemoModeFixtures.write_conf",
   "ham_forum_extension/tests/consent_helper.py::grant_comm_consent_if_installed",
   "ham_training/tests/verify_sanitizer.py::main",
   "ham_training/tests/verify_story_components.py::main"
