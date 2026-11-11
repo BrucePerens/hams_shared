@@ -528,7 +528,6 @@
   "ics_forms/models/ics_team.py::IcsTeam._would_leave_no_lead",
   "ics_forms/models/ics_team.py::IcsTeam.my_teams",
   "ics_forms/models/ics_team.py::IcsTeamMember._svc_row",
-  "ingest/accessory_daemon.py::get_active_agents",
   "ingest/append_general_bom.py::append_general_bom",
   "ingest/append_general_bom.py::build_general_bom_html",
   "ingest/apply_breadboard_photo.py::main",
