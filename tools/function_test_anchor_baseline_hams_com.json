@@ -1,10 +1,4 @@
 [
-  "content_security_policy/controllers/developer_pages.py::ProfilingDeveloperPages.profile_config",
-  "content_security_policy/controllers/developer_pages.py::ProfilingDeveloperPages.speedscope",
-  "content_security_policy/controllers/developer_pages.py::WebClientDeveloperPages.test_suite",
-  "content_security_policy/controllers/developer_pages.py::WebClientDeveloperPages.unit_tests_suite",
-  "content_security_policy/models/ir_http.py::IrHttp._strip_debug_from_anonymous_error",
-  "content_security_policy/models/security_utils.py::ZeroSudoSecurityUtils._get_param_read_whitelist",
   "ham_base/tests/credentials.py::read_credential",
   "ham_base/tests/credentials.py::write_credentials",
   "ham_base/tests/site_eligibility.py::make_site_eligible",
