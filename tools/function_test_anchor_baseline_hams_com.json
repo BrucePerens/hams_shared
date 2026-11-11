@@ -223,8 +223,6 @@
   "ham_base/tests/site_eligibility.py::make_site_eligible",
   "ham_callbook/models/ham_callbook.py::HamCallbook._current_holder",
   "ham_callbook/models/ham_callbook_private.py::HamCallbookPrivate._otp_email_service_uid",
-  "ham_classifieds/controllers/report_portal.py::ClassifiedsReportPortal._get_listing_or_404",
-  "ham_classifieds/controllers/report_portal.py::ClassifiedsReportPortal._report_env",
   "ham_classifieds/tests/consent_fixture.py::enroll_if_consent_installed",
   "ham_club_management/alias_marking.py::_table_exists",
   "ham_club_management/club_event_migration.py::legacy_meeting_values",
