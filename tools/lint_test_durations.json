@@ -33,6 +33,7 @@
   "test_check_dependency_releases.py": 0.54,
   "test_check_doc_images.py": 0.09,
   "test_check_external_library_locality.py": 0.16,
+  "test_check_anchor_docs_standard.py": 0.02,
   "test_check_external_programs_documented.py": 0.02,
   "test_check_fake_network_listener.py": 0.1,
   "test_check_float_isfinite.py": 0.06,

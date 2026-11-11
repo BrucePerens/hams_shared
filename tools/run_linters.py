@@ -242,6 +242,8 @@ STEP_META = {
     "check_night_shift_history": {"suffixes": frozenset({".md"})},
     # ADR 0114 enforcement: the relay's Rust sources, its installers and release scripts, the ADR and dependency_watch.json.
     "check_external_programs_documented": {"suffixes": frozenset({".rs", ".sh", ".ps1", ".md", ".json"})},
+    # ADR 0113 opt-in gate: the paths of tools/anchor_doc_standard.txt (documentation and source) and the list itself.
+    "check_anchor_docs_standard": {"suffixes": frozenset({".md", ".rs", ".py", ".js", ".mjs", ".txt"})},
     "check_int_float_overflow": {"suffixes": _PY},
     "check_float_isfinite": {"suffixes": _PY},
     # Reads every .py and .sh file of both repositories and its own known list (boundary_hazards_known.json).
@@ -2251,6 +2253,13 @@ def main():
     _add(
         "check_external_programs_documented",
         [python_exec, os.path.join(dir_path, "tools", "check_external_programs_documented.py"), dir_path],
+    )
+
+    # check_anchor_docs_standard -- ADR 0113 step 2: every path of tools/anchor_doc_standard.txt keeps the anchor documentation
+    # standard (no stub entries in a listed README, an anchor on every data structure in a listed source path).
+    _add(
+        "check_anchor_docs_standard",
+        [python_exec, os.path.join(dir_path, "tools", "check_anchor_docs_standard.py"), dir_path],
     )
 
     # 35. check_cargo_deny -- the Rust supply-chain/license/advisory scan
