@@ -213,8 +213,6 @@
   "docs/talks/pacificon/build_deck.py::place",
   "docs/talks/pacificon/build_deck.py::pv",
   "docs/talks/pacificon/make.py::build",
-  "fix_worktree_symlinks.py::_git",
-  "fix_worktree_symlinks.py::main",
   "ham_aprs/controllers/member_aprs.py::_like_escape",
   "ham_base/tests/credentials.py::read_credential",
   "ham_base/tests/credentials.py::write_credentials",
