@@ -310,7 +310,6 @@
   "ham_simulated_band/models/session_log.py::HamSimulatedBandSessionLog._compute_name",
   "ham_simulated_band/models/session_log.py::HamSimulatedBandSessionLog._cron_scan_sessions",
   "ham_simulated_band/models/session_log.py::HamSimulatedBandSessionLog._session_dir",
-  "ham_testing/models/ham_morse_progress.py::HamMorseProgress._write_progress_as_service",
   "ham_training/tests/verify_sanitizer.py::main",
   "ham_training/tests/verify_story_components.py::main",
   "ingest/accessory_daemon.py::get_active_agents",
