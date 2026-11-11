@@ -3174,6 +3174,10 @@ Purpose: the program a `Command::new` string literal names, so that a relay that
 PATH search can replace) is still checked against ADR 0114. Argument `literal` (str): the text between the quotes. Returns the text after the last `/`
 (`"/usr/sbin/ioreg"` gives `ioreg`); a bare name is returned unchanged. Pure, never raises. Used by `rust_launches`.
 
+### `[@ANCHOR: ext_programs:caller_launches]` `caller_launches(text)`
+
+Purpose: closes the gap `rust_launches` leaves for files whose `Command::new` receives a parameter (`gps_time.rs`, `relay_info.rs`, named in `CALLER_LAUNCH_FILES`). Returns the set of program names (`program_name` applied) passed as a string literal to `read_chrony_with(...)` or `.run(...)` in the Rust source `text`, ignoring comments and `#[cfg(test)]` items. `find_findings` adds them to the names it checks against the ADR 0114 tables, so a new `reader.run("newtool", ...)` without an ADR entry is a finding. Not covered: a name built at run time, and `shared_receiver/frontend_process.rs` (its command line comes from the radiod configuration, not from a caller literal). Pure function, no files.
+
 ### `[@ANCHOR: ext_programs:rust_launches]` `rust_launches(text)`
 
 Purpose: the programs a Rust file starts in production. Argument `text` (str): the file. Returns `(literal_names, dynamic_count)`: a `set` of the names in

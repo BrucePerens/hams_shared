@@ -10,6 +10,7 @@ Tests [@ANCHOR: ext_programs:code_mask]
 Tests [@ANCHOR: ext_programs:test_spans]
 Tests [@ANCHOR: ext_programs:program_name]
 Tests [@ANCHOR: ext_programs:rust_launches]
+Tests [@ANCHOR: ext_programs:caller_launches]
 Tests [@ANCHOR: ext_programs:script_dependencies]
 Tests [@ANCHOR: ext_programs:adr_tables]
 Tests [@ANCHOR: ext_programs:documented_names]
@@ -244,6 +245,15 @@ class TreeTests(unittest.TestCase):
         self.assertEqual(len(findings), 1, findings)
         self.assertIn("src/newthing.rs", findings[0])
         self.assertIn("DYNAMIC_LAUNCH_FILES", findings[0])
+
+    def test_a_program_named_only_by_a_caller_in_a_listed_file_must_be_in_the_adr(self):
+        """Tests [@ANCHOR: ext_programs:find_findings] [@ANCHOR: ext_programs:caller_launches]"""
+        src = 'fn a() { read_chrony_with("pactl", &[]); }\nfn b() { r.run("hams-unlisted", &[]); }\n// r.run("commented")\n'
+        _write(os.path.join(self.relay, "src", "gps_time.rs"), src + '#[cfg(test)]\nmod t { fn t() { read_chrony_with("echo", &[]); } }\n')
+        findings = cepd.find_findings(self.root, self.adr, self.watch)
+        self.assertEqual(len(findings), 1, findings)
+        self.assertIn("hams-unlisted", findings[0])
+        self.assertEqual(cepd.caller_launches(src), {"pactl", "hams-unlisted"})
 
     def test_missing_discovery_function_and_unnamed_one(self):
         os.remove(os.path.join(self.relay, "src", "winlink.rs"))
