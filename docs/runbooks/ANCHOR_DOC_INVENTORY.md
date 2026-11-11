@@ -2,8 +2,8 @@
 
 `tools/anchor_doc_inventory.py` is step 1 of `night_shift_todo/low/document-every-anchor-completely-*.md` (ADR 0113): it
 measures how complete the documentation entries for anchors are and lists data structures that have no anchor. It reads files
-and prints; it never fails on what it finds, because it is a measurement and not a gate (the gate is step 2 of the to-do, an
-extension of `verify_anchors.py`).
+and prints; it never fails on what it finds, because it is a measurement and not a gate (the gate is `check_anchor_docs_standard.py`,
+below).
 
 ```
 python3 hams_shared/tools/anchor_doc_inventory.py [ROOT ...] [--short-words N] [--limit N] [--structures]
@@ -52,3 +52,19 @@ line scan, not a parse: a definition inside a comment or string can be listed, a
 ### `anchor_doc_inventory:main`
 `main(argv=None) -> int`: the command line above. Returns 0, or 2 for a root that is not a directory (message on stderr). Test:
 `MainTests`.
+
+## The gate: `check_anchor_docs_standard.py` (step 2)
+
+`python3 hams_shared/tools/check_anchor_docs_standard.py <repo_root>` is the `check_anchor_docs_standard` step of `run_linters.py`.
+It enforces ADR 0113 only for the paths in `tools/anchor_doc_standard.txt` (the opt-in list; no baseline, findings stay at zero):
+
+| Listed path | Rule |
+|---|---|
+| a `.md` file | every anchor's share of its entry is at least 40 words (no stub entries) |
+| a source file or directory | every Rust `struct`/`enum`/`type`/`union` and every Python or JavaScript `class` in it has an anchor |
+
+A path that does not exist in the repository being checked is skipped, so one list serves hams_com and hams_open. The list was
+seeded on 2026-11-11 with every file and directory that already passed; to cover more, bring a file or module up to the
+standard (write the entries, anchor the structures) and add its path in the same change. The same shape rules the inventory
+measures (`entry_shape`, `find_data_structures`) are what the gate applies. Tests: `tools/test_check_anchor_docs_standard.py`.
+Still to do for the gate: required parts per entry (argument and field tables) once enough entries have them.

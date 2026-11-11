@@ -22,6 +22,7 @@ DIRECTORY_CHECKERS = (
     "check_cargo_fmt.py",
     "check_rust_function_test_anchors.py",
     "check_external_programs_documented.py",
+    "check_anchor_docs_standard.py",
     "check_pip_audit.py",
     "check_skill_integrity.py",
     "check_burn_list.py",

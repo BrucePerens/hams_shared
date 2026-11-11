@@ -3146,6 +3146,31 @@ out-of-memory cause from `daemons/*/target` is handled by `write_eslint_project(
 `exclude` globs (`<repo>/**/target/**`, `<repo>/**/node_modules/**`, absolute because tsconfig patterns are relative to the
 generated file); test `test_the_generated_project_excludes_cargo_target_and_node_modules`.
 
+## Anchor documentation standard gate (`check_anchor_docs_standard.py`, ADR 0113)
+
+`check_anchor_docs_standard.py <repo_root>` is the linter step of the same name in `run_linters.py`; the rules and the opt-in list
+(`anchor_doc_standard.txt`) are in `docs/runbooks/ANCHOR_DOC_INVENTORY.md`. Tests: `test_check_anchor_docs_standard.py`.
+
+### `[@ANCHOR: anchor_docs_standard:read_list]` `read_list(path=LIST_FILE)`
+
+Purpose: reads the opt-in list. Returns the paths (one per line, `#` comments and blank lines dropped, a trailing `/` removed) as a list of strings; a missing or unreadable file gives `[]`. Argument `path`: the list file, default `tools/anchor_doc_standard.txt`. No side effects.
+
+### `[@ANCHOR: anchor_docs_standard:doc_findings]` `doc_findings(path, rel, min_words=40)`
+
+Purpose: the stub check for one markdown file. Uses `anchor_doc_inventory.doc_entries`; an anchor's share is the entry's words divided by the anchors the entry covers. Arguments: `path` file to read, `rel` name used in messages, `min_words` threshold (default 40). Returns a list of message strings, one per entry under the threshold. Never raises (an unreadable file has no entries).
+
+### `[@ANCHOR: anchor_docs_standard:source_findings]` `source_findings(path, rel, root)`
+
+Purpose: the data-structure check for one source file (`.rs .py .js .mjs`) through `anchor_doc_inventory.find_data_structures`. Arguments: `path`, `rel` (message name), `root` (the repository root, so a test-path directory above it does not hide the tree). Returns one message per struct, enum, type, union or class with no anchor on or directly above it.
+
+### `[@ANCHOR: anchor_docs_standard:find_findings]` `find_findings(root, listed)`
+
+Purpose: runs both checks over the listed paths that exist under `root` (a `.md` entry is checked as documentation; a source file or a directory is checked for unanchored data structures, a directory not checking the markdown inside it). Returns `(findings, checked)`: the message list and how many listed paths exist in this repository. Pure reads.
+
+### `[@ANCHOR: anchor_docs_standard:main]` `main(argv=None)`
+
+Purpose: command line, `check_anchor_docs_standard.py <repo_root>`. Prints each finding and returns 1; otherwise prints a success line with the number of listed paths found and returns 0; 2 for a usage error or a missing directory.
+
 ## External programs of the relay are inventoried, pinned and watched (`check_external_programs_documented.py`, ADR 0114)
 
 `check_external_programs_documented.py <repo_root>` is the linter step of the same name in `run_linters.py`. It reads the tables of
