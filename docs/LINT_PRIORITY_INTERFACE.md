@@ -7,7 +7,7 @@ implement. It deliberately adds no code to those files.
 
 ## Why
 
-The lint lock is one FIFO in front of N slots. When agents pile up, a lint run that unblocks everyone else (the fix for a red `main`, a
+The lint lock is one FIFO (first-in, first-out queue) in front of N slots. When agents pile up, a lint run that unblocks everyone else (the fix for a red `main`, a
 PR that others are waiting to rebase on, a merge-queue repair) waits behind routine runs for 10+ minutes. Unblock work needs to go
 to the front of the *waiting* line. It never preempts a run that already holds a slot.
 

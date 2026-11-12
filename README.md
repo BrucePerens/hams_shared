@@ -45,7 +45,7 @@ root and, where relevant, the sibling repo, from whichever one it's given.
   [`hams_open` README](https://github.com/BrucePerens/hams_open#the-semantic-anchor-system)), `run_rust_coverage.py` (real per-line Rust coverage via `cargo llvm-cov`, joined
   against anchor claims), `odoo_mypy_plugin.py` (Odoo-model-aware static typing, with a generated
   Odoo-core type-stub tree at `tools/odoo_type_stubs/`), `pre_flight_check.py`, `mcp_watchdog.py`
-  (the shared MCP queue/executor coordination layer described in the `avoiding-api-costs` skill
+  (the shared MCP (Model Context Protocol, how AI tools call outside tools) queue/executor coordination layer described in the `avoiding-api-costs` skill
   below), and dozens more single-purpose checkers, each with its own test suite.
 * **`docs/adrs/`** (35 ADRs as of this writing): the formal Architecture Decision Record set --
   cross-cutting standing policy for both parent repos lives here, not in either repo's own
@@ -61,7 +61,7 @@ root and, where relevant, the sibling repo, from whichever one it's given.
   (`mcp_watchdog.py` above is the coordination layer behind the API-cost-avoidance pattern
   described in `hams_com`'s own `.claude/skills/avoiding-api-costs/` skill, which is not itself
   shared here.)
-* **`scripts/`**: `run_headless_chrome.py`, a shared real-Chrome-plus-CDP harness used for
-  JS-coverage and live DOM instrumentation work by both repos.
+* **`scripts/`**: `run_headless_chrome.py`, a shared real-Chrome-plus-CDP (Chrome DevTools Protocol, the remote-control interface of Chrome) harness used for
+  JS-coverage and live DOM (the browser's tree of page elements) instrumentation work by both repos.
 * **`eslint.config.js` / `package.json` / `package-lock.json`**: the shared ESLint configuration
   `run_linters.py` runs as a required (fail, not warn) CI gate against both repos' JS.
