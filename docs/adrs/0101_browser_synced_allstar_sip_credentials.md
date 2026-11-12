@@ -71,5 +71,5 @@ The server holds one more decryptable-by-owner secret per user than ADR 0095 alo
 browser holds it too. A regression against this ADR is any of: returning the password to anyone but its
 owner, logging it, widening the decrypt guard back to service accounts, routing the audio or SIP signalling
 through hams.com, or storing the password in browser storage other than the encrypted IndexedDB record.
-The relay-side network-only session (`sip_credentials.rs`, `rsipstack`) stays as an optional path
-(Bruce, 2026-09-21).
+The relay-side network-only session (`sip_credentials.rs`, `rsipstack`) was kept as an optional path
+(Bruce, 2026-09-21), then deleted when the feature went browser-direct; `sip_bridge.rs` (`rsipstack`) now bridges SIP over plain UDP/TCP for the browser, with credentials supplied per call and never stored by the relay.
