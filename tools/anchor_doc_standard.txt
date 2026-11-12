@@ -266,6 +266,7 @@ daemons/shack_console/docs/stories/console_update_prompt.md
 daemons/shack_console/docs/stories/console_waterfall_control_bar_and_view.md
 daemons/shack_console/docs/stories/console_waterfall_screen_and_host.md
 daemons/shack_console/docs/stories/console_waterfall_transmit_sync_rtt_settings.md
+daemons/shack_console/docs/stories/cw_tone_detector_and_voice_log.md
 daemons/shack_console/docs/stories/hams_core_dx_rows.md
 daemons/shack_console/docs/stories/hams_core_wasm_binding.md
 daemons/shack_console/docs/stories/layout_height.md
