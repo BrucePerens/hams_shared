@@ -564,79 +564,372 @@ Each anchor below has its own entry, in the template of ADR 0113: purpose, call 
 
 **See also:** `cf_action_pull_waf_rules`, `cloudflare:COMM_action_deploy_cf_waf`.
 
-### Entries still in the older bullet form
+### `cloudflare:COMM_idempotency_aware_retry` [@ANCHOR: cloudflare:COMM_idempotency_aware_retry]
 
-The items below are being converted to the per-anchor template above.
+**Purpose:** decides whether a failed Cloudflare API call may be replayed. The shared `requests` session retries the transient server-side failures (500/502/503/504) and rate limiting (429) for `HEAD`, `GET`, `OPTIONS`, `PUT` and `DELETE`, because repeating one of those cannot change the result beyond what the first attempt already did. `POST` and `PATCH` are retried on 429 only: a rate-limit refusal is rejected before Cloudflare applies it, whereas a 5xx carries no such guarantee and may arrive after a DNS record, a firewall access rule or a tunnel route has already been created -- replaying it would create a duplicate. `allowed_methods` stays restricted to the idempotent set as well, so urllib3's own read-error handling keeps refusing to replay a `POST` whose response was lost in transit.
 
-**Outbound API request safety:**
-* **Idempotency-Aware Retry:** `[@ANCHOR: cloudflare:COMM_idempotency_aware_retry]` -- decides whether a
-  failed Cloudflare API call may be replayed. The shared `requests` session retries the transient
-  server-side failures (500/502/503/504) and rate limiting (429) for `HEAD`, `GET`, `OPTIONS`, `PUT`
-  and `DELETE`, because repeating one of those cannot change the result beyond what the first attempt
-  already did. `POST` and `PATCH` are retried on 429 only: a rate-limit refusal is rejected before
-  Cloudflare applies it, whereas a 5xx carries no such guarantee and may arrive after a DNS record,
-  a firewall access rule or a tunnel route has already been created -- replaying it would create a
-  duplicate. `allowed_methods` stays restricted to the idempotent set as well, so urllib3's own
-  read-error handling keeps refusing to replay a `POST` whose response was lost in transit.
+**Call interface:** `IdempotencyAwareRetry.is_retry(method, status_code, has_retry_after=False) -> bool`, a subclass of urllib3's `Retry` in `utils/cloudflare_api.py`. Methods in `IDEMPOTENT_METHODS` (HEAD, GET, OPTIONS, PUT, DELETE) defer to urllib3; any other method retries only when the status is in `NON_IDEMPOTENT_RETRY_STATUSES` (429). The shared `session` retries up to 3 times and honours `Retry-After`. Tests: `test_cf_retry_policy_excludes_non_idempotent_methods` in `cloudflare/tests/test_cloudflare_api_calls.py`.
 
-**Encrypted credential storage (`website.py`):**
-* **Fernet Key Resolution:** `[@ANCHOR: cloudflare:COMM_get_fernet]` -- Fernet is the symmetric authenticated-encryption scheme from the Python `cryptography` library. Returns the website's company's own cipher from `cloudflare.tenant.key` (see "Per-company encryption keys" above); it does not read the daemon key registry. Saving a secret with no deployment-wide crypto secret configured raises a `UserError`; reading one that cannot be decrypted yields the marker `***ERROR***`.
+### `cloudflare:COMM_get_fernet` [@ANCHOR: cloudflare:COMM_get_fernet]
 
-* **Symmetric Encrypt/Decrypt Primitive:** `[@ANCHOR: cloudflare:COMM_crypt_field]`
+**Purpose:** Fernet is the symmetric authenticated-encryption scheme from the Python `cryptography` library. Returns the website's company's own cipher from `cloudflare.tenant.key` (see "Per-company encryption keys" above); it does not read the daemon key registry. Saving a secret with no deployment-wide crypto secret configured raises a `UserError`; reading one that cannot be decrypted yields the marker `***ERROR***`.
 
-* **Generic Encrypted-Field Compute/Inverse:** `[@ANCHOR: cloudflare:COMM_compute_encrypted_field]`, `[@ANCHOR: cloudflare:COMM_inverse_encrypted_field]`
+**Call interface:** `cloudflare.website._get_fernet()` (`models/website.py`) takes no arguments and requires a single record (`ensure_one()`). It uses the website's `company_id`, or the current company when none, and asks `cloudflare.tenant.key._get_or_create_fernet(company)` for the cipher. It returns a Fernet object or `None` when the deployment secret is missing or the company key cannot be unwrapped. See `cloudflare:COMM_crypt_field` for how `None` is treated, and tests in `cloudflare/tests/test_tenant_key.py`.
 
-* **API Token Compute/Inverse:** `[@ANCHOR: cloudflare:COMM_compute_cf_api_token]`, `[@ANCHOR: cloudflare:COMM_inverse_cf_api_token]`
+### `cloudflare:COMM_crypt_field` [@ANCHOR: cloudflare:COMM_crypt_field]
 
-* **Turnstile Secret Compute/Inverse:** `[@ANCHOR: cloudflare:COMM_compute_cf_turnstile_secret]`, `[@ANCHOR: cloudflare:COMM_inverse_cf_turnstile_secret]`
+**Purpose:** the one place where a Cloudflare secret is encrypted or decrypted. `cloudflare.website._crypt_field(value, decrypt=False)` in `models/website.py`; called by the compute and inverse helpers for the API token and Turnstile secret.
 
-* **Credential Resolution (Cached):** `[@ANCHOR: cloudflare:COMM_get_cloudflare_credentials]`
+| Argument | Type | Meaning |
+|---|---|---|
+| `value` | str or falsy | Plain text to encrypt, or Fernet ciphertext to decrypt. |
+| `decrypt` | bool | `True` to decrypt, `False` (default) to encrypt. |
 
-**Zone settings and tunnels:**
-* **Zone Settings Wizard Defaults/Apply:** `[@ANCHOR: cloudflare:COMM_zone_settings_default_get]`, `[@ANCHOR: cloudflare:COMM_zone_settings_action_apply]`
+**Returns:** the converted string; `False` for an empty value. On decryption failure (bad token or value) it logs a warning and returns the marker `"***ERROR***"`; on encryption failure it returns `False`.
 
-* **Tunnel Route Display Name:** `[@ANCHOR: cloudflare:COMM_tunnel_route_compute_name]`
+**Errors:** `UserError` when encrypting and no cipher is available (no `HAMS_CRYPTO_KEY`, `/var/lib/odoo/hams_crypto.secret` or non-default `admin_passwd`), so a secret is never stored in the clear. When decrypting with no cipher it returns `"***ERROR***"`.
 
-* **Tunnel Push Configuration:** `[@ANCHOR: cloudflare:COMM_tunnel_action_push_configuration]`
+**Security:** keys are per company (see `cloudflare:COMM_get_fernet`); the plain text never reaches a log. Pure CPU, no locks.
 
-* **Tunnel Sync for Website:** `[@ANCHOR: cloudflare:COMM_sync_tunnels_for_website]`
+**See also:** `cloudflare:COMM_compute_encrypted_field`, `cloudflare:COMM_inverse_encrypted_field`, `cloudflare:COMM_get_cloudflare_credentials`.
 
-**Low-level HTTP/native daemon layer:**
-* **Generic API Error Handling:** `[@ANCHOR: cloudflare:COMM_handle_api_error]`
+### `cloudflare:COMM_compute_encrypted_field` [@ANCHOR: cloudflare:COMM_compute_encrypted_field]
 
-* **Generic HTTP Request Wrapper:** `[@ANCHOR: cloudflare:COMM_make_request]`
+**Purpose:** generic compute helper that fills a non-stored plain-text field from its stored encrypted twin. `cloudflare.website._compute_encrypted_field(plain_field, crypt_field)` in `models/website.py`.
 
-* **Cache-Tag Purge API:** `[@ANCHOR: cloudflare:COMM_purge_tags]`
+| Argument | Type | Meaning |
+|---|---|---|
+| `plain_field` | str | Name of the computed field (for example `cloudflare_api_token`). |
+| `crypt_field` | str | Name of the stored encrypted field (for example `cloudflare_api_token_crypt`). |
 
-* **Tunnel Configuration Update API:** `[@ANCHOR: cloudflare:COMM_update_cfd_tunnel_configuration]`
+**Behaviour:** for each record, sets the plain field to `_crypt_field(<crypt value>, decrypt=True)`. A value that cannot be decrypted shows as `***ERROR***`. Returns nothing.
 
-* **Native Library Resolution:** `[@ANCHOR: cloudflare:COMM_get_lib]`
+**Security:** the plain fields carry a `groups=` restriction (Settings administrators and the Cloudflare service groups), so ordinary users cannot read the decrypted result even though the compute runs for them.
 
-* **Tunnel Simulator Start/Stop:** `[@ANCHOR: cloudflare:COMM_start_tunnel_simulator]`, `[@ANCHOR: cloudflare:COMM_stop_tunnel_simulator]`
+**See also:** `cloudflare:COMM_inverse_encrypted_field`, `cloudflare:COMM_compute_cf_api_token`, `cloudflare:COMM_compute_cf_turnstile_secret`.
 
-* **Real Tunnel Daemon Stop:** `[@ANCHOR: cloudflare:COMM_stop_tunnel_daemon]`
+### `cloudflare:COMM_inverse_encrypted_field` [@ANCHOR: cloudflare:COMM_inverse_encrypted_field]
 
-* **Test Simulator Mixin Setup/Teardown/Request:** `[@ANCHOR: cloudflare:COMM_simulator_setup]`, `[@ANCHOR: cloudflare:COMM_simulator_teardown]`, `[@ANCHOR: cloudflare:COMM_simulate_edge_request]`
+**Purpose:** generic inverse helper that stores a plain-text field's value encrypted. `cloudflare.website._inverse_encrypted_field(plain_field, crypt_field)` in `models/website.py`.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `plain_field` | str | Name of the computed field being written. |
+| `crypt_field` | str | Name of the stored encrypted field that receives the ciphertext. |
+
+**Behaviour:** for each record, writes `_crypt_field(<plain value>)` into the crypt field. Returns nothing.
+
+**Errors:** `UserError` from `_crypt_field` when no deployment-wide crypto secret is configured, so nothing unencrypted is stored. An empty value stores `False`.
+
+**See also:** `cloudflare:COMM_compute_encrypted_field`, `cloudflare:COMM_inverse_cf_api_token`.
+
+### `cloudflare:COMM_compute_cf_api_token` [@ANCHOR: cloudflare:COMM_compute_cf_api_token]
+
+**Purpose:** compute method for `cloudflare_api_token` (`models/website.py`), declared `@api.depends("cloudflare_api_token_crypt")`. It calls `_compute_encrypted_field("cloudflare_api_token", "cloudflare_api_token_crypt")`, so the token is decrypted on read. Returns nothing; a bad ciphertext gives `***ERROR***`, which `_get_cloudflare_credentials` maps to no token.
+
+**Security:** the field is readable only by administrators and the Cloudflare service groups.
+
+**See also:** `cloudflare:COMM_inverse_cf_api_token`, `cloudflare:COMM_compute_encrypted_field`.
+
+### `cloudflare:COMM_inverse_cf_api_token` [@ANCHOR: cloudflare:COMM_inverse_cf_api_token]
+
+**Purpose:** inverse method for `cloudflare_api_token` (`models/website.py`). When an administrator saves the token in Settings, it calls `_inverse_encrypted_field("cloudflare_api_token", "cloudflare_api_token_crypt")` and stores only the ciphertext. Returns nothing.
+
+**Errors:** `UserError` when no deployment-wide crypto secret is configured. The plain value is never written to a column.
+
+**See also:** `cloudflare:COMM_compute_cf_api_token`, `cloudflare:COMM_inverse_encrypted_field`.
+
+### `cloudflare:COMM_compute_cf_turnstile_secret` [@ANCHOR: cloudflare:COMM_compute_cf_turnstile_secret]
+
+**Purpose:** compute method for `cloudflare_turnstile_secret` (`models/website.py`), depending on `cloudflare_turnstile_secret_crypt`. It decrypts through `_compute_encrypted_field`. Returns nothing; an unreadable value shows `***ERROR***`.
+
+**Security:** group-restricted field, so the Turnstile verifier reads it as the WAF service account (see `cf_turnstile_verify`).
+
+**See also:** `cloudflare:COMM_inverse_cf_turnstile_secret`.
+
+### `cloudflare:COMM_inverse_cf_turnstile_secret` [@ANCHOR: cloudflare:COMM_inverse_cf_turnstile_secret]
+
+**Purpose:** inverse method for `cloudflare_turnstile_secret` (`models/website.py`). It encrypts the entered secret through `_inverse_encrypted_field` into `cloudflare_turnstile_secret_crypt`. Returns nothing.
+
+**Errors:** `UserError` when no deployment-wide crypto secret is configured. Clearing the field stores `False`, after which every Turnstile token is rejected.
+
+**See also:** `cloudflare:COMM_compute_cf_turnstile_secret`.
+
+### `cloudflare:COMM_get_cloudflare_credentials` [@ANCHOR: cloudflare:COMM_get_cloudflare_credentials]
+
+**Purpose:** the way other code gets a website's Cloudflare API token and zone id. `cloudflare.website._get_cloudflare_credentials(override_svc_uid=None) -> (token, zone_id)` in `models/website.py`, decorated `@distributed_cache()`.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `override_svc_uid` | int or None | A user id to read the credentials as (a service account, since the fields are group-restricted). |
+
+**Returns:** `(token, zone_id)`. `token` is `False` when unset or when decryption failed (`***ERROR***`); `zone_id` is the stored `cloudflare_zone_id`.
+
+**Concerns:** single record only (`ensure_one()`). The result is cached across workers, so it can lag a changed token until the cache entry is invalidated. The secret returns to the caller, so callers must not log it. Callers must have access or pass a service account id.
+
+**See also:** `cloudflare:COMM_crypt_field`, `cloudflare:COMM_get_fernet`.
+
+### `cloudflare:COMM_zone_settings_default_get` [@ANCHOR: cloudflare:COMM_zone_settings_default_get]
+
+**Purpose:** pre-fills the zone settings wizard with the zone's current values, so the administrator sees what is live. `cloudflare.zone.settings.wizard.default_get(fields_list)` in `models/zone_settings_wizard.py`.
+
+**Behaviour:** calls the parent, picks the website (the `website_id` default or the current website), reads its credentials and, when both exist, calls `get_zone_settings(token, zone_id)`. It copies `security_level`, `development_mode`, `always_use_https` and, from the `security_header` value, `hsts_status` (on/off), `hsts_max_age` and `hsts_include_subdomains`, but only for fields in `fields_list`.
+
+**Returns:** the defaults dict. Without credentials or on a Cloudflare error the plain defaults come back; it does not raise.
+
+**Concerns:** one blocking Cloudflare read when the wizard opens.
+
+**See also:** `cloudflare:COMM_zone_settings_action_apply`; tests `cloudflare/tests/test_zone_settings_always_https.py`.
+
+### `cloudflare:COMM_zone_settings_action_apply` [@ANCHOR: cloudflare:COMM_zone_settings_action_apply]
+
+**Purpose:** the wizard's Apply button, `action_apply_settings()` in `models/zone_settings_wizard.py`. Each filled field is sent to Cloudflare now.
+
+**Behaviour:** `ensure_one()`; `UserError` when token or zone is missing. It then calls `update_zone_setting(name, value, token, zone_id)` for `security_level`, `development_mode`, `always_use_https`, `security_header` (HSTS) and `browser_cache_ttl`, skipping any empty field. Failures are collected (for example `Security Level: API Error`) and raised as one `UserError("Failed to update some settings: ...")` after all have been tried, so earlier successes stay applied.
+
+**Returns:** a success `display_notification` that closes the wizard.
+
+**Concerns:** one blocking PATCH per field; no local state changes.
+
+**See also:** `cloudflare:COMM_zone_settings_always_use_https`, `cloudflare:COMM_zone_settings_security_header`, `cloudflare:COMM_zone_settings_default_get`.
+
+### `cloudflare:COMM_tunnel_route_compute_name` [@ANCHOR: cloudflare:COMM_tunnel_route_compute_name]
+
+**Purpose:** the display name of a tunnel ingress route, `cloudflare.tunnel.route._compute_name()` in `models/tunnel_route.py` (stored computed field `name`, with routes ordered by `sequence, id`).
+
+**Format:** `<hostname or "*"><path> -> <service_url>`, for example `example.org/blog -> http://localhost:8069`. An empty hostname shows `*`; an empty path adds nothing; an empty service shows nothing after the arrow.
+
+**Concerns:** display only; the pushed ingress is built from the route fields, not from this name. No side effects.
+
+**See also:** `cloudflare:COMM_tunnel_action_push_configuration`.
+
+### `cloudflare:COMM_tunnel_action_push_configuration` [@ANCHOR: cloudflare:COMM_tunnel_action_push_configuration]
+
+**Purpose:** sends a tunnel's ingress rules (hostname, path and service routes plus the catch-all) to Cloudflare. `cloudflare.tunnel.action_push_configuration()` in `models/tunnel.py`, a button and a cron step.
+
+**Behaviour per tunnel:** requires the website's API token and Account ID (`UserError` if missing); warns (and flags) when `catch_all_service` points straight at port 8069 instead of a buffering front end; builds the ingress from the tunnel's routes plus the routes with no tunnel (`_build_ingress`); lets modules veto it with `_ingress_problems(ingress)`, which raises `UserError` instead of pushing; then calls `update_cfd_tunnel_configuration(account_id, token, cf_tunnel_id, {"config": {"ingress": [...]}})`, raising `UserError("Failed to push configuration: ...")` on failure.
+
+**Returns:** a `display_notification` (a sticky warning if any tunnel hit the 8069 warning, success otherwise).
+
+**Concerns:** a blocking PUT per tunnel that replaces that tunnel's whole configuration at Cloudflare.
+
+**See also:** `cloudflare:COMM_update_cfd_tunnel_configuration`, `ensure_one_tunnel_running`.
+
+### `cloudflare:COMM_sync_tunnels_for_website` [@ANCHOR: cloudflare:COMM_sync_tunnels_for_website]
+
+**Purpose:** pulls the tunnel list for one website from Cloudflare into `cloudflare.tunnel` rows. `cloudflare.tunnel._sync_tunnels_for_website(website_id)` in `models/tunnel.py`, called per website by `cf_sync_tunnels`.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `website_id` | int | The website to sync. A missing website returns silently. |
+
+**Behaviour:** runs as the tunnel service account. With no token or Account ID it returns. Otherwise it lists the account's tunnels (`list_cfd_tunnels`), and for each either writes `cf_tunnel_id`, `name`, `status`, `created_at` (UTC, cut to seconds) and `website_id` into the existing row or creates it. Tunnels that no longer exist at Cloudflare are not removed here.
+
+**Returns:** nothing. **Concerns:** one Cloudflare read; creates are batched in a single `create()`; the caller wraps it in a savepoint.
+
+**See also:** `cf_sync_tunnels`; tests `cloudflare/tests/test_tunnel_multi_website.py`.
+
+### `cloudflare:COMM_handle_api_error` [@ANCHOR: cloudflare:COMM_handle_api_error]
+
+**Purpose:** one place that logs a failed Cloudflare API call. `_handle_api_error(context_msg, exception)` in `utils/cloudflare_api.py`.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `context_msg` | str | What was being attempted, used as the log prefix. |
+| `exception` | Exception | The failure; only its text is logged. |
+
+**Behaviour:** when the text contains `External requests verboten` (the test environment's outbound block) it logs at info level, so tests do not show errors; otherwise it logs at error level. Returns nothing and never raises.
+
+**Security:** only the exception text is logged, which can include a URL but not the Authorization header.
+
+**See also:** `cloudflare:COMM_make_request`.
+
+### `cloudflare:COMM_make_request` [@ANCHOR: cloudflare:COMM_make_request]
+
+**Purpose:** the single HTTP wrapper every Cloudflare API function uses. `_make_request(method, endpoint, token, error_msg, **kwargs)` in `utils/cloudflare_api.py`.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `method` | str | `GET`, `POST`, `PUT`, `PATCH` or `DELETE` (case-insensitive); anything else raises `ValueError`. |
+| `endpoint` | str | The full URL. |
+| `token` | str | The API token, sent as `Authorization: Bearer`. |
+| `error_msg` | str | Log prefix if the call fails. |
+| `**kwargs` | | `headers` (merged), `timeout` (default 15 s), plus `json`, `params` and so on, passed on to `requests`. |
+
+**Returns:** the `requests.Response`. A 404 is returned as a response (callers treat it as "not found"); other HTTP errors and network errors give `None` after `_handle_api_error`.
+
+**Concerns:** blocking; uses the shared retrying `session` (see `cloudflare:COMM_idempotency_aware_retry`), so a POST is never replayed after a 5xx. The token is in a header only, never logged.
+
+**See also:** `cloudflare:COMM_handle_api_error`.
+
+### `cloudflare:COMM_purge_tags` [@ANCHOR: cloudflare:COMM_purge_tags]
+
+**Purpose:** purges Cloudflare's cache for objects carrying given Cache-Tags. `purge_tags(tags, token, zone_id) -> bool` in `utils/cloudflare_api.py`.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `tags` | list of str | Cache-Tag values such as `odoo-static-assets` or `odoo-website-3`. |
+| `token`, `zone_id` | str | The website's credentials. |
+
+**Returns:** `False` when the token or zone is missing or any chunk fails; `True` for an empty list (nothing to do) or when every chunk returns 200.
+
+**Concerns:** tags are sent in chunks of 30 (Cloudflare's per-call limit) with a 10 s timeout each; a failed chunk does not stop later chunks, but makes the result `False`. POST, so not replayed after a 5xx.
+
+**See also:** `cf_process_queue_logic`, `cloudflare:COMM_make_request`.
+
+### `cloudflare:COMM_update_cfd_tunnel_configuration` [@ANCHOR: cloudflare:COMM_update_cfd_tunnel_configuration]
+
+**Purpose:** replaces a tunnel's remote configuration (its ingress rules) at Cloudflare. `update_cfd_tunnel_configuration(account_id, token, tunnel_id, payload) -> (bool, str)` in `utils/cloudflare_api.py`.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `account_id`, `token`, `tunnel_id` | str | Credentials and tunnel; any missing gives `(False, "Missing credentials or tunnel ID")`. |
+| `payload` | dict | `{"config": {"ingress": [rule, ...]}}`. |
+
+**Behaviour:** first refuses (returns `(False, <reason>)`) if any rule's `hostname` is a member name that must never reach Cloudflare (`member_name_refusal`). Then PUTs to `/accounts/<id>/cfd_tunnel/<tunnel>/configurations`.
+
+**Returns:** `(True, "Configuration updated successfully.")` on 200, else `(False, "API Error")`.
+
+**Concerns:** idempotent PUT, replayed by the retry policy on 5xx or 429; replaces the whole configuration.
+
+**See also:** `cloudflare:COMM_tunnel_action_push_configuration`; tests `cloudflare/tests/test_member_names_never_reach_cloudflare.py`.
+
+### `cloudflare:COMM_get_lib` [@ANCHOR: cloudflare:COMM_get_lib]
+
+**Purpose:** lazily loads the native library `libcloudflared.so`, used now only by the local HTTPS tunnel simulator in tests. `_get_lib()` in `utils/cloudflare_daemon.py`.
+
+**Returns:** the cached `ctypes.CDLL` handle (module global `_lib`) with `StartLocalSimulator(int) -> int` and `StopLocalSimulator()` signatures set.
+
+**Errors:** `RuntimeError("Failed to load libcloudflared.so: ...")` if the library cannot be loaded (logged first). No locks, so the first load is not thread-safe, which is acceptable because only tests call it.
+
+**Notes:** real tunnel processes no longer go through this library; they run as systemd user units (`utils/cloudflare_systemd.py`).
+
+**See also:** `cloudflare:COMM_start_tunnel_simulator`, `cloudflare:COMM_stop_tunnel_daemon`.
+
+### `cloudflare:COMM_start_tunnel_simulator` [@ANCHOR: cloudflare:COMM_start_tunnel_simulator]
+
+**Purpose:** starts the native Go HTTPS reverse-proxy simulator that stands in for Cloudflare's edge in tests. `start_tunnel_simulator(target_port)` in `utils/cloudflare_daemon.py`.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `target_port` | int | The local Odoo HTTP port to forward to. |
+
+**Returns:** the port the simulator bound, assigned by the OS. **Errors:** `RuntimeError` when the library cannot load or the native call returns a negative number.
+
+**Concerns:** starts a listener in the test process; pair it with `stop_tunnel_simulator()` in teardown.
+
+**See also:** `cloudflare:COMM_stop_tunnel_simulator`, `cloudflare:COMM_simulator_setup`.
+
+### `cloudflare:COMM_stop_tunnel_simulator` [@ANCHOR: cloudflare:COMM_stop_tunnel_simulator]
+
+**Purpose:** stops the simulator. `stop_tunnel_simulator()` in `utils/cloudflare_daemon.py`, no arguments, returns nothing.
+
+**Behaviour:** if the library was ever loaded, logs and calls `StopLocalSimulator()`; if not, does nothing, so it is safe in teardown even when setup failed. Never raises for a missing library.
+
+**See also:** `cloudflare:COMM_start_tunnel_simulator`, `cloudflare:COMM_simulator_teardown`.
+
+### `cloudflare:COMM_stop_tunnel_daemon` [@ANCHOR: cloudflare:COMM_stop_tunnel_daemon]
+
+**Purpose:** stops real `cloudflared` tunnel units. `stop_tunnel_daemon(tunnel_key=None)` in `utils/cloudflare_systemd.py`.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `tunnel_key` | str or None | A Cloudflare tunnel id to stop one unit; `None` stops every `cloudflared@*.service` unit. |
+
+**Behaviour:** runs `systemctl --user disable --now cloudflared@<key>`; on success removes that tunnel's environment file (which holds the run token). With `None`, lists units live with `systemctl --user list-units` and stops each one, so no in-process registry is needed. Failures are logged and swallowed.
+
+**Returns:** nothing. **Concerns:** blocking subprocess calls; effects survive Odoo restarts because the units are persistent user services.
+
+**See also:** `cf_delete_tunnel`, `ensure_tunnel_running`; tests `cloudflare/tests/test_cloudflare_systemd.py`.
+
+### `cloudflare:COMM_simulator_setup` [@ANCHOR: cloudflare:COMM_simulator_setup]
+
+**Purpose:** `setUp()` of the test mixin in `cloudflare/tests/tunnel_simulator.py`, so a test case can send requests that look like they arrive through Cloudflare.
+
+**Behaviour:** calls the parent's `setUp`, picks the target port (`http_port()`, else the configured `xmlrpc_port`, else 8069), starts the simulator with `start_tunnel_simulator(target_port)` and sets `simulator_port` and `simulator_url` (`https://127.0.0.1:<port>`).
+
+**Concerns:** test only; it needs `libcloudflared.so`.
+
+**See also:** `cloudflare:COMM_simulator_teardown`, `cloudflare:COMM_simulate_edge_request`.
+
+### `cloudflare:COMM_simulator_teardown` [@ANCHOR: cloudflare:COMM_simulator_teardown]
+
+**Purpose:** `tearDown()` of the same mixin in `cloudflare/tests/tunnel_simulator.py`. It calls the parent's `tearDown` and then `stop_tunnel_simulator()`, so the simulator's listener does not outlive the test and a later test can start its own on a fresh port. Takes no arguments and returns nothing. Test only, no locks. It is safe even when `setUp` failed before the simulator started, because the stop function does nothing when the library was never loaded.
+
+**See also:** `cloudflare:COMM_simulator_setup`.
+
+### `cloudflare:COMM_simulate_edge_request` [@ANCHOR: cloudflare:COMM_simulate_edge_request]
+
+**Purpose:** sends one request through the simulator as if Cloudflare had forwarded it. `simulate_edge_request(path, cf_connecting_ip='1.2.3.4', cf_visitor='{"scheme":"https"}', extra_headers=None)` in `cloudflare/tests/tunnel_simulator.py`.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `path` | str | Path and query, appended to `simulator_url`. |
+| `cf_connecting_ip` | str | Sent as `CF-Connecting-IP` and `X-Forwarded-For`. |
+| `cf_visitor` | str (JSON) | Sent as `CF-Visitor`. |
+| `extra_headers` | dict or None | Merged over the defaults (for example `CF-IPCountry`). |
+
+**Returns:** the response from `url_open(url, headers=headers, timeout=10)`.
+
+**See also:** `cloudflare:COMM_simulator_setup`; used by `cloudflare/tests/test_request_context.py`.
+
+### `story_cache_purging` [@ANCHOR: story_cache_purging]
+
+**Asynchronous Cache Purging** (`hams_shared/docs/stories/cache_purging.md`).
+
+A content manager saves a page, post, product or menu and the edit finishes at once. The write hooks queue purges in `cloudflare.purge.queue`; a cron later sends them to Cloudflare in grouped batches per website, so no edit waits for the network. See `cloudflare:COMM_enqueue_urls_batch` and `cf_process_queue_logic`.
+
+### `story_request_context` [@ANCHOR: story_request_context]
+
+**Geo-Aware Request Context** (`hams_shared/docs/stories/request_context.md`).
+
+A developer reads the visitor's country and threat score through `cloudflare.utils.get_request_context()`. The `CF-*` headers are believed only from a trusted peer (loopback or the trusted Cloudflare ranges), so a direct request to the origin cannot forge them. See `cf_get_request_context`.
+
+### `story_tunnels` [@ANCHOR: story_tunnels]
+
+**Secure Edge Bridging via Tunnels** (`hams_shared/docs/stories/tunnels.md`).
+
+A system administrator connects the server to Cloudflare without opening an inbound port: the wizard creates a tunnel and prints an install command, sync brings tunnel records into Odoo, and the cron keeps one `cloudflared` daemon per tunnel running. See `cf_tunnel_setup`, `cf_sync_tunnels`, `ensure_tunnel_running`.
+
+### `story_turnstile` [@ANCHOR: story_turnstile]
+
+**CAPTCHA Verification with Turnstile** (`hams_shared/docs/stories/turnstile_verification.md`).
+
+A visitor completes a Turnstile challenge in a form; the controller calls `verify_token()`, which asks Cloudflare to check it against the website's secret, and the form is processed only when the answer is true. See `cf_turnstile_verify`.
+
+### `story_waf_banning` [@ANCHOR: story_waf_banning]
+
+**Automated WAF IP Banning** (`hams_shared/docs/stories/waf_banning.md`).
+
+A honeypot or other security module calls `cloudflare.waf.ban_ip()`; the module creates a Cloudflare IP Access Rule and records the ban. A ban has no expiry and ends only when an administrator lifts it. See `cf_execute_ban` and `cloudflare:COMM_action_lift_ban_sync`.
+
+### `journey_content_invalidation` [@ANCHOR: journey_content_invalidation]
+
+**High-Performance Content Invalidation** (`hams_shared/docs/journeys/content_invalidation.md`).
+
+The path from an edit to a cleared edge cache: a record write queues URLs or tags, the queue holds them in `cloudflare.purge.queue`, and the cron sends grouped batches. Users keep working during the whole path. See `cloudflare:COMM_enqueue_cloudflare_purge` and `cf_process_queue_logic`.
+
+### `journey_edge_security` [@ANCHOR: journey_edge_security]
+
+**Managing Edge Security** (`hams_shared/docs/journeys/edge_security.md`).
+
+The life of an IP ban: detection by another module, enforcement through `cf_execute_ban`, and resolution when an administrator lifts it, because bans do not expire on their own. See `cloudflare:COMM_action_lift_ban_sync`.
+
+### `journey_infrastructure` [@ANCHOR: journey_infrastructure]
+
+**Infrastructure Provisioning** (`hams_shared/docs/journeys/infrastructure.md`).
+
+Setting up the edge connection end to end: credentials in Settings, creating a tunnel, syncing its record, pushing its routes and keeping it running. The administrator works only through Settings and the Tunnel wizard; no Cloudflare dashboard step is needed once the API token and Account ID are in place. See `cf_tunnel_setup`, `cf_sync_tunnels` and `cloudflare:COMM_tunnel_action_push_configuration`.
+
+### `journey_traffic_handling` [@ANCHOR: journey_traffic_handling]
+
+**Intelligent Traffic Handling** (`hams_shared/docs/journeys/traffic_handling.md`).
+
+How edge metadata feeds application decisions: the edge adds headers, `_post_dispatch` sets cache headers, `get_request_context()` extracts trusted geography and threat data, and a controller may then require Turnstile. See `edge_cache:COMM_ir_http_post_dispatch_headers`, `cf_get_request_context` and `cf_turnstile_verify`.
 
 <stories_and_journeys>
 ## 5. Architectural Stories & Journeys
 
-* [Asynchronous Cache Purging](hams_shared/docs/stories/cache_purging.md) `[@ANCHOR: story_cache_purging]`
+The full documents are under `hams_shared/docs/stories/` and `hams_shared/docs/journeys/`; each has its own entry earlier in this file, under Function-Level Anchors by Area.
 
-* [Geo-Aware Request Context](hams_shared/docs/stories/request_context.md) `[@ANCHOR: story_request_context]`
-
-* [Secure Edge Bridging via Tunnels](hams_shared/docs/stories/tunnels.md) `[@ANCHOR: story_tunnels]`
-
-* [CAPTCHA Verification with Turnstile](hams_shared/docs/stories/turnstile_verification.md) `[@ANCHOR: story_turnstile]`
-
-* [Automated WAF IP Banning](hams_shared/docs/stories/waf_banning.md) `[@ANCHOR: story_waf_banning]`
-
-### Journeys
-* [High-Performance Content Invalidation](hams_shared/docs/journeys/content_invalidation.md) `[@ANCHOR: journey_content_invalidation]`
-
-* [Managing Edge Security](hams_shared/docs/journeys/edge_security.md) `[@ANCHOR: journey_edge_security]`
-
-* [Infrastructure Provisioning](hams_shared/docs/journeys/infrastructure.md) `[@ANCHOR: journey_infrastructure]`
-
-* [Intelligent Traffic Handling](hams_shared/docs/journeys/traffic_handling.md) `[@ANCHOR: journey_traffic_handling]`
 </stories_and_journeys>
