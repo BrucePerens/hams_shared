@@ -2,8 +2,6 @@
   "ham_logbook/static/src/js/qsl_collection.js::loadCard",
   "ham_logbook/static/src/js/qsl_collection.js::renderPlaceholder",
   "ham_logbook/static/src/js/qsl_collection.js::renderQslCard",
-  "ham_logbook/static/src/js/qsl_designer.js::draw",
-  "ham_logbook/static/src/js/qsl_designer.js::saveTemplate",
   "ham_member_certs/static/src/js/device_keys.js::KeyMissingError.constructor",
   "ham_repeater_dir/static/src/js/repeater_directory_page.js::RepeaterDirectoryInteraction.attachCardListeners",
   "ham_repeater_dir/static/src/js/repeater_directory_page.js::RepeaterDirectoryInteraction.clearPlace",
