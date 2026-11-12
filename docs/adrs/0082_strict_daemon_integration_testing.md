@@ -16,3 +16,11 @@ We mandate a **Zero-Mock Policy for Daemon Testing**:
 ## Consequences
 * **Pros:** Complete confidence that the daemons work seamlessly with the actual infrastructure. Catching network timeouts, serialization bugs, and message format drifts before production.
 * **Cons:** Tests may take slightly longer to run due to actual daemon spin-up times and message queue polling, requiring resilient `time.sleep()` backoffs in tests.
+
+## Status check 2026-11-12
+
+Checked against the code. `HamsTransactionCase.start_daemon()` exists (`zero_sudo/tests/common.py`). The prohibition of `@patch` on `subprocess.Popen`, `pika.BlockingConnection`
+and `redis.Redis` is not fully kept, and no lint step enforces it: some Odoo-side tests still patch these (for example `backup_management/tests/test_backup.py`,
+`distributed_redis_cache/tests/test_fixes.py`, `pager_duty/tests/test_generalized_monitor.py`, and `zero_sudo/tests/test_tdd_fixes.py` patches `subprocess.Popen`), and a daemon's own
+pure unit tests (`backup_management/daemon/test_main.py`, `distributed_redis_cache/daemons/test_cache_manager.py`) patch them to test how a command is built. Read the rule as the
+standard for new daemon integration tests; the existing patches are a backlog recorded in the night-shift to-do for this audit.

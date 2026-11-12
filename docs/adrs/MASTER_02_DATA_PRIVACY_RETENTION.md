@@ -73,3 +73,15 @@ Location data (Maidenhead Grid Squares) MUST be stored at maximum precision but 
 * **Public RF Records:** Location data derived from DX spots or QSO logs is public and MUST be shown at full resolution.
 * **Third-Party Directory Views:** When viewing a user's `ham.callbook` profile via public API or map, the ORM MUST mathematically truncate their grid to 4 characters and snap the map pin to the center of a regional bounding box, unless the user explicitly opts into `exact` privacy.
 * **Private Dashboards:** Dashboards presented strictly to the authenticated user (e.g., Propagation Maps) MUST use precise, un-fuzzed data.
+
+## Status check 2026-11-12
+
+Checked against the code. Decision 1 still holds in its principle (public on-air records are kept), but its mechanism was changed by an owner decision of 2026-10-11 (hams_open #697 removed the
+anonymisation helper), so these statements above no longer describe the code:
+- Erasure no longer reassigns ownership. `ham_logbook`'s `_execute_gdpr_erasure()` neither deletes nor reassigns QSOs: they stay attached to their owner exactly as they are. It deletes the member's ADIF queue rows through
+  `_erase_via_service_account` and clears `allstar_password` and `adif_api_secret`. `ham_events` does the same for contest scores, net-control history and adopted-event responsibility, and hard-deletes only `ham.event.issue`.
+- `zero_sudo.security.utils._anonymize_via_service_account()` no longer exists (only `_erase_via_service_account()` remains), so the helper described in the bullet on `zero_sudo.orphaned_record_owner`, and the
+  `ham_repeater_dir` reassignment of an erased trustee's repeater listings, are history. The account `zero_sudo.orphaned_record_owner` still exists as a data record, and listings reassigned before 2026-10-11
+  stay with it (`ham_repeater_dir/models/ham_repeater.py` says so).
+- The erasure service account's XML id is `ham_base.user_gdpr_service` (login `ham_base_gdpr_service_internal`); decision 2's "`gdpr_service_internal`" is that login's suffix.
+- `ham.qso.owner_user_id` is `ondelete="set null"` (`ham_logbook/models/ham_qso.py`) as described. The 4-character grid fuzzing of decision 3 is in `ham_base/models/geo_utils.py` (`grid_to_latlon(..., fuzz=True)`).

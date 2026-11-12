@@ -11,7 +11,7 @@ This directory contains the Architecture Decision Records (ADRs) that define the
 * [MASTER 03: Edge Routing & Threat Mitigation](MASTER_03_EDGE_ROUTING_THREAT_MITIGATION.md)
   Defines Cloudflare edge orchestration, proactive caching, WAF bot verification, and dynamic Nginx tarpitting via silent honeypots.
 * [MASTER 04: Modularity & Shared Services](MASTER_04_MODULARITY_SHARED_SERVICES.md)
-  Mandates centralizing shared logic and Service Accounts into the `core_base` module to prevent monolithic cross-module entanglement.
+  Mandates centralizing shared logic and Service Accounts into a shared foundation module (named `core_base` here, in practice `zero_sudo` and `ham_base`; see its status check) to prevent monolithic cross-module entanglement.
 * [MASTER 05: SWL Lifecycle & Automated Progression](MASTER_05_SWL_LIFECYCLE.md)
   Defines the SWL (short-wave listener) sandbox and automated correlation heuristics for licensing upgrades.
 * [MASTER 06: DNS CQRS (Command Query Responsibility Segregation) Architecture](MASTER_06_DNS_CQRS.md)

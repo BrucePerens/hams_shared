@@ -34,3 +34,10 @@ To prepare the site for full CSP compliance without relying on `unsafe-inline`, 
 ### Negative
 - **Development Overhead:** Requires refactoring legacy parsing scripts (such as `new_parse_pdfs.py`) to maintain a separate internal state for styling and injecting it at the end of the parsing loop.
 - **Dynamic Calculation Complexity:** React or Vanilla JS components that require highly dynamic, frame-by-frame styles (like drag-and-drop elements) may require specialized handling (e.g., CSS Custom Properties/Variables) to remain compliant without thrashing the DOM with `<style>` block updates.
+
+## Status check 2026-11-12
+
+Checked against the code. The ADR describes preparation; the `content_security_policy` module (hams_com) now implements the policy: it attaches an enforced
+`Content-Security-Policy` header and a stricter `Content-Security-Policy-Report-Only` header to every response (`models/ir_http.py`, `_strict_report_only_policy()`), and
+the built-in fallback enforced policy still has `'unsafe-inline'` in `script-src` and `style-src` (`_FALLBACK_CSP`), while the report-only header drops it from `script-src`; the "strict CSP" this ADR prepares for is that report-only target. The legacy script this ADR names,
+`new_parse_pdfs.py`, no longer exists under that name; the PDF parsing script is `ingest/parse_pdfs.py` in hams_com.

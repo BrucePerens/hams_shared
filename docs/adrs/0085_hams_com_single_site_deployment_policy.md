@@ -76,3 +76,9 @@ class (same-group `ir.rule` OR-combination) for a tenancy scenario that
 cannot occur in production. `hams_open` is unaffected and continues to be
 held to the full multi-tenant correctness bar, since it serves deployments
 this ADR does not apply to.
+
+## Status check 2026-11-12
+
+Checked against `hams_com`. Decision 3 has been carried out: `ham_base/security/security_rules.xml`, `ham_dns/security/security_rules.xml`,
+`ham_events/security/security_data.xml` and `ham_shack/security/security_rules.xml` no longer have a `domain_force` that scopes by `company_id` or `website_id`
+(no `hams_com` XML file does); the first, second and fourth keep only a comment that cites this ADR. The Context's "as of this writing" list is therefore history, not a current backlog.

@@ -34,3 +34,10 @@ The server recalculates the signature and verifies the Nonce against a Redis cac
 
 ### 7. Hardware-to-Web Airgap Bridge
 * Web browsers block local network requests. Connecting the Web Shack to physical hardware requires a local relay daemon, which MUST be packaged into native, 1-click OS installers for user accessibility.
+
+## Status check 2026-11-12
+
+Checked against the code. Mandate 1 is built for the logbook APIs (`ham_logbook/controllers/api.py`, and `daemons/adif_ingress/main.py` for the batch upload). The numbers the text leaves out:
+a request is rejected when its `timestamp` is more than 300 seconds old (`SIGNED_WINDOW_S = 300`; the same 300 s in the controller), and a nonce is remembered in Redis for 300 seconds
+(`_NONCE_REPLAY_TTL_SECONDS`, a `SET NX EX`), so a replay inside the window is refused. The signed string differs by endpoint: the live-contact API (`live_qso`) and the ADIF batch upload sign `timestamp|nonce|` plus the body
+(`X-Odoo-Signature`), while the download API signs `timestamp|nonce` (no payload). Read "`timestamp|nonce|payload`" as the form for endpoints that carry a body.
