@@ -28,7 +28,5 @@
   "daemons/hams_local_relay/src/native_pair_button.rs::spawn_terminal_source",
   "daemons/hams_local_relay/src/offline_mirror.rs::start_refresher",
   "daemons/hams_local_relay/src/relay_claim.rs::uplink_connected",
-  "daemons/hams_local_relay/src/relay_satellites.rs::request_refresh",
-  "daemons/hams_local_relay/tools/audio_enum_probe/src/main.rs::describe",
-  "daemons/hams_local_relay/tools/audio_enum_probe/src/main.rs::main"
+  "daemons/hams_local_relay/src/relay_satellites.rs::request_refresh"
 ]
