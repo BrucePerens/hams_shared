@@ -2,7 +2,11 @@
 
 *Copyright © Bruce Perens K6BP. Licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later).*
 
-[@ANCHOR: pager_duty_module_root]
+### `pager_duty_module_root` [@ANCHOR: pager_duty_module_root]
+
+**Purpose.** This anchor marks the `pager_duty` module as a whole, so that module-level tests and the module's stories and journeys can cite one stable id for "the pager duty module" rather than a single function. It has no function of its own in code: it names the module that provides active checks run by external monitoring daemons, incident records with de-duplication and rate limiting, on-call shift lookup from `calendar.event`, and notification of the person on duty.
+
+**Where to look.** The checks and daemon configuration are in `pager.check`, incidents in `pager.incident`, shifts in the `calendar.event` extension, and the standalone daemons in the module's `daemon/` directory. Each function has its own anchor entry in the technical reference below.
 
 The Pager Duty module is an enterprise-grade Site Reliability Engineering (SRE) suite designed to keep your Odoo infrastructure running smoothly. It provides active monitoring, intelligent alerting, and automated incident management.
 
@@ -106,7 +110,7 @@ The module follows a **Command Query Responsibility Segregation (CQRS)** pattern
 *   **Inter-Process Communication (IPC):** Uses Redis Pub/Sub and Queues for high-speed communication between Odoo workers and background daemons.
 
 ### Security & Micro-Privileges:
-*   **Zero-Sudo RPC (Remote Procedure Call):** Daemons authenticate via the `pager_service_internal` service account. No `sudo()` is used. All operations utilize `with_user()` for minimum privilege execution. High-privilege RPCs are protected by allow-lists. [@ANCHOR: rpc_ensure_executable_security]
+*   **Zero-Sudo RPC (Remote Procedure Call):** Daemons authenticate via the `pager_service_internal` service account. No `sudo()` is used. All operations utilize `with_user()` for minimum privilege execution. High-privilege RPCs are protected by allow-lists. `rpc_ensure_executable_security`
 
 *   **Config Isolation:** The location of the daemon configuration file is managed through system parameters, isolated by service accounts. [@ANCHOR: generalized_pager_config_path]
     Odoo writes `pager_config.json` into the directory named by the `pager_duty.config_dir` system parameter (default `/opt/hams/etc`) when that directory exists and is writable, and otherwise into `daemon/`. `generalized_monitor.py` looks for it in the order `PAGER_CONFIG_PATH`, then `PAGER_CONFIG_DIR` (default `/opt/hams/etc`), then `daemon/`. `pager_log_analyzer.py` and `pager_synthetic_spooler.py` read only the copy in `daemon/`.
@@ -140,7 +144,7 @@ The core model defining monitoring checks.
     booking), the **most recently created** shift is the one that gets paged -- adding a new
     shift is how you override an existing one. A platform-wide shift (no website) and a
     website's own shift are ranked on that same one axis, with no precedence for either.
-    [@ANCHOR: test_pager_notification]
+    `test_pager_notification`
 
 ### `pager.incident` (Models)
 Handles the lifecycle of monitoring alerts.
@@ -221,3 +225,29 @@ Run module tests using the unified test runner:
 python3 hams_shared/tools/test.py -u pager_duty
 ```
 Daemon tests (for example `test_generalized_monitor.py`, `test_pager_log_analyzer.py`, `test_synthetic_spooler.py`) live in `pager_duty/tests/` with the other tests and run under the same runner; they import the daemon scripts directly. **Do not import Odoo packages in the daemon scripts under `pager_duty/daemon/`** (or in any test placed in that directory); the daemons run outside Odoo.
+
+## Anchor reference
+
+### `rpc_ensure_executable_security` [@ANCHOR: rpc_ensure_executable_security]
+
+**Purpose.** The caller check and allow-list on `pager.check.rpc_ensure_executable(cmd_name)`, which asks the elevated `binary_downloader` service account to provision a missing monitoring binary on the daemon host. Without the check, any logged-in user could trigger that elevated download.
+
+**Signature.** `@public_rpc @api.model rpc_ensure_executable(self, cmd_name)`; `cmd_name` is a bare command name (no `/`). Returns a dict: `{"status": "ok", "path": <resolved path>}` or `{"status": "error", "message": ...}`.
+
+**Rules.** The caller must be in `base.group_system`, `pager_duty.group_pager_admin` or `pager_duty.group_pager_service`, else `AccessError`. A bare `is_service_account` flag is deliberately not accepted, since it is true for dozens of unrelated accounts, including this module's own incident creator. The name must be in the allow-list: `dig`, `snmpget`, `pg_dump`, `nginx`, `certbot`, `logrotate`, `curl`, `ping`, `docker`, `systemctl`, `cloudflared`; otherwise "Command not in allow-list." is returned and logged.
+
+**Behaviour.** If `binary_downloader` is not installed it returns an error, otherwise it calls `binary.manifest.ensure_executable` as `user_binary_downloader_service`. Known failures return an error dict. The only caller is `generalized_monitor.py` at start-up.
+
+**Tests.** `test_02_rpc_ensure_executable_security`, `test_02b_...unrelated_authenticated_user`, `test_02c_...unrelated_service_account` in `tests/test_pager_security.py`.
+
+### `test_pager_notification` [@ANCHOR: test_pager_notification]
+
+**Purpose.** This id marks the on-call lookup `get_current_on_duty_admin(self)` in `pager_duty/models/schedule.py` (the `calendar.event` extension), which decides whom an incident pages, and the tests that guard it. It is used as both a code anchor and a test anchor, so the notification stories cite it.
+
+**Signature.** `@api.private @api.model get_current_on_duty_admin(self)`; no arguments. Returns the `res.users` record of the user on duty, or `False` when no shift is in force or the shift has no user.
+
+**Behaviour.** It selects events with `is_pager_duty` set whose `start <= now <= stop`, limited to platform-wide shifts and the current website's shifts (website taken from the context key `website_id`, else the current website). Overlaps are resolved by `ON_DUTY_SHIFT_ORDER = "create_date desc, id desc"`: the most recently created shift wins, `id` breaking ties inside one transaction. A platform-wide shift and a website shift compete on that one axis with no precedence for either, so adding a new shift is how an admin overrides an existing one.
+
+**Special concerns.** Read-only, one query. Not callable over RPC.
+
+**Tests.** `tests/test_schedule_edge_cases.py` (for example `test_02_overlapping_shifts_same_create_date_highest_id_wins`) and `tests/test_incident.py`.
