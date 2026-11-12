@@ -221,6 +221,7 @@ daemons/shack_console/docs/stories/layout_height.md
 daemons/shack_console/docs/stories/layout_library.md
 daemons/shack_console/docs/stories/layout_presets.md
 daemons/shack_console/docs/stories/no_scope_design.md
+daemons/shack_console/docs/stories/scope_cw_and_decode_overlay.md
 daemons/shack_console/docs/stories/sim_roster.md
 daemons/shack_console/docs/stories/sim_spectrum.md
 daemons/shack_console/docs/stories/stt_translate_panel.md
