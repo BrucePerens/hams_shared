@@ -289,17 +289,17 @@ This section ensures all module functions and their developer usage are thorough
 
 ## Owner Interface (2026-10-12)
 
-* **Owner toolbar** `[@ANCHOR: user_websites:UX_OWNER_TOOLBAR]` (`views/owner_site_templates.xml`, called from `user_navbar`): shown above the site's own navbar to the site's owner, or a member of the owning group, on every page of that site (an internal user sees it on their own site only). `?visitor=1` hides it.
-* **Dashboard** `/my/site/<slug>` `[@ANCHOR: user_websites:COMM_owner_site_dashboard]`, `/my/site` redirects to the caller's own. Page editor `/my/site/<slug>/page/new|<id>` `[@ANCHOR: user_websites:UX_OWNER_PAGE_EDITOR]`, save `[@ANCHOR: user_websites:COMM_owner_page_save]`, publish toggles `[@ANCHOR: user_websites:COMM_owner_page_publish]` and `[@ANCHOR: user_websites:COMM_owner_post_publish]`, image upload `[@ANCHOR: user_websites:COMM_owner_image_upload]` (`controllers/owner_site.py`). Every route resolves the site from the database and answers 404 unless the caller owns it, or belongs to the owning group (`[@ANCHOR: user_websites:owner_resolve_site]`); an administrator who is not the owner gets the 404 too. The owner of a suspended or not-yet-eligible site gets a 403 page that says why instead (hidden from everyone else); a retired slug redirects to the live one.
-* **Editor** `[@ANCHOR: user_websites:UX_RICH_EDITOR]`: a contenteditable WYSIWYG (`static/src/js/rich_editor.js`), no raw HTML and no external library. Odoo's own `html_editor` is an OWL backend component tied to the website builder's `website.group_website_designer` permission and its asset bundles; mounting it for portal members would hand them the sitewide editor, which this module deliberately never grants.
+* **Owner toolbar** ``user_websites:UX_OWNER_TOOLBAR`` (`views/owner_site_templates.xml`, called from `user_navbar`): shown above the site's own navbar to the site's owner, or a member of the owning group, on every page of that site (an internal user sees it on their own site only). `?visitor=1` hides it.
+* **Dashboard** `/my/site/<slug>` ``user_websites:COMM_owner_site_dashboard``, `/my/site` redirects to the caller's own. Page editor `/my/site/<slug>/page/new|<id>` ``user_websites:UX_OWNER_PAGE_EDITOR``, save ``user_websites:COMM_owner_page_save``, publish toggles ``user_websites:COMM_owner_page_publish`` and ``user_websites:COMM_owner_post_publish``, image upload ``user_websites:COMM_owner_image_upload`` (`controllers/owner_site.py`). Every route resolves the site from the database and answers 404 unless the caller owns it, or belongs to the owning group (``user_websites:owner_resolve_site``); an administrator who is not the owner gets the 404 too. The owner of a suspended or not-yet-eligible site gets a 403 page that says why instead (hidden from everyone else); a retired slug redirects to the live one.
+* **Editor** ``user_websites:UX_RICH_EDITOR``: a contenteditable WYSIWYG (`static/src/js/rich_editor.js`), no raw HTML and no external library. Odoo's own `html_editor` is an OWL backend component tied to the website builder's `website.group_website_designer` permission and its asset bundles; mounting it for portal members would hand them the sitewide editor, which this module deliberately never grants.
 * **Sanitizer** `[@ANCHOR: user_websites:member_html_sanitize]` (`models/member_html.py`): strict allow-list in the request path for every caller, administrators included; hostile input is also filed through `website.page._trigger_malicious_arch_violation()`.
-* **Limits**: title 120 characters, body 200,000 characters, images JPEG/PNG/GIF/WebP at most 2 MB and 100 per site, 30 writes and 10 uploads per user per minute (Redis counters, `[@ANCHOR: user_websites:owner_rate_limit]`; Redis down answers 503).
+* **Limits**: title 120 characters, body 200,000 characters, images JPEG/PNG/GIF/WebP at most 2 MB and 100 per site, 30 writes and 10 uploads per user per minute (Redis counters, ``user_websites:owner_rate_limit``; Redis down answers 503).
 * **Retention**: no route erases. Unpublish keeps the record as a draft. Delete (`POST .../<page|post>/<id>/delete`, with a confirmation step) takes a page or post off the site and every public surface but archives it (`active` false, `deleted_by_owner` stamped; a page is moved to a private address so its own can be reused), and the dashboard's Deleted list can restore it, unpublished. The home page cannot be deleted. Uploaded images are public `ir.attachment` rows owned by the account (`res_model='res.users'`/`user.websites.group`, description `user_websites site image`); a member's account-erasure flow removes the images owned by that member's own account (not a group's images).
-* **Layout** `[@ANCHOR: user_websites:member_site_standalone_layout]`: on a member site `layout_inherit_user_navbar` sets `no_header`/`no_footer`, so the main site's header and footer are not rendered, and the site's own header (`user_navbar`) and footer (`member_site_footer`) are. Assets: `static/src/css/member_site.css` and `rich_editor.js` in `web.assets_frontend`.
-* **Home address** `/<slug>` `[@ANCHOR: user_websites:COMM_user_home_fallback]`; `/<slug>/home` answers 301 `[@ANCHOR: user_websites:COMM_user_home_legacy_redirect]`.
-* **Owner-site internals**: `/my/site` `[@ANCHOR: user_websites:COMM_owner_site_entry]`; the new-page and edit-page forms `[@ANCHOR: user_websites:COMM_owner_page_new]`, `[@ANCHOR: user_websites:COMM_owner_page_edit]`; a page's arch is the fixed member-page frame around sanitized body markup `[@ANCHOR: user_websites:owner_page_arch]` and the editor reads the body back out of it `[@ANCHOR: user_websites:owner_page_arch_body]`; uploads are accepted by magic number, not by file name or declared type `[@ANCHOR: user_websites:owner_image_mimetype]`.
-* **Editor functions** (`static/src/js/rich_editor.js`, exercised by `[@ANCHOR: test_tour_owner_site]`): `[@ANCHOR: user_websites:rich_editor_apply_link]`, `[@ANCHOR: user_websites:rich_editor_clean_node]`, `[@ANCHOR: user_websites:rich_editor_close_link_bar]`, `[@ANCHOR: user_websites:rich_editor_image_picked]`, `[@ANCHOR: user_websites:rich_editor_link_bar_click]`, `[@ANCHOR: user_websites:rich_editor_link_keydown]`, `[@ANCHOR: user_websites:rich_editor_open_link_bar]`, `[@ANCHOR: user_websites:rich_editor_paste]`, `[@ANCHOR: user_websites:rich_editor_remember_range]`, `[@ANCHOR: user_websites:rich_editor_restore_range]`, `[@ANCHOR: user_websites:rich_editor_say]`, `[@ANCHOR: user_websites:rich_editor_start]`, `[@ANCHOR: user_websites:rich_editor_sync_field]`, `[@ANCHOR: user_websites:rich_editor_toolbar_click]`, `[@ANCHOR: user_websites:rich_editor_toolbar_state]`, `[@ANCHOR: user_websites:rich_editor_wrap_code]`.
-* **Helper functions** (owner interface and sanitizer, each exercised by `tests/test_owner_site.py`): `[@ANCHOR: user_websites:fn_main_serve_core_fallback]`, `[@ANCHOR: user_websites:fn_owner_escape]`, `[@ANCHOR: user_websites:fn_owner_escape_attr]`, `[@ANCHOR: user_websites:fn_owner_svc]`, `[@ANCHOR: user_websites:fn_owner_owner_domain]`, `[@ANCHOR: user_websites:fn_owner_qcontext]`, `[@ANCHOR: user_websites:fn_owner_report_if_hostile]`, `[@ANCHOR: user_websites:fn_owner_clean_body]`, `[@ANCHOR: user_websites:fn_owner_own_page]`, `[@ANCHOR: user_websites:fn_owner_back_to_editor]`, `[@ANCHOR: user_websites:fn_owner_attachment_owner]`, `[@ANCHOR: user_websites:fn_hmtl_clean_url]`, `[@ANCHOR: user_websites:fn_hmtl_is_hostile]`, `[@ANCHOR: user_websites:fn_hmtl_sanitize_member_html]`, `[@ANCHOR: user_websites:fn_hmtl_clean_children]`, `[@ANCHOR: user_websites:fn_hmtl_clean_attributes]`, `[@ANCHOR: user_websites:fn_hmtl_drop]`, `[@ANCHOR: user_websites:fn_hmtl_unwrap]`, `[@ANCHOR: user_websites:fn_hmtl_menu_pages]`, `[@ANCHOR: user_websites:fn_users_user_websites_menu_pages]`, `[@ANCHOR: user_websites:fn_group_user_websites_menu_pages]`.
+* **Layout** ``user_websites:member_site_standalone_layout``: on a member site `layout_inherit_user_navbar` sets `no_header`/`no_footer`, so the main site's header and footer are not rendered, and the site's own header (`user_navbar`) and footer (`member_site_footer`) are. Assets: `static/src/css/member_site.css` and `rich_editor.js` in `web.assets_frontend`.
+* **Home address** `/<slug>` ``user_websites:COMM_user_home_fallback``; `/<slug>/home` answers 301 `[@ANCHOR: user_websites:COMM_user_home_legacy_redirect]`.
+* **Owner-site internals**: `/my/site` ``user_websites:COMM_owner_site_entry``; the new-page and edit-page forms ``user_websites:COMM_owner_page_new``, ``user_websites:COMM_owner_page_edit``; a page's arch is the fixed member-page frame around sanitized body markup ``user_websites:owner_page_arch`` and the editor reads the body back out of it ``user_websites:owner_page_arch_body``; uploads are accepted by magic number, not by file name or declared type ``user_websites:owner_image_mimetype``.
+* **Editor functions** (`static/src/js/rich_editor.js`, exercised by ``test_tour_owner_site``): `[@ANCHOR: user_websites:rich_editor_apply_link]`, `[@ANCHOR: user_websites:rich_editor_clean_node]`, `[@ANCHOR: user_websites:rich_editor_close_link_bar]`, `[@ANCHOR: user_websites:rich_editor_image_picked]`, `[@ANCHOR: user_websites:rich_editor_link_bar_click]`, `[@ANCHOR: user_websites:rich_editor_link_keydown]`, `[@ANCHOR: user_websites:rich_editor_open_link_bar]`, `[@ANCHOR: user_websites:rich_editor_paste]`, `[@ANCHOR: user_websites:rich_editor_remember_range]`, `[@ANCHOR: user_websites:rich_editor_restore_range]`, `[@ANCHOR: user_websites:rich_editor_say]`, `[@ANCHOR: user_websites:rich_editor_start]`, `[@ANCHOR: user_websites:rich_editor_sync_field]`, `[@ANCHOR: user_websites:rich_editor_toolbar_click]`, `[@ANCHOR: user_websites:rich_editor_toolbar_state]`, `[@ANCHOR: user_websites:rich_editor_wrap_code]`.
+* **Helper functions** (owner interface and sanitizer, each exercised by `tests/test_owner_site.py`): ``user_websites:fn_main_serve_core_fallback``, ``user_websites:fn_owner_escape``, ``user_websites:fn_owner_escape_attr``, ``user_websites:fn_owner_svc``, ``user_websites:fn_owner_owner_domain``, ``user_websites:fn_owner_qcontext``, ``user_websites:fn_owner_report_if_hostile``, ``user_websites:fn_owner_clean_body``, ``user_websites:fn_owner_own_page``, ``user_websites:fn_owner_back_to_editor``, ``user_websites:fn_owner_attachment_owner``, `[@ANCHOR: user_websites:fn_hmtl_clean_url]`, `[@ANCHOR: user_websites:fn_hmtl_is_hostile]`, `[@ANCHOR: user_websites:fn_hmtl_sanitize_member_html]`, `[@ANCHOR: user_websites:fn_hmtl_clean_children]`, `[@ANCHOR: user_websites:fn_hmtl_clean_attributes]`, `[@ANCHOR: user_websites:fn_hmtl_drop]`, `[@ANCHOR: user_websites:fn_hmtl_unwrap]`, `[@ANCHOR: user_websites:fn_hmtl_menu_pages]`, `[@ANCHOR: user_websites:fn_users_user_websites_menu_pages]`, `[@ANCHOR: user_websites:fn_group_user_websites_menu_pages]`.
 * **SVG schematics** survive the sanitizer through zero_sudo's SVG allow-list `[@ANCHOR: user_websites:member_html_svg_allowlist]`; every other active or unknown element is removed.
 
 <stage1_sweep>
@@ -971,3 +971,137 @@ Part of `test_02_right_to_erasure` in `tests/test_privacy_gdpr.py`. A signed-in 
 ### `test_gdpr_erasure_posts` [@ANCHOR: test_gdpr_erasure_posts]
 
 Same test as `test_gdpr_erasure_pages` (`test_02_right_to_erasure`): after the erasure request it asserts that the user's blog post no longer exists. It covers the `blog.post` and `blog.blog` loops of `gdpr_sudo_erasure`, which run as the GDPR service account, not as the user.
+
+## 10. Anchor reference: owner site, part 1 (controller, views, home routes)
+
+The owner interface lives in `controllers/owner_site.py` (class `UserWebsitesOwnerController`) and `views/owner_site_templates.xml`; the home routes live in `controllers/main.py`. Every owner route is `auth="user"`, `website=True`, `sitemap=False` and is wrapped by `answers_site_response`, which turns a `SiteResponse` exception (a redirect from a retired slug, a 403 explanation page) into the route's own response. All POST routes carry `csrf=True`. Tests are in `tests/test_owner_site.py` unless named otherwise.
+
+### `user_websites:UX_OWNER_TOOLBAR` [@ANCHOR: user_websites:UX_OWNER_TOOLBAR]
+
+The QWeb template `user_websites.owner_toolbar` (`views/owner_site_templates.xml`), rendered by `user_navbar` above the site's own navbar. It is a dark bar labelled "Your site" that appears only when `is_owner` is true for the page being viewed, so a visitor, a member of another site and (on someone else's slug) an internal administrator never see it; `?visitor=1` hides it for the owner. It holds links to Manage site, New page, Images and Privacy, a POST form for a new blog post, and, depending on the page, Edit this page, Edit this post, Publish or Unpublish (POST to `.../publish` with a `next` address), Delete this page (never for the home page) and a View-as-visitor link. Inputs come from the render context (`resolved_slug`, `main_object`, `page_type`). Tests: `test_owner_toolbar_visible_to_owner_only`, the tour `test_tour_owner_site`.
+
+### `user_websites:COMM_owner_site_dashboard` [@ANCHOR: user_websites:COMM_owner_site_dashboard]
+
+`owner_site_dashboard(self, site_slug, **kwargs)`, route `GET /my/site/<site_slug>`. After `_resolve_site` it lists, as the module service account, up to 200 pages (ordered by url) and 200 blog posts (newest first) owned by the user or group, up to `MAX_IMAGES_PER_SITE` images (attachments with description `user_websites site image`), and up to 100 pages and posts each that the owner deleted (`active_test=False`, `deleted_by_owner` set). It renders `user_websites.owner_site_dashboard` with the image limits and a flag `has_home` saying whether the home page exists. **Returns:** the rendered page; a caller who does not own the slug gets 404. Read-only, no rate limit. Test: `test_owner_site_dashboard_lists_content`.
+
+### `user_websites:UX_OWNER_PAGE_EDITOR` [@ANCHOR: user_websites:UX_OWNER_PAGE_EDITOR]
+
+The QWeb template `user_websites.owner_page_edit` (`views/owner_site_templates.xml`), the form for creating or editing one page. Context values: `page` (record or none), `title`, `page_slug`, `body` (already sanitized markup), `published`, `can_edit_body`, `is_home`, `error`, `saved`. It shows an error alert for the codes `title`, `address`, `exists`, `too_long` and `not_editable`; a page built by the website builder (`can_edit_body` false) is shown with a warning and no form. The form posts `page_id`, `title`, `page_slug`, `content` (filled by the rich editor from the page markup) and `is_published` to `/my/site/<slug>/page/save` with the CSRF token. Test: `test_owner_page_editor_renders_wysiwyg`.
+
+### `user_websites:COMM_owner_page_save` [@ANCHOR: user_websites:COMM_owner_page_save]
+
+`owner_page_save(self, site_slug, page_id="", title="", page_slug="", content="", is_published="", **kwargs)`, route `POST /my/site/<site_slug>/page/save`.
+
+| Argument | Type | Meaning |
+| --- | --- | --- |
+| `page_id` | str | Existing page id (ASCII digits only, else 404), empty for a new page. |
+| `title` | str | Stripped; 1 to 120 characters. |
+| `page_slug` | str | New pages only; default from the title; must match `PAGE_SLUG_RE` and not be reserved. |
+| `content` | str | Editor HTML, at most `MAX_BODY_CHARS` (200,000); sanitized by `sanitize_member_html`. |
+| `is_published` | str | Any non-empty value publishes. |
+
+**Flow:** resolve the site, count one write against the 30-per-minute limit, sanitize the body. Refusals (`title`, `too_long`, `address`, `exists`) re-render the editor with HTTP 400 and what the member typed (`_editor_with_error`); `not_editable` redirects back. A hostile body is filed as a violation by `_report_if_hostile` and saved clean. An existing page is written in the caller's own environment, so the model's ownership guard, field allow-list and quotas still apply; a new page is created as the service account at `/<slug>/<page_slug>` with a `qweb` arch. **Returns:** a redirect (303) to `/my/site/<slug>/page/<id>?saved=1`. Errors: 404 for foreign content, 429 over the limit, 503 when Redis is down. Test: `test_owner_page_create_edit_publish`.
+
+### `user_websites:COMM_owner_page_publish` [@ANCHOR: user_websites:COMM_owner_page_publish]
+
+`owner_page_publish(self, site_slug, page_id, publish="", **kwargs)`, route `POST /my/site/<site_slug>/page/<page_id>/publish`. It resolves the site, counts a write, finds the owner's page with `_own_page` (404 otherwise) and writes `website_published = (publish == "1")` in the caller's own environment, so the model's guards apply. Nothing is deleted: unpublishing keeps the page as a draft. **Returns:** a 303 redirect to the `next` parameter if it starts with `/my/site/`, otherwise to the dashboard with `?saved=1`. Test: `test_owner_page_create_edit_publish`.
+
+### `user_websites:COMM_owner_post_publish` [@ANCHOR: user_websites:COMM_owner_post_publish]
+
+`owner_post_publish(self, site_slug, post_id, publish="", **kwargs)`, route `POST /my/site/<site_slug>/post/<post_id>/publish`. Same pattern as the page toggle for a blog post: resolve the site, count a write, load the post through `UserWebsitesController._get_own_blog_post_for_edit`, require that its owner user or group is this site's (else 404), then write `is_published = (publish == "1")`. **Returns:** a 303 redirect to the dashboard with `?saved=1`. The post stays; nothing is erased. Test: `test_owner_post_publish_toggle`.
+
+### `user_websites:COMM_owner_image_upload` [@ANCHOR: user_websites:COMM_owner_image_upload]
+
+`owner_image_upload(self, site_slug, ufile=None, json_reply="", **kwargs)`, route `POST /my/site/<site_slug>/image`. Counts against the separate 10-uploads-per-minute limit. Checks in order: a file was sent (400), it is not empty (400), at most 2 MB (413, only `MAX_IMAGE_BYTES + 1` bytes are read), a JPEG, PNG, GIF or WebP by magic number (415, see `owner_image_mimetype`), and fewer than 100 images for this site (409). It then creates a public `ir.attachment` as the service account (name from the slugified file name, at most 60 characters, `res_model` and `res_id` from `_attachment_owner`, description `user_websites site image`). **Returns:** with `json_reply` set, JSON `{"ok", "error", "url"}` where `url` is `/web/image/<id>` (errors keep their HTTP status); otherwise a 303 redirect to the dashboard with `?saved=1` or `?error=image`. Test: `test_owner_image_upload_rules`.
+
+### `user_websites:owner_resolve_site` [@ANCHOR: user_websites:owner_resolve_site]
+
+`UserWebsitesOwnerController._resolve_site(self, site_slug)`, the ownership gate for every owner route. As the service account it looks the slug up as a user and as a group. **Returns:** `(profile_user, profile_group)`, one of them an empty recordset. **Errors:** 404 when the user slug is not the caller's own (an administrator who is not the owner included) or when the group slug names a group the caller is not a member of or one that is suspended; a user slug whose owner is suspended raises `SiteResponse` with the 403 page `owner_site_suspended`; one whose owner has eligibility gaps reconciles the account and raises the 403 `owner_site_ineligible` page; an unknown slug first tries a legacy-slug redirect (301 for GET, 308 otherwise), then 404. The decision comes from the database, never from the URL. Tests: `test_owner_site_denied_for_other_member`, `test_owner_site_suspended_explains_and_points_to_appeal`, `test_site_eligibility_hook`, `test_site_slug_one_site`.
+
+### `user_websites:UX_RICH_EDITOR` [@ANCHOR: user_websites:UX_RICH_EDITOR]
+
+The QWeb template `user_websites.rich_editor` (`views/user_websites_templates.xml`), included by the page and post editors. Its context is `editor_name`, `editor_label`, `editor_html` and `upload_url`. It draws a formatting toolbar (`role="toolbar"`, buttons with `data-uw-cmd` and an `aria-label` each: Bold, Italic, Underline, Inline code, headings, lists, links, images, undo, redo, quote, code block, alignment) and a `contenteditable` area, plus a hidden field that `static/src/js/rich_editor.js` fills with the area's HTML when the form is submitted. The page never shows markup to the member; the server sanitizes the field. Tests: `test_owner_page_editor_renders_wysiwyg` (no raw-markup textarea, labels present) and the tour `test_tour_owner_site`.
+
+### `user_websites:owner_rate_limit` [@ANCHOR: user_websites:owner_rate_limit]
+
+`UserWebsitesOwnerController._rate_limit(self, bucket, limit)`. `bucket` is `"write"` (30 a minute) or `"upload"` (10 a minute); the counter key is `uw:rl:<database>:<bucket>:<user id>` and is incremented with `expiring_counter(redis_client, key, 60)`, which always sets a 60-second expiry. **Returns:** nothing. **Errors:** `TooManyRequests` (HTTP 429) when the count passes the limit; `ServiceUnavailable` (503) when Redis raises, so the limiter fails closed rather than allowing unbounded writes. Called after the ownership check, before any write. Tests: `test_owner_write_rate_limited`, `test_15b_the_write_rate_limit_counter_always_has_an_expiry`.
+
+### `user_websites:member_site_standalone_layout` [@ANCHOR: user_websites:member_site_standalone_layout]
+
+The block in the `layout_inherit_user_navbar` template (`views/user_websites_templates.xml`) that sets `member_site` true for a member or group site (the page's `main_object` is a `website.page`, `blog.blog` or `blog.post` owned by the profile, or the profile record itself) and for owner tool pages that pass `member_site=True`. When it is true it sets `no_header` and `no_footer`, so `website.layout` omits the hams.com menu, banners and footer, and the site's own `user_navbar` and `member_site_footer` render instead. Other pages keep the main chrome. Test: `test_member_site_has_no_hams_chrome`.
+
+### `user_websites:COMM_user_home_fallback` [@ANCHOR: user_websites:COMM_user_home_fallback]
+
+`user_home_fallback(self, website_slug, **kwargs)`, route `GET /<uwslug:website_slug>`, `auth="public"`. Finds the slug as a user or group site (service account). An unknown slug first tries a legacy-slug 301, then Odoo's own page, redirect and attachment lookup (`_serve_core_fallback`), then 404. A user whose site is not publicly visible, or a suspended group, is 404. A slug that differs in case from the canonical one is redirected 301 to the canonical address. If a published page exists at `/<slug>` it is served by Odoo's router (and a Redis view counter is incremented for non-administrators; Redis failure is only logged). Otherwise it renders `user_websites.placeholder_page`, with `is_owner` and `home_state` telling the owner how to create the home. Tests: `test_member_site_home_url`, `test_create_site_existing_home`.
+
+### `user_websites:COMM_owner_site_entry` [@ANCHOR: user_websites:COMM_owner_site_entry]
+
+`owner_site_entry(self, **kwargs)`, route `GET /my/site`. A signed-in user without a site slug is sent to `/my/home`; otherwise to `/my/site/<own slug>` with a 303. No database writes. It exists so a link to "my site" works without knowing the slug.
+
+### `user_websites:COMM_owner_page_new` [@ANCHOR: user_websites:COMM_owner_page_new]
+
+`owner_page_new(self, site_slug, **kwargs)`, route `GET /my/site/<site_slug>/page/new`. After `_resolve_site` it renders `user_websites.owner_page_edit` with no page, an empty body, unpublished, `can_edit_body` true, and any `title` and `page_slug` query parameters prefilled. **Returns:** the form page. No write happens until the form is posted to the save route.
+
+### `user_websites:COMM_owner_page_edit` [@ANCHOR: user_websites:COMM_owner_page_edit]
+
+`owner_page_edit(self, site_slug, page_id, **kwargs)`, route `GET /my/site/<site_slug>/page/<page_id>`. Resolves the site, loads the page with `_own_page` (404 if it is not the owner's or not under the owner's address), reads the body back with `_arch_body`, sanitizes it again for display, and renders the editor with the page name, its address part (empty for the home page), the published flag, `can_edit_body` (false for builder-made layouts) and `is_home`. **Returns:** the rendered page. Read only.
+
+### `user_websites:owner_page_arch` [@ANCHOR: user_websites:owner_page_arch]
+
+`_page_arch(site_slug, page_key, title, body_html)` (module function). **Returns:** the stored arch string for a member page: `<t name=... t-name="user_websites.page_<page_key>"><t t-call="user_websites.template_default_home"><div id="wrap" class="oe_structure uw-member-page">...body...</div></t></t>`. The body (already sanitized HTML) is re-serialised as XML through lxml, the title is escaped for an attribute with `_escape_attr`. Only the two QWeb directives the arch sanitizer allows are produced. Empty body gives an empty wrapper. Pure. Test: `test_owner_page_create_edit_publish`.
+
+### `user_websites:owner_page_arch_body` [@ANCHOR: user_websites:owner_page_arch_body]
+
+`_arch_body(arch_base)` (module function). **Returns:** `(body_html, editable)`. It parses the stored arch and takes the children of `<div id="wrap">` as HTML. If the arch is empty it returns `("", True)`; if it fails to parse, has no `wrap` div, or contains any `<t>` element or `t-*` attribute inside the wrapper (a website-builder layout) it returns `("", False)`, so the editor refuses to overwrite a page it cannot represent. Pure. Test: `test_owner_page_create_edit_publish`.
+
+### `user_websites:owner_image_mimetype` [@ANCHOR: user_websites:owner_image_mimetype]
+
+`_image_mimetype(data)` (module function). **Returns:** `image/jpeg`, `image/png`, `image/gif` or `image/webp` chosen from the leading bytes (`FF D8 FF`, the PNG signature, `GIF87a`, `GIF89a`, or `RIFF....WEBP`), else `None`. The file name and the declared content type are ignored, so a renamed script is refused. Argument `data` is bytes (at most 2 MB + 1 byte, as read by the upload route). Pure. Tests: `test_owner_image_upload_rules` and `test_image_magic_numbers`.
+
+### `test_tour_owner_site` [@ANCHOR: test_tour_owner_site]
+
+The tour `owner_site_tour` (`static/tests/tours/owner_site_tour.js`), started by a Python test in `tests/test_ui_tours.py`. The owner opens their own site (`/touruser`), sees the toolbar, starts a new blog post, finds the contenteditable editor, types a title and a body with `execCommand("insertText")` (no markup), publishes and sees the post on the site. Its header lists the rich-editor function anchors it exercises (link bar, paste, range memory, toolbar state, history). It runs in a headless browser.
+
+### `user_websites:fn_main_serve_core_fallback` [@ANCHOR: user_websites:fn_main_serve_core_fallback]
+
+`_serve_core_fallback()` in `controllers/main.py`, no arguments. It removes `website_slug` from `request.params` and returns `request.env["ir.http"]._serve_fallback()`: Odoo's own page, redirect or attachment lookup for the path (or `False` when there is none). The removal matters because `website.page._allow_to_use_cache()` refuses to cache a response whose request has parameters, so stock pages reached through the `/<slug>` route would otherwise lose edge caching. Used by both home routes for slugs that are not member sites. Test: `test_helper_functions_are_exercised`.
+
+### `user_websites:fn_owner_escape` [@ANCHOR: user_websites:fn_owner_escape]
+
+`_escape(text)` in `controllers/owner_site.py`. **Returns:** `text` with `&`, `<` and `>` replaced by `&amp;`, `&lt;`, `&gt;`, for building the arch XML by hand. It does not touch quotes, so it is not safe for attributes; use `_escape_attr` there. Argument must be a string. Pure. Test: `test_helper_functions_are_exercised`.
+
+### `user_websites:fn_owner_escape_attr` [@ANCHOR: user_websites:fn_owner_escape_attr]
+
+`_escape_attr(text)`. **Returns:** `_escape(text)` with `"` also replaced by `&quot;`, for a double-quoted XML attribute (the page title inside `name="..."` in the arch). Argument must be a string. Pure. Test: `test_helper_functions_are_exercised`.
+
+### `user_websites:fn_owner_svc` [@ANCHOR: user_websites:fn_owner_svc]
+
+`UserWebsitesOwnerController._svc(self)`. **Returns:** the environment of the service account `user_websites.user_websites_service_account`, from `zero_sudo.security.utils._get_service_env`. Used for reads of other members' tables and for creates after the ownership check; it is never `sudo()`. Calling it does not check ownership, so the caller must have passed `_resolve_site` first. Test: `test_helper_functions_are_exercised`.
+
+### `user_websites:fn_owner_owner_domain` [@ANCHOR: user_websites:fn_owner_owner_domain]
+
+`_owner_domain(self, profile_user, profile_group)`. **Returns:** the search domain `[("owner_user_id", "=", user.id)]` for a user site, else `[("user_websites_group_id", "=", group.id)]`. One of the two arguments is a record, the other empty. Used by the dashboard to scope searches. Pure. Test: `test_helper_functions_are_exercised`.
+
+### `user_websites:fn_owner_qcontext` [@ANCHOR: user_websites:fn_owner_qcontext]
+
+`_qcontext(self, profile_user, profile_group, **extra)`. **Returns:** the render dictionary shared by all owner templates: `profile_user`, `profile_group`, `main_object` (the user or group), `resolved_slug` and `site_slug` (its slug), `member_site` true, `is_owner` true, `error` and `saved` from the query string, then the keyword arguments merged on top. `member_site` makes the page wear the site's own layout; `is_owner` shows the toolbar. Pure apart from reading the request. Test: `test_helper_functions_are_exercised`.
+
+### `user_websites:fn_owner_report_if_hostile` [@ANCHOR: user_websites:fn_owner_report_if_hostile]
+
+`_report_if_hostile(self, hostile, profile_user, profile_group, url)`. When `hostile` is false it does nothing. Otherwise it calls `website.page._trigger_malicious_arch_violation({"url": url, "owner_user_id" | "user_websites_group_id": ...})` in the caller's environment, which files an automated `content.violation.report` and strike for the owner. It is called after the body was sanitized, so the hostile markup is already gone from what is stored. **Returns:** nothing. Test: `test_13_hostile_body_is_sanitized_and_reported`.
+
+### `user_websites:fn_owner_clean_body` [@ANCHOR: user_websites:fn_owner_clean_body]
+
+`_clean_body(self, content)`. **Returns:** `(None, False)` when `content` is longer than `MAX_BODY_CHARS` (200,000), else the result of `sanitize_member_html(content)`, a tuple `(clean_html, hostile)`. The length check runs first so an oversized body is not parsed. The caller treats `None` as the `too_long` error. Pure. Test: `test_helper_functions_are_exercised`.
+
+### `user_websites:fn_owner_own_page` [@ANCHOR: user_websites:fn_owner_own_page]
+
+`_own_page(self, profile_user, profile_group, page_id)`. Loads the page as the service account and **returns** it, or raises 404 when it does not exist, belongs to another user or group, or its `url` is not `/<slug>` or under `/<slug>/`. The last check keeps a page that was somehow moved out of the owner's address space from being edited here. Archived pages are not found (see `_own_page_any`). Test: `test_21_page_urls_stay_in_the_owners_namespace` and `test_11_cannot_touch_other_members_content`.
+
+### `user_websites:fn_owner_back_to_editor` [@ANCHOR: user_websites:fn_owner_back_to_editor]
+
+`_back_to_editor(self, slug, page_id, error)`. **Returns:** a redirect (Odoo's default 303) to `/my/site/<slug>/page/<page_id>?error=<error>`, or to `.../page/new` when `page_id` is not ASCII digits. Used by the save route when an existing page is not editable (`not_editable`). `slug` is quoted. Test: `test_helper_functions_are_exercised`.
+
+### `user_websites:fn_owner_attachment_owner` [@ANCHOR: user_websites:fn_owner_attachment_owner]
+
+`_attachment_owner(self, profile_user, profile_group)`. **Returns:** `("res.users", user.id)` for a user site, else `("user.websites.group", group.id)`: the `res_model` and `res_id` under which a site's images are stored and counted. Account erasure removes the images of the member's own account (not a group's). Pure. Test: `test_20_image_limit_per_site`.
