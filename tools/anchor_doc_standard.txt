@@ -1800,3 +1800,5 @@ docs/stories/event_cover_pictures.md
 docs/stories/ham_classifieds_test_helpers_reference.md
 docs/stories/ham_events_test_helpers_reference.md
 docs/stories/ham_shared_callsigns_function_reference.md
+daemons/ham_digital_modes/README.md
+daemons/hpsdr/README.md
