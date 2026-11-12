@@ -66,8 +66,26 @@ This module implements a strict CQRS (Command Query Responsibility Segregation) 
 
 This module provides essential tools to integrate customized models into the distributed caching ecosystem safely. When developing new modules, always use the functions detailed below instead of standard Odoo caching (`@tools.ormcache`).
 
-### 1. The `@distributed_cache()` Decorator
-Replaces Odoo's `@tools.ormcache` to provide precise, cross-worker distributed caching with multi-tenant awareness (website and company boundaries). [@ANCHOR: COMM_distributed_cache_decorator]
+### 1. The `@distributed_cache()` Decorator [@ANCHOR: COMM_distributed_cache_decorator]
+Replaces Odoo's `@tools.ormcache` to provide precise, cross-worker distributed caching with multi-tenant awareness (website and company boundaries).
+
+**Purpose.** Caches the result of an Odoo model method in two levels: a per-process in-memory cache (L1) and the shared Redis store (L2), keyed so that tenants never see each other's results. It replaces `@tools.ormcache`, which only knows about one worker.
+
+**Call interface.** `distributed_cache()` takes no arguments and returns the decorator, so it is always written with parentheses. The decorated function must be a method of an Odoo model (the wrapper reads `self.env` and `self._name`); it may take any positional and keyword arguments and keeps its own name and docstring. The wrapper does this, in order:
+
+| Step | What happens |
+|---|---|
+| Bypass | If `redis_bypass_cache` is truthy in the context, the method is called directly and nothing is read or written. |
+| Key | `<dbname>:distributed_cache:<model>:<method>:w<website_id>:c<company ids>:<argument hash>`. `website_id` is the context's `website_id` or 0; the company part is the sorted `allowed_company_ids` from the context, else the sorted ids of `env.companies`, else `0`; the hash is `_get_hash` (see `COMM_distributed_cache_key_generation`) and includes `self`. |
+| L1 | The process-wide `_local_cache` (LRU, 8192 entries, guarded by `LRU_LOCK`) is checked first; a hit returns the stored object itself, not a copy. |
+| L2 | With an HMAC key (`_cache_hmac_key` is not `None`) and a Redis pool, the key is read, the HMAC verified, the payload unpickled and copied into L1. |
+| Miss | The method runs; the result is pickled, signed and written with `SETEX` for 86400 seconds (24 hours), and is always stored in L1. |
+
+**Returns and errors.** The method's own return value. An exception raised by the method propagates and nothing is cached. A `redis.RedisError` is logged as a warning and the call carries on without Redis (fail open). A payload that is malformed, fails the HMAC check or will not unpickle is logged and ignored, and Redis is not written for that call. A result that cannot be pickled is returned and kept in L1 only.
+
+**Special concerns.** Synchronous and blocking: a Redis call waits at most the pool's 1 second socket timeout. The only lock taken is `LRU_LOCK`, briefly and never across a Redis call or the method itself. Callers share the cached object, so they must not mutate a returned list or dict, and a method whose result depends on something that is not in the key (the user, the language, the time) must not be decorated. L1 entries have no expiry of their own: they go when `poll_and_clear_local_cache` sees the invalidation counter change, when `invalidate_model_cache` runs for the model, or when the process restarts. Redis entries live 24 hours. Pickle is only read back after the HMAC verified, so a writer without the application secret cannot plant code.
+
+**See also.** Test: `tests/test_distributed_cache.py` (cites this anchor); related `COMM_notify_model_invalidation_logic`, `COMM_invalidate_model_cache_logic`, `distributed_redis_cache:COMM_get_redis_connection`, `distributed_redis_cache:COMM_cache_hmac_key`.
 
 **Usage:**
 ```python
@@ -127,19 +145,70 @@ Every cache payload written to Redis is HMAC-signed before storage and verified 
 deserialization -- `_pickle.loads()` is never called on a payload whose signature doesn't verify,
 since a compromised/misconfigured Redis instance is otherwise a remote-code-execution vector.
 
-* **Crypto Secret Resolution:** `[@ANCHOR: distributed_redis_cache:COMM_raw_crypto_secret]` -- mirrors `zero_sudo.security.utils._get_crypto_secret()`'s own fallback chain (`HAMS_CRYPTO_KEY`, then `/var/lib/odoo/hams_crypto.secret`, then Odoo's `admin_passwd`; the literal `admin` is refused) independently, to avoid a circular `@distributed_cache()` dependency.
-
-* **HMAC Key Derivation:** `[@ANCHOR: distributed_redis_cache:COMM_cache_hmac_key]` -- returns `None` (never a guessable default) when no real secret is configured.
-
-* **Payload Signing:** `[@ANCHOR: distributed_redis_cache:COMM_sign_payload]`
-
-* **Payload Verification:** `[@ANCHOR: distributed_redis_cache:COMM_verify_and_unwrap_payload]` -- rejects any payload whose HMAC doesn't match before it ever reaches `_pickle.loads()`.
-
 * **Daemon Key Registration (removed in 1.1):** `[@ANCHOR: distributed_redis_cache:unregister_cache_manager_key]` -- versions before 1.1 registered the "Redis Cache Manager" daemon with `daemon.key.registry` (see [daemon_key_manager.md](daemon_key_manager.md)) in a `post_init_hook`, which minted an Odoo API key for `cache_manager.env` that the daemon never used. 1.1 has no `post_init_hook`; `migrations/1.1` calls `unregister_cache_manager_key(env)`, which removes the registry row and revokes the key (idempotent; the service account and the leftover key file stay).
 
-* **Redis Connection Resolution:** `[@ANCHOR: distributed_redis_cache:COMM_get_redis_connection]` -- the connection settings come from the Settings system parameters, else the `REDIS_*` environment variables.
+### `COMM_raw_crypto_secret` [@ANCHOR: distributed_redis_cache:COMM_raw_crypto_secret]
 
-* **Postgres NOTIFY Callback:** `[@ANCHOR: distributed_redis_cache:COMM_postgres_notify_handler]` -- schedules the Redis broadcast task on the asyncio event loop when a NOTIFY arrives.
+**Purpose.** Finds the application secret from which the cache's HMAC key is derived. It is called by `_cache_hmac_key` on every sign and verify and is deliberately independent of `zero_sudo.security.utils._get_crypto_secret()`, because that method is itself `@distributed_cache()` decorated and calling it from the cache's own read path would recurse (and `zero_sudo` already depends on this module).
+
+**Call interface.** `_raw_crypto_secret()` takes no arguments and returns a `str`. Order of lookup: the `HAMS_CRYPTO_KEY` environment variable; the stripped contents of `/var/lib/odoo/hams_crypto.secret` (an `OSError` while reading is logged as a warning and the lookup continues); Odoo's `admin_passwd` from `tools.config`. An empty result, or the literal `admin`, is refused and `""` is returned.
+
+**Errors and side effects.** It never raises. When no usable secret exists it logs one error per process (module flag `_warned_missing_crypto_secret`), not one per call. It reads the file on every call (no caching), so changing the secret file takes effect without a restart; it takes no lock.
+
+**Security.** The secret is never logged. A hardcoded fallback is never substituted, since a publicly known key would let anyone forge signed cache entries.
+
+**See also.** Test: `tests/test_fixes.py` (cites this anchor); caller `distributed_redis_cache:COMM_cache_hmac_key`.
+
+### `COMM_cache_hmac_key` [@ANCHOR: distributed_redis_cache:COMM_cache_hmac_key]
+
+**Purpose.** Derives the key that signs every payload written to Redis, so the cache can refuse to unpickle anything it did not write itself. Redis holds pickles, and an unsigned pickle read back from a shared or compromised Redis is a way to run code in every worker.
+
+**Call interface.** `_cache_hmac_key()` takes no arguments. It returns 32 bytes, `SHA-256("<secret>:distributed_redis_cache_hmac")`, where the secret comes from `_raw_crypto_secret`; or `None` when no real secret is configured. It does not raise.
+
+**Special concerns.** `None` is a signal, not a key: the decorator then skips Redis entirely and caches in process memory only, because deriving a key from an empty secret would give every unconfigured deployment the same publicly guessable key. Callers must never sign or verify with `None`. The key is recomputed on each call (a hash of a short string), so a rotated secret changes the key at once and existing Redis entries then fail verification and are recomputed (they are ignored, not unpickled). No locks or I/O beyond the secret lookup.
+
+**See also.** Test: `tests/test_fixes.py`; related `distributed_redis_cache:COMM_raw_crypto_secret`, `distributed_redis_cache:COMM_sign_payload`, `distributed_redis_cache:COMM_verify_and_unwrap_payload`.
+
+### `COMM_sign_payload` [@ANCHOR: distributed_redis_cache:COMM_sign_payload]
+
+**Purpose.** Wraps a pickled result into the string that is stored in Redis, so that a reader can check it came from this application.
+
+**Call interface.** `_sign_payload(key, payload_bytes)`: `key` is the bytes from `_cache_hmac_key` (never `None`); `payload_bytes` is the pickle of the cached value. It returns a `str` of the form `<64 hex characters of HMAC-SHA-256>:<payload as hex>`; the payload is hex encoded so the value is plain ASCII and survives a Redis connection with `decode_responses=True`. It raises nothing for valid input (a `TypeError` for a `None` key or non-bytes payload).
+
+**Special concerns.** Pure function: no I/O, no locks, deterministic. The hex encoding doubles the stored size. The signature covers only the payload bytes, not the Redis key, so a valid payload copied under a different key would verify; the key already carries the database, model, tenant and argument hash, and Redis write access is the trust boundary.
+
+**See also.** Inverse `distributed_redis_cache:COMM_verify_and_unwrap_payload`; test `tests/test_fixes.py`.
+
+### `COMM_verify_and_unwrap_payload` [@ANCHOR: distributed_redis_cache:COMM_verify_and_unwrap_payload]
+
+**Purpose.** Checks the HMAC on a value read from Redis and returns the pickle bytes, so `_pickle.loads()` is only ever called on data this application signed.
+
+**Call interface.** `_verify_and_unwrap_payload(key, stored)`: `key` is the bytes from `_cache_hmac_key`; `stored` is the `str` read from Redis. It returns the payload `bytes`. It raises `ValueError` when the value has no `:` separator or an empty payload ("missing HMAC signature"), when the payload is not valid hex, or when the signature does not match ("tampered or forged"). The comparison uses `hmac.compare_digest` (constant time). A non-ASCII signature part makes `compare_digest` raise `TypeError`, which the decorator does not catch (unknown whether any path can produce one; to-do: decide and test).
+
+**Special concerns.** Pure function, no I/O or locks. The decorator treats `ValueError` as "payload rejected": it logs a warning, skips Redis for that call, and recomputes the value. An entry from before a secret rotation fails here and is recomputed.
+
+**See also.** Inverse `distributed_redis_cache:COMM_sign_payload`; test `tests/test_fixes.py`.
+
+### `COMM_get_redis_connection` [@ANCHOR: distributed_redis_cache:COMM_get_redis_connection]
+
+**Purpose.** Returns the Redis client every part of the module uses, choosing the connection settings from the Settings page (`ir.config_parameter`) when an environment is given and otherwise from the process-wide default pool.
+
+**Call interface.** `get_redis_connection(env=None)` returns a `redis.Redis`. With `env`, the host, port and password come from the system parameters `distributed_redis_cache.redis_host`, `.redis_port` and `.redis_password`, read through `zero_sudo.security.utils` with `redis_bypass_cache=True` (no `.sudo()`); a port that is not an integer falls back to the default. The resolved tuple is cached per database name in `_db_configs` until `clear_db_config_cache`. If the tuple equals the defaults (`REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD` environment variables, else `redis`, 6379, none) the shared `redis_pool` is used; otherwise a `ConnectionPool` is created once per (host, port, password) and kept in `_custom_pools`, never freed. Without `env` the default pool is returned.
+
+**Special concerns.** No connection is opened here, so it does not raise for an unreachable server; errors appear on the first command. Both pools use `decode_responses=True` and 1 second connect and socket timeouts, and the ACL user from `REDIS_USERNAME`. `POOL_LOCK` guards both dictionaries and is held while the settings are read the first time. The password is never logged.
+
+**See also.** Test `tests/test_fixes.py`; related `COMM_redis_connection_pool`, `distributed_redis_cache:clear_db_config_cache`.
+
+### `COMM_postgres_notify_handler` [@ANCHOR: distributed_redis_cache:COMM_postgres_notify_handler]
+
+**Purpose.** The callback the cache-manager daemon registers with `asyncpg` for the `distributed_cache_invalidation` channel. It turns each PostgreSQL notification into a Redis publish without blocking the connection that delivered it.
+
+**Call interface.** `postgres_notify_handler(connection, pid, channel, payload)` is a plain (synchronous) function: `connection` is the asyncpg connection, `pid` the notifying backend's pid, `channel` the channel name, `payload` the string sent by `pg_notify` (a JSON object with `model` and `dbname`). It returns `None`. It logs the notification at info level and calls `asyncio.create_task(broadcast_to_redis(payload))`, so it must run inside the event loop (asyncpg calls listeners there). The task is kept in the module set `_background_tasks` until it finishes, so it is not garbage collected mid-run.
+
+**Special concerns.** It validates nothing itself: `broadcast_to_redis` (`COMM_cache_manager_redis_publish`) drops payloads that are not a JSON object with `model` and `dbname`. Each notification becomes its own task; a stalled Redis surfaces as a per-call timeout (10 seconds) rather than a growing backlog. Fully asynchronous side effects: Redis publish and counter increment.
+
+**See also.** Test `tests/test_fixes.py`; `distributed_redis_cache:cache_manager_main` for the loop that installs it.
+
 </stage1_sweep>
 
 <stories_and_journeys>
