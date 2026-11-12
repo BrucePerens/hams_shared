@@ -1,7 +1,4 @@
 [
-  "ham_dx_cluster/static/src/js/dx_cluster_widget.js::DXClusterGrid.onCallsignFilterInput",
-  "ham_dx_cluster/static/src/js/dx_cluster_widget.js::DXClusterGrid.setup",
-  "ham_dx_cluster/static/src/js/dx_cluster_widget.js::t-component",
   "ham_events/static/src/js/event_adoption.js::EventAdoptionInteraction.onAdopt",
   "ham_events/static/src/js/event_adoption.js::EventAdoptionInteraction.onMessage",
   "ham_events/static/src/js/event_adoption.js::EventAdoptionInteraction.onRelease",
