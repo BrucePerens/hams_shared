@@ -206,6 +206,15 @@ class FindAnchorsInDocsTests(unittest.TestCase):
         self.assertNotIn("patent_pipeline:x", docs, "the .py file itself must not be treated as doc content")
         self.assertIn("patent_pipeline:x", contracts, "the island's own README.md is still a real contract anchor")
 
+    def test_a_readme_inside_a_code_island_is_a_contract_anchor(self):
+        # daemons/shack_console/tools/stt_accuracy/README.md documents the anchors of the .py files next to it; the
+        # `tools` pruning hid it, so those anchors read as undocumented. Another daemon's tools README stays hidden.
+        _write(os.path.join(self.tmp, "daemons", "shack_console", "tools", "stt_accuracy", "README.md"), "[@ANCHOR: stt_accuracy:x]\n")
+        _write(os.path.join(self.tmp, "daemons", "other", "tools", "README.md"), "[@ANCHOR: other:y]\n")
+        _docs, contracts, _lines = va.find_anchors_in_docs(self.tmp, self.tmp)
+        self.assertIn("stt_accuracy:x", contracts)
+        self.assertNotIn("other:y", contracts)
+
 
 class FindAnchorsInCodeTests(unittest.TestCase):
     def setUp(self):
@@ -245,6 +254,11 @@ class FindAnchorsInCodeTests(unittest.TestCase):
         code_anchors, *_rest = self._scan()
         self.assertIn("radioctl:radioctl_caps_x", code_anchors)
         self.assertNotIn("other:other_t", code_anchors)
+
+    def test_shack_consoles_python_tools_are_scanned_as_code_though_named_tools(self):
+        _write(os.path.join(self.tmp, "daemons", "shack_console", "tools", "jobs.py"), "# [@ANCHOR: shack_console:jobs_x]\ndef x(): pass\n")
+        code_anchors, *_rest = self._scan()
+        self.assertIn("shack_console:jobs_x", code_anchors)
 
     def test_a_rust_test_file_included_by_path_is_scanned_for_tests_links(self):
         # A crate that keeps its unit tests in `foo.rs.test`, pulled in with
