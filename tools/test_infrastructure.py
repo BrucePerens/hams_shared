@@ -1117,8 +1117,8 @@ class ExecuteHooksTests(_TmpDirTestCase):
             sorted(c.args[0][1] for c in sqlite_calls),
             sorted(os.path.join(self.tmp, "var/lib/powerdns", n) for n in ("pdns.sqlite3", "callbook/callbook.sqlite3")),
         )
-        for call in sqlite_calls:
-            self.assertIn("stdin", call.kwargs)
+        for recorded in sqlite_calls:
+            self.assertIn("stdin", recorded.kwargs)
 
     def test_an_environment_with_no_hooked_directories_runs_no_hooks(self):
         mock_run = MagicMock()
@@ -1866,8 +1866,8 @@ class BridgeApiKeyProvisioningTests(_TmpDirTestCase):
         self.assertIn("ON CONFLICT (key) DO UPDATE", sql)
         # The key travels only as a psql variable, never inside the SQL text.
         self.assertNotIn(self.KEY, sql)
-        for call in probe.call_args_list:
-            self.assertNotIn(self.KEY, call.kwargs["input"])
+        for recorded in probe.call_args_list:
+            self.assertNotIn(self.KEY, recorded.kwargs["input"])
         self.assertEqual(infra.get_hook_failures(), [])
 
     def test_a_value_that_does_not_read_back_is_a_hook_failure(self):
@@ -1954,8 +1954,8 @@ class CreateOdooRoleIfMissingTests(_SafePatchTestCase):
         self.safe_patch_object(infra, "_role_exists", return_value=True)
         run = MagicMock()
         infra._create_odoo_role_if_missing(run, "normalPass123")
-        for call in run.call_args_list:
-            self.assertNotIn("PASSWORD", " ".join(str(a) for a in call.args[0]) + str(call.kwargs.get("input", "")))
+        for recorded in run.call_args_list:
+            self.assertNotIn("PASSWORD", " ".join(str(a) for a in recorded.args[0]) + str(recorded.kwargs.get("input", "")))
 
     # Verified by [@ANCHOR: infrastructure:_create_odoo_role_if_missing]
     def test_a_new_production_role_is_not_a_superuser(self):
@@ -2312,8 +2312,8 @@ class ProvisionCacheManagerRoleTests(_TmpDirTestCase):
         self.assertIn(':"db_name"', grant_sql)
         self.assertIn(':"role_name"', grant_sql)
         self.assertNotIn(malicious_db, grant_sql)
-        for call in run_cmd.call_args_list:
-            self.assertNotIn("-c", call.args[0])
+        for recorded in run_cmd.call_args_list:
+            self.assertNotIn("-c", recorded.args[0])
 
     def test_grant_is_connect_only_no_table_privilege(self):
         run_cmd = MagicMock()
