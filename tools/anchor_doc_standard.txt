@@ -1863,3 +1863,8 @@ daemons/radioctl/docs/stories/radioctl_core_d_data_structures.md
 daemons/radioctl/docs/stories/radioctl_d_data_structures.md
 daemons/radioctl/docs/stories/radioctl_splitter_data_structures.md
 daemons/radioctl/docs/stories/radioctl_station_data_structures.md
+daemons/relay_broker/src
+daemons/elad_usb/src
+daemons/rsp_open/src
+daemons/rsp_open/examples
+daemons/rsp_open/tools
