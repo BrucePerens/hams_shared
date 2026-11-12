@@ -25,6 +25,11 @@ PostgreSQL):
    variables test.py and run_linters.py need on this host;
 10. a self-check: run_linters.py --changed on a clean hams_com tree and test.py -u zero_sudo.
 
+Gate machines: set PostgreSQL's max_locks_per_transaction to 256 (default 64, needs a server restart, so it is a manual
+operator step and this script does not change it). Parallel test shards on one server share a lock table of
+max_locks_per_transaction x (max_connections + prepared transactions) slots, and a heavy test transaction can hold hundreds
+of relation locks; with the default, shards failed with "out of shared memory ... increase max_locks_per_transaction".
+
 No unit that fetches from third-party servers (MANIFEST external_fetch) is ever enabled or started: this path
 enables only postgresql, redis-server and rabbitmq-server. Full entries for every anchor: tools/README.md.
 """
