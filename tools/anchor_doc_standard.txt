@@ -221,6 +221,7 @@ daemons/shack_console/docs/stories/band_map_waterfall_layout.md
 daemons/shack_console/docs/stories/console_asset_pipeline.md
 daemons/shack_console/docs/stories/console_award_order_and_antenna_selector.md
 daemons/shack_console/docs/stories/console_gps_notice_indicator.md
+daemons/shack_console/docs/stories/console_hams_redirect_role_notices.md
 daemons/shack_console/docs/stories/console_owner_pairing_copy_setup_manuals.md
 daemons/shack_console/docs/stories/console_relay_identity_wire_and_asn1.md
 daemons/shack_console/docs/stories/console_server_settings_updater_backup.md
