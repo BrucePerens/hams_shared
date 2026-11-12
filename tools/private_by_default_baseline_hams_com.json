@@ -2,7 +2,7 @@
   "version": 1,
   "entries": {
     "content_security_policy": {
-      "count": 4,
+      "count": 2,
       "owner": "Bruce Perens (batch renames, quiet merge queue)",
       "tracking": "night_shift_todo/medium/rpc-methods-private-by-default-renames-8c4e2f61.md"
     },
@@ -12,42 +12,42 @@
       "tracking": "night_shift_todo/medium/rpc-methods-private-by-default-renames-8c4e2f61.md"
     },
     "ham_base": {
-      "count": 14,
+      "count": 9,
       "owner": "Bruce Perens (batch renames, quiet merge queue)",
       "tracking": "night_shift_todo/medium/rpc-methods-private-by-default-renames-8c4e2f61.md"
     },
     "ham_callbook": {
-      "count": 6,
+      "count": 5,
       "owner": "Bruce Perens (batch renames, quiet merge queue)",
       "tracking": "night_shift_todo/medium/rpc-methods-private-by-default-renames-8c4e2f61.md"
     },
     "ham_club_management": {
-      "count": 37,
+      "count": 24,
       "owner": "Bruce Perens (batch renames, quiet merge queue)",
       "tracking": "night_shift_todo/medium/rpc-methods-private-by-default-renames-8c4e2f61.md"
     },
     "ham_communications_consent": {
-      "count": 10,
+      "count": 7,
       "owner": "Bruce Perens (batch renames, quiet merge queue)",
       "tracking": "night_shift_todo/medium/rpc-methods-private-by-default-renames-8c4e2f61.md"
     },
     "ham_demo_mode": {
-      "count": 4,
+      "count": 2,
       "owner": "Bruce Perens (batch renames, quiet merge queue)",
       "tracking": "night_shift_todo/medium/rpc-methods-private-by-default-renames-8c4e2f61.md"
     },
     "ham_dns": {
-      "count": 4,
+      "count": 1,
       "owner": "Bruce Perens (batch renames, quiet merge queue)",
       "tracking": "night_shift_todo/medium/rpc-methods-private-by-default-renames-8c4e2f61.md"
     },
     "ham_dx_cluster": {
-      "count": 8,
+      "count": 4,
       "owner": "Bruce Perens (batch renames, quiet merge queue)",
       "tracking": "night_shift_todo/medium/rpc-methods-private-by-default-renames-8c4e2f61.md"
     },
     "ham_events": {
-      "count": 68,
+      "count": 53,
       "owner": "Bruce Perens (batch renames, quiet merge queue)",
       "tracking": "night_shift_todo/medium/rpc-methods-private-by-default-renames-8c4e2f61.md"
     },
@@ -57,7 +57,7 @@
       "tracking": "night_shift_todo/medium/rpc-methods-private-by-default-renames-8c4e2f61.md"
     },
     "ham_logbook": {
-      "count": 21,
+      "count": 17,
       "owner": "Bruce Perens (batch renames, quiet merge queue)",
       "tracking": "night_shift_todo/medium/rpc-methods-private-by-default-renames-8c4e2f61.md"
     },
@@ -67,17 +67,12 @@
       "tracking": "night_shift_todo/medium/rpc-methods-private-by-default-renames-8c4e2f61.md"
     },
     "ham_nets": {
-      "count": 11,
+      "count": 6,
       "owner": "Bruce Perens (batch renames, quiet merge queue)",
       "tracking": "night_shift_todo/medium/rpc-methods-private-by-default-renames-8c4e2f61.md"
     },
     "ham_onboarding": {
-      "count": 32,
-      "owner": "Bruce Perens (batch renames, quiet merge queue)",
-      "tracking": "night_shift_todo/medium/rpc-methods-private-by-default-renames-8c4e2f61.md"
-    },
-    "ham_profile": {
-      "count": 1,
+      "count": 23,
       "owner": "Bruce Perens (batch renames, quiet merge queue)",
       "tracking": "night_shift_todo/medium/rpc-methods-private-by-default-renames-8c4e2f61.md"
     },
@@ -87,22 +82,22 @@
       "tracking": "night_shift_todo/medium/rpc-methods-private-by-default-renames-8c4e2f61.md"
     },
     "ham_relay_bridge": {
-      "count": 27,
+      "count": 13,
       "owner": "Bruce Perens (batch renames, quiet merge queue)",
       "tracking": "night_shift_todo/medium/rpc-methods-private-by-default-renames-8c4e2f61.md"
     },
     "ham_repeater_dir": {
-      "count": 51,
+      "count": 39,
       "owner": "Bruce Perens (batch renames, quiet merge queue)",
       "tracking": "night_shift_todo/medium/rpc-methods-private-by-default-renames-8c4e2f61.md"
     },
     "ham_satellite": {
-      "count": 2,
+      "count": 1,
       "owner": "Bruce Perens (batch renames, quiet merge queue)",
       "tracking": "night_shift_todo/medium/rpc-methods-private-by-default-renames-8c4e2f61.md"
     },
     "ham_shack": {
-      "count": 15,
+      "count": 8,
       "owner": "Bruce Perens (batch renames, quiet merge queue)",
       "tracking": "night_shift_todo/medium/rpc-methods-private-by-default-renames-8c4e2f61.md"
     },
@@ -112,7 +107,7 @@
       "tracking": "night_shift_todo/medium/rpc-methods-private-by-default-renames-8c4e2f61.md"
     },
     "ham_simulated_band": {
-      "count": 5,
+      "count": 4,
       "owner": "Bruce Perens (batch renames, quiet merge queue)",
       "tracking": "night_shift_todo/medium/rpc-methods-private-by-default-renames-8c4e2f61.md"
     },
@@ -122,12 +117,7 @@
       "tracking": "night_shift_todo/medium/rpc-methods-private-by-default-renames-8c4e2f61.md"
     },
     "ham_testing": {
-      "count": 7,
-      "owner": "Bruce Perens (batch renames, quiet merge queue)",
-      "tracking": "night_shift_todo/medium/rpc-methods-private-by-default-renames-8c4e2f61.md"
-    },
-    "ham_training": {
-      "count": 6,
+      "count": 5,
       "owner": "Bruce Perens (batch renames, quiet merge queue)",
       "tracking": "night_shift_todo/medium/rpc-methods-private-by-default-renames-8c4e2f61.md"
     },
@@ -142,7 +132,7 @@
       "tracking": "night_shift_todo/medium/rpc-methods-private-by-default-renames-8c4e2f61.md"
     },
     "ics_forms": {
-      "count": 27,
+      "count": 9,
       "owner": "Bruce Perens (batch renames, quiet merge queue)",
       "tracking": "night_shift_todo/medium/rpc-methods-private-by-default-renames-8c4e2f61.md"
     },
