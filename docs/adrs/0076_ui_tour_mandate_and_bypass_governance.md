@@ -4,7 +4,7 @@
 Accepted
 
 ## Context
-The platform's DevSecOps pipeline utilizes an AST (abstract syntax tree, the parsed structure of Python source code that our linters inspect) Burn List (the `check_burn_list.py` linter, which fails the build when a rule is broken) to strictly enforce the presence of JavaScript UI Tours for all Odoo interface views (`ir.ui.view`). While comprehensive testing is critical, JavaScript DOM-based tours are inherently brittle. They rely on specific CSS selectors and DOM structures, making them susceptible to false positives caused by minor layout shifts, core framework upgrades, or network latency.
+The platform's DevSecOps pipeline utilizes an AST (abstract syntax tree, the parsed structure of Python source code that our linters inspect) Burn List (the `check_burn_list.py` linter, which fails the build when a rule is broken) to strictly enforce the presence of JavaScript UI Tours for all Odoo interface views (`ir.ui.view`). While comprehensive testing is critical, JavaScript DOM-based (DOM, the browser's tree of page elements) tours are inherently brittle. They rely on specific CSS selectors and DOM structures, making them susceptible to false positives caused by minor layout shifts, core framework upgrades, or network latency.
 
 Mandating 100% tour coverage creates a "Maintenance Trap," where CI/CD pipelines constantly fail, and developer bandwidth is consumed by fixing fragile tests rather than building features.
 

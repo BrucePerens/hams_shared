@@ -3,7 +3,7 @@
 ## Status
 Accepted
 
-**Superseded in part 2026-10-23:** hams.com no longer uses ARRL Logbook of the World (LoTW) or TQSL (Bruce's decision); LoTW mentions below are kept as history.
+**Superseded in part 2026-10-23:** hams.com no longer uses ARRL Logbook of the World (LoTW) or TQSL (ARRL's signing software for Logbook of the World uploads) (Bruce's decision); LoTW mentions below are kept as history.
 
 ## Scope
 This ADR governs how this codebase (`hams_com`, `hams_open`, `hams_shared`) tracks its exposure
@@ -26,7 +26,7 @@ mechanism to tell us when it moves.
 That category splits into three distinct shapes, each needing a different answer:
 
 1. **Vendored by a framework we depend on, version-bumped silently on every framework upgrade.**
-   Example: Odoo's own `web/static/lib/` (FontAwesome, Bootstrap, OWL, jQuery, Luxon, Chart.js,
+   Example: Odoo's own `web/static/lib/` (FontAwesome, Bootstrap, OWL (Odoo's own web framework), jQuery, Luxon, Chart.js,
    PDF.js, and others) and the Python libraries pulled in as `Depends:` of the `odoo` Debian
    package itself (`lxml`, `psycopg2`, `cryptography`, `reportlab`, and others). An
    `apt-get upgrade odoo` can change any of these without touching a single file in our own repo.

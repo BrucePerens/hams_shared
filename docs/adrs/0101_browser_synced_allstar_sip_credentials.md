@@ -1,4 +1,4 @@
-# ADR 0101: AllStar SIP Credentials Are Synced to the User's Own Browsers (Bounded Exception to ADR 0095)
+# ADR 0101: AllStar SIP (Session Initiation Protocol, the internet-telephony signalling protocol) Credentials Are Synced to the User's Own Browsers (Bounded Exception to ADR 0095)
 
 ## Status
 Accepted
@@ -41,7 +41,7 @@ credential, and it is not used by hams.com for anything: hams.com is not in the 
   c. The endpoint is separate from the signalling-metadata endpoint
      (`/api/v1/repeater/webrtc_credentials/<id>`), which stays password-free.
   d. In the browser the config is kept in IndexedDB and the password is encrypted with a per-origin,
-     per-browser WebCrypto AES-GCM key that is generated non-extractable; the `CryptoKey` object itself is
+     per-browser WebCrypto AES-GCM (authenticated encryption) key that is generated non-extractable; the `CryptoKey` object itself is
      kept in IndexedDB. The password is never placed in localStorage, a URL, a log line, an error message
      or telemetry.
   e. The browser copy is refreshed from the server on login/opening the shack while online, and
@@ -63,7 +63,7 @@ once it passes the system's structure and currency check, and for a non-US appli
 (c) for a non-US applicant, the HamCall address-knowledge check; (d) an explicit action by an administrator
 (approving an uploaded licence, setting Verified Ham by hand, or an invitation that grants it), which always
 grants it whatever the administrator was shown, including a photo or scan of a US licence. Other verification
-methods (a QRZ profile token, Morse, an emailed one-time code) confirm identity only and never grant Verified Ham. The UI carries a notice that the operator is
+methods (a QRZ (the QRZ.com callsign directory) profile token, Morse, an emailed one-time code) confirm identity only and never grant Verified Ham. The UI carries a notice that the operator is
 responsible for staying within licence and band limits.
 
 ## Consequences

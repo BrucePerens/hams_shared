@@ -10,7 +10,7 @@ Pointing a public-facing authoritative DNS server (PowerDNS) directly at Odoo's 
 
 ### 1. Command Query Responsibility Segregation (CQRS)
 We physically isolate the DNS read infrastructure from the application state.
-* **Command (Odoo):** Odoo manages the `ham.dns.zone` state. Any CRUD operation triggers an asynchronous message to RabbitMQ.
+* **Command (Odoo):** Odoo manages the `ham.dns.zone` state. Any CRUD (create, read, update, delete) operation triggers an asynchronous message to RabbitMQ.
 * **Sync Daemon:** An external Python daemon (`pdns_sync`) consumes the RabbitMQ events and pushes the translated state to PowerDNS via its REST API.
 * **Query (PowerDNS):** PowerDNS operates entirely on its own high-speed, isolated SQLite backend (`gsqlite3`). DNS floods hit SQLite, leaving Odoo completely unaffected.
 
