@@ -135,7 +135,7 @@ def importance(path):
 def find_data_structures(path, root=None):
     """Data-structure definitions in one source file that carry no anchor: a list of `(line, kind, name)`.
 
-    An indented Rust `type` (an associated type in an impl or trait) is not a definition and is skipped. A definition counts as anchored when an anchor tag is on the definition line or in the unbroken run of
+    A Python `class` is counted only when the file parses and the line is a real class statement (not text inside a docstring). An indented Rust `type` (an associated type in an impl or trait) is not a definition and is skipped. A definition counts as anchored when an anchor tag is on the definition line or in the unbroken run of
     attribute, decorator and comment lines directly above it (a blank line or code ends the run). Rust code from a
     `#[cfg(test)]` line to the end of the file, and files in test paths, are skipped. Python classes nested in
     functions are found as well. An unreadable file gives `[]`. With `root`, the test-path rule is applied to the path
@@ -151,12 +151,21 @@ def find_data_structures(path, root=None):
     except (OSError, UnicodeDecodeError):
         return []
     missing = []
+    py_classes = None
+    if suffix == ".py":
+        try:
+            import ast
+            py_classes = {n.lineno - 1 for n in ast.walk(ast.parse("\n".join(lines))) if isinstance(n, ast.ClassDef)}
+        except (SyntaxError, ValueError):
+            py_classes = None  # unparsable: fall back to the line scan
     for number, line in enumerate(lines):
         if suffix == ".rs" and line.strip().startswith("#[cfg(test)]"):
             break
         match = pattern.match(line)
         if not match:
             continue
+        if py_classes is not None and number not in py_classes:
+            continue  # "class X" inside a docstring or comment, not a class statement
         if suffix == ".rs" and match.group(1) == "type" and line[:1].isspace():
             continue  # an associated type in an impl or trait (`type Output = ...`), not a data structure of its own
         block, above = [line], number - 1

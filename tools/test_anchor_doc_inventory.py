@@ -114,6 +114,8 @@ class DataStructureTests(unittest.TestCase):
             self.assertEqual(inv.find_data_structures(rust), [(4, "enum", "Bare"), (5, "type", "Alias")])
             py = write(tmp, "m/models.py", "class Bare:\n    pass\n\n# %s\nclass Fine:\n    pass\n" % tag("m:Fine"))
             self.assertEqual(inv.find_data_structures(py), [(1, "class", "Bare")])
+            doc = write(tmp, "m/doc.py", '"""\nclass Mentioned is only text here.\n"""\nclass Real:\n    pass\n')
+            self.assertEqual(inv.find_data_structures(doc), [(4, "class", "Real")])
             js = write(tmp, "static/x.js", "export class Widget {}\nclass Other {}\nfunction f() {}\n")
             self.assertEqual(inv.find_data_structures(js), [(1, "class", "Widget"), (2, "class", "Other")])
             self.assertEqual(inv.find_data_structures(write(tmp, "static/x.txt", "class X")), [])
