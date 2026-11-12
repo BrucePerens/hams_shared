@@ -962,3 +962,4 @@ docs/stories/daemons_simulated_bots_reference.md
 docs/stories/daemons_fetch_core_reference.md
 docs/stories/daemons_dx_fcc_and_club_recrawl_reference.md
 docs/modules/zero_sudo.md
+ham_callbook/docs/stories/04_callbook_and_privacy.md
