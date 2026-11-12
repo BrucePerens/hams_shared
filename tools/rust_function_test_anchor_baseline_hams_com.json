@@ -38,11 +38,6 @@
   "daemons/hams_local_relay/src/rig_probe.rs::HamlibRig::level",
   "daemons/hams_local_relay/src/tx_calibration.rs::gain_with_backoff_db",
   "daemons/hams_local_relay/src/tx_calibration.rs::set_installation_levels",
-  "daemons/hams_local_relay/src/tx_emergency.rs::spawn_suspend_guard",
-  "daemons/hams_local_relay/src/winkeyer_keying.rs::KeyingPort::drop",
-  "daemons/hams_local_relay/src/winkeyer_keying.rs::SerialLineSink::read",
-  "daemons/hams_local_relay/src/winkeyer_keying.rs::SerialLineSink::set",
-  "daemons/hams_local_relay/src/winkeyer_keying.rs::install_fatal_signal_unkey_once",
   "daemons/hams_local_relay/tools/audio_enum_probe/src/main.rs::describe",
   "daemons/hams_local_relay/tools/audio_enum_probe/src/main.rs::main"
 ]
