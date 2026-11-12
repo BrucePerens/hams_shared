@@ -29,9 +29,6 @@
   "daemons/hams_local_relay/src/offline_mirror.rs::start_refresher",
   "daemons/hams_local_relay/src/relay_claim.rs::uplink_connected",
   "daemons/hams_local_relay/src/relay_satellites.rs::request_refresh",
-  "daemons/hams_local_relay/src/rig_contract.rs::enabled",
-  "daemons/hams_local_relay/src/tx_calibration.rs::gain_with_backoff_db",
-  "daemons/hams_local_relay/src/tx_calibration.rs::set_installation_levels",
   "daemons/hams_local_relay/tools/audio_enum_probe/src/main.rs::describe",
   "daemons/hams_local_relay/tools/audio_enum_probe/src/main.rs::main"
 ]
