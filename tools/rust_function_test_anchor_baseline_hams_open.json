@@ -18,8 +18,5 @@
   "daemons/ham_digital_modes/tools/codec2_riscv32_bench/src/main.rs::paint_stack",
   "daemons/ham_digital_modes/tools/codec2_riscv32_bench/src/main.rs::stack_high_water",
   "daemons/ham_digital_modes/tools/codec2_riscv32_bench/src/prof.rs::instret",
-  "daemons/ham_digital_modes/tools/codec2_riscv32_bench/src/prof.rs::mark",
-  "daemons/vnwa_open/src/capture.rs::input_names",
-  "daemons/vnwa_open/src/sweep.rs::Vna::measure",
-  "daemons/vnwa_open/src/sweep.rs::Vna::sweep"
+  "daemons/ham_digital_modes/tools/codec2_riscv32_bench/src/prof.rs::mark"
 ]
