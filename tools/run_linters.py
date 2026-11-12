@@ -520,6 +520,18 @@ def stamp_text(mode, step_names, hosts=(), known_red="", siblings=(), impact=())
     return f"{mode} {stamp_time} steps={len(step_names)} names={','.join(bases)}{host_field}{sibling_field}{impact_field}{known_red}\n"
 
 
+def write_stamp_file(path, text):
+    """Writes a pass stamp whole or not at all (temporary file, then rename): a crash or power loss never leaves a cut-off stamp the gate could read."""
+    part = f"{path}.{os.getpid()}.tmp"
+    try:
+        with open(part, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(part, path)
+    finally:
+        if os.path.exists(part):
+            os.remove(part)
+
+
 # [@ANCHOR: run_linters:write_batch_stamp]
 def write_batch_stamp(tip, step_names, batch_id, with_tips=(), known_red=""):
     """Pass stamp for one branch tip that passed in a coalesced batch (lint_batch.py): the same file and line
@@ -531,8 +543,7 @@ def write_batch_stamp(tip, step_names, batch_id, with_tips=(), known_red=""):
         return
     try:
         os.makedirs(pass_stamp_dir(), exist_ok=True)
-        with open(os.path.join(pass_stamp_dir(), tip), "w", encoding="utf-8") as handle:
-            handle.write(stamp_text("changed", step_names, known_red=known_red).rstrip("\n")
+        write_stamp_file(os.path.join(pass_stamp_dir(), tip), stamp_text("changed", step_names, known_red=known_red).rstrip("\n")
                          + f" batch={batch_id}{batch_queue.with_field(with_tips)}\n")
     except OSError as error:
         print(f"(pass stamp not written: {error})", file=sys.stderr)
@@ -574,8 +585,7 @@ def _write_pass_stamps(repos, mode, step_names=(), hosts=(), known_red="", sibli
             continue
         try:
             os.makedirs(pass_stamp_dir(), exist_ok=True)
-            with open(os.path.join(pass_stamp_dir(), head[0]), "w", encoding="utf-8") as handle:
-                handle.write(stamp_text(mode, step_names, hosts, known_red, siblings, impact))
+            write_stamp_file(os.path.join(pass_stamp_dir(), head[0]), stamp_text(mode, step_names, hosts, known_red, siblings, impact))
         except OSError as error:
             print(f"(pass stamp not written: {error})", file=sys.stderr)
 
