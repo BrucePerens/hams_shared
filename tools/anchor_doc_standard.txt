@@ -59,6 +59,7 @@ daemons/bench_mcp/docs/stories/hamlib_b.md
 daemons/bench_mcp/docs/stories/sa_core.md
 daemons/bench_mcp/docs/stories/sa_sweep_tg.md
 daemons/bench_mcp/docs/stories/usb_hub_a.md
+daemons/bench_mcp/docs/stories/usb_hub_b.md
 daemons/bench_mcp/docs/stories/usb_hub_c.md
 daemons/bench_mcp/glasgow
 daemons/bench_mcp/src/manual
