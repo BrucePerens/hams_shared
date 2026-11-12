@@ -1616,6 +1616,16 @@ FAMILY_ACCOUNT_UNITS = {
         "no_key": True,
         "db_login": "/opt/hams/etc/keys/cache_manager/cache_manager_db.env",
     },
+    # The callsign parking page (hams_com daemons/callsign_parking, docs/runbooks/CALLSIGN_PARKING.md). No Odoo key; its one credential is the
+    # `parking_ro` PostgreSQL login (SELECT on ham_callbook_parking_view only) that provisioning writes through _provision_cache_manager_role
+    # (the same writer as cache-manager.service), `db_login`. It loads no environment file and writes no file.
+    "callsign.parking.service": {
+        "user": "hamsd_parking",
+        "environment_files": frozenset(),
+        "no_state": True,
+        "no_key": True,
+        "db_login": "/opt/hams/etc/keys/parking/parking_db.env",
+    },
     "club.crawl.service": {
         "user": "hamsd_club_crawl",
         "environment_files": frozenset({"common.env"}),
@@ -2062,6 +2072,20 @@ MANIFEST = {
             "environments": ["prod", "test"],
         },
         {
+            # daemons/callsign_parking (callsign.parking.service): the HTTP parking page for <callsign>.hams.com. No Odoo key; its one
+            # credential is the SELECT-on-one-view PostgreSQL login keys/parking/parking_db.env (FAMILY_ACCOUNT_UNITS `db_login`, written by
+            # provisioning as root, odoo:hamsd_parking 0640). odoo joins this group only to read that file in a test, like hamsd_cache_manager.
+            # Not in hams_com: the traversal group plus the ACL entries on the directories it passes through are all it has.
+            "user": "hamsd_parking",
+            "group": "hamsd_parking",
+            "home": "/nonexistent",
+            "shell": "/usr/sbin/nologin",
+            "add_to_users": ["odoo"],
+            "member_of": ["hams_traverse"],
+            "not_member_of": ["hams_com"],
+            "environments": ["prod", "test"],
+        },
+        {
             # daemons/hams_simulated_band (hams.simulated.band.service): the Simulated Band's WebRTC SFU. No Odoo key; it reads the
             # hand-placed /etc/hams-band secrets through the group and writes the QSO recordings. odoo joins this group only to
             # READ the recordings (ham_communications_consent's ingest scan, the session log and the recording portal), never to
@@ -2488,6 +2512,15 @@ MANIFEST = {
             # group = the one account that consumes it, 0750, the same rule as every key directory (NIGHT_PLAN 226).
             "path": "/opt/hams/etc/keys/cache_manager",
             "owner": "odoo:hamsd_cache_manager",
+            "provision_mode": "750",
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Key directory of the parking family (hamsd_parking): it holds no Odoo key, only the PostgreSQL login parking_db.env that
+            # _provision_cache_manager_role writes for the parking_ro role (as root, odoo:hamsd_parking 0640); same rule as cache_manager above.
+            "path": "/opt/hams/etc/keys/parking",
+            "owner": "odoo:hamsd_parking",
             "provision_mode": "750",
             "runtime_mount": "rw",
             "environments": ["prod", "test"],
@@ -9865,6 +9898,73 @@ WantedBy=multi-user.target
             "environments": ["prod"],
         },
         {
+            # The callsign parking page (hams_com daemons/callsign_parking, docs/runbooks/CALLSIGN_PARKING.md): answers plain HTTP on hams1 port 80 for
+            # <callsign>.hams.com, which the hams.com DNS wildcard points at hams1. Odoo-free: it reads one PostgreSQL view (ham_callbook_parking_view)
+            # as the parking_ro role, from its own pool of at most 4 connections, and caches the answers.
+            #
+            # Its own account, hamsd_parking (DAEMON_OS_ISOLATION_PLAN.md section 5). Code audit of callsign_parking/main.py and store.py,
+            # 2026-11-11: environment PARKING_DSN (unset here), PARKING_BIND, PARKING_PORT,
+            # PARKING_SIGNUP_URL, PARKING_RATE_PER_SECOND and PARKING_RATE_BURST (all optional); the file keys/parking/parking_db.env (DB_HOST, DB_NAME, DB_USER, DB_PASS; the path is a constant in main.py, as in cache_manager.py); connections: PostgreSQL on loopback TCP only;
+            # writes no file; no subprocess; reads no other process. So: no environment file, no writable path, the full isolation set.
+            # The one addition is port 80: CAP_NET_BIND_SERVICE, ambient and the only capability in the bounding set, like hams-auth-gateway.service.
+            #
+            # opt_in: provisioning links the unit and never starts it. The service is only useful after the ham_callbook parking view exists, the
+            # role is granted on it (provisioning does that on a run after `-u ham_callbook`) and the header HSTS decision is made; the coordinator
+            # enables it with `provision.py --enable-opt-in callsign.parking.service` at the step in the runbook's deploy order.
+            "path": "/opt/hams/systemd/callsign.parking.service",
+            "content": """\
+[Unit]
+Description=Callsign parking page for <callsign>.hams.com (HTTP, reads one PostgreSQL view)
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+# Its own account, hamsd_parking (DAEMON_OS_ISOLATION_PLAN.md section 5): it writes nothing and reads no other process.
+ProtectProc=invisible
+ProcSubset=pid
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+MemoryMax=256M
+Type=simple
+User=hamsd_parking
+Group=hamsd_parking
+WorkingDirectory=/opt/hams/daemons/callsign_parking
+
+ExecStart=/usr/bin/python3 /opt/hams/daemons/callsign_parking/main.py
+
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=callsign.parking
+
+[Install]
+WantedBy=multi-user.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+            "opt_in": "needs the ham_callbook parking view and the parking_ro grant first (hams_com docs/runbooks/CALLSIGN_PARKING.md), and port 80 free on hams1",
+        },
+        {
             # pager_duty's generalized monitor (hams_open pager_duty/daemon/generalized_monitor.py): runs every active
             # pager.check row on its interval (system resources, systemd units, PostgreSQL, Redis, RabbitMQ, the Odoo
             # ping, the root-DNS probes, the credential-expiry scripts), writes each result back to the row, and reports
@@ -10841,6 +10941,14 @@ WantedBy=timers.target
             # well-formed Binding request, rate limited, with a reply of at most 44 bytes.
             "args": ["allow", "3478/udp"],
             "comment": "stun.hams.com (hams_relay_bridge STUN responder)",
+            "environments": ["prod"],
+        },
+        {
+            # The callsign parking page (callsign.parking.service): plain HTTP for <callsign>.hams.com, which the DNS wildcard points at hams1
+            # (Bruce, 2026-11-11: HTTP only, no certificates for unclaimed callsigns). Nothing else listens on port 80 on hams1 (nginx is
+            # disabled; hams.com is served over the tunnel and 443). Opening the port with the service not yet running only refuses connections.
+            "args": ["allow", "80/tcp"],
+            "comment": "callsign parking page (daemons/callsign_parking), HTTP only",
             "environments": ["prod"],
         },
     ],
@@ -13429,7 +13537,7 @@ def _provision_cache_manager_role(
     db_name,
     role_name="cache_manager_ro",
     env_file="/opt/hams/etc/keys/cache_manager/cache_manager_db.env",
-    purpose="cache_manager.py",
+    purpose="cache_manager.py: CONNECT-only, no table access",
     owner="odoo:hamsd_cache_manager",
     mode=0o640,
 ):
@@ -13496,7 +13604,7 @@ def _provision_cache_manager_role(
     )
     content = (
         "# Auto-generated by infrastructure.py's own provisioning flow.\n"
-        f"# Restricted Postgres role for {purpose}: CONNECT-only, no table access.\n"
+        f"# Restricted Postgres role for {purpose}.\n"
         "DB_HOST=localhost\n"
         f"DB_NAME={db_name}\n"
         f"DB_USER={role_name}\n"
@@ -13518,6 +13626,49 @@ def _provision_cache_manager_role(
     # read its own credentials. This function runs as root (the provisioning flow), so the file is root:root 0600 right after
     # os.open() above until this chown (first) and chmod run.
     apply_permissions(env_file, owner, mode)
+
+
+# [@ANCHOR: infrastructure:_provision_parking_role]
+PARKING_DB_ROLE = "parking_ro"
+PARKING_DB_ENV_FILE = "/opt/hams/etc/keys/parking/parking_db.env"
+PARKING_RO_SQL = "/opt/hams/daemons/callsign_parking/parking_ro.sql"
+PARKING_VIEW = "ham_callbook_parking_view"
+
+
+def _provision_parking_role(run_cmd_func, db_name, sql_path=None, env_file=None):
+    """The PostgreSQL login of the callsign parking page (daemons/callsign_parking): the `parking_ro` role, its generated password in
+    keys/parking/parking_db.env (odoo:hamsd_parking 0640, written by _provision_cache_manager_role, so the password is generated only
+    when needed and kept after that, like the cache manager's), and, once ham_callbook_parking_view exists, the role's attributes and its one
+    SELECT grant from daemons/callsign_parking/parking_ro.sql (piped over stdin: the postgres account need not reach /opt/hams).
+    The view belongs to ham_callbook, which Odoo installs after provisioning, so a run before `-u ham_callbook` creates the login and
+    grants nothing; the next run (the runbook's deploy order) does. A failure is logged and never raised."""
+    env_file = env_file or PARKING_DB_ENV_FILE
+    sql_path = sql_path or PARKING_RO_SQL
+    try:
+        _provision_cache_manager_role(
+            run_cmd_func, db_name, role_name=PARKING_DB_ROLE, env_file=env_file,
+            purpose="the callsign parking page (daemons/callsign_parking): SELECT on one view, no other table",
+            owner="odoo:hamsd_parking", mode=0o640,
+        )
+        res = subprocess.run(
+            ["sudo", "-u", "postgres", "psql", "-v", f"view_name={PARKING_VIEW}", "-tA", "-d", db_name],
+            input="SELECT to_regclass(:'view_name') IS NOT NULL;\n", capture_output=True, text=True, check=False,
+        )
+        if res.stdout.strip() != "t":
+            _logger.warning(
+                "[*] %s does not exist in %s yet: %s has no grant until ham_callbook is upgraded and provisioning runs again",
+                PARKING_VIEW, db_name, PARKING_DB_ROLE,
+            )
+            return
+        with open(sql_path, "r", encoding="utf-8") as f:
+            sql = f.read()
+        run_cmd_func(
+            ["sudo", "-u", "postgres", "psql", "-v", "ON_ERROR_STOP=1", "-d", db_name],
+            input=sql,
+            text=True,
+        )
+    except Exception as e:  # audit-ignore-catch-all
+        _logger.warning("[*] Could not provision the PostgreSQL role %s in %s: %s", PARKING_DB_ROLE, db_name, e)
 
 
 # [@ANCHOR: infrastructure:_allow_cache_manager_socket_password_for_test]
@@ -14766,6 +14917,8 @@ def provision_environment(
                     "PostgreSQL role..."
                 )
                 _provision_cache_manager_role(run_cmd_func, db_name)
+                _logger.info("[*] Provisioning the callsign parking page's PostgreSQL login (parking_ro)...")
+                _provision_parking_role(run_cmd_func, db_name)
                 if is_test and _allow_cache_manager_socket_password_for_test() and not is_isolated_ns:
                     run_cmd_func(["systemctl", "reload", "postgresql"])
                 _logger.info("[*] Provisioning pager_duty's PostgreSQL ping login...")

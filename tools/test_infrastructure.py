@@ -34,7 +34,7 @@ import tempfile
 import threading
 import time
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import b2_backup
 import infrastructure as infra
@@ -4780,6 +4780,7 @@ class ExternalFetchUnitClassificationTests(unittest.TestCase):
         "adif.processor.service": "RabbitMQ consumer; local Odoo only",
         "backup.worker.service": "runs only backup jobs an operator configured; idle otherwise",
         "cache-manager.service": "LISTENs on local PostgreSQL and writes the local Redis counter; fetches nothing",
+        "callsign.parking.service": "answers HTTP for <callsign>.hams.com from one local PostgreSQL view; fetches nothing",
         "callbook.dns.export.service": "reads Odoo, writes the local PowerDNS zone",
         "callbook.dns.export.timer": "activates callbook.dns.export.service (local)",
         "dx.firehose.service": "local websocket server over the local database",
@@ -7321,6 +7322,95 @@ class EventAiEnrichmentTimerUnitTests(unittest.TestCase):
         self.assertIn("odoo ALL=(hams_event_agent) NOPASSWD: /usr/local/sbin/run-hams-event-agent-claude.sh", grants[0]["content"])
 
 
+class CallsignParkingProvisioningTests(_TmpDirTestCase):
+    """Tests [@ANCHOR: infrastructure:_provision_parking_role]
+
+    The callsign parking page (hams_com daemons/callsign_parking): its login, grant, account, key directory, unit and firewall rule."""
+
+    UNIT = "callsign.parking.service"
+
+    def _unit(self):
+        matches = [s for s in infra.MANIFEST["static_files"] if s["path"] == "/opt/hams/systemd/" + self.UNIT]
+        self.assertEqual(len(matches), 1)
+        return matches[0]
+
+    def _provision(self, view_exists):
+        sql_path = os.path.join(self.tmp, "parking_ro.sql")
+        with open(sql_path, "w", encoding="utf-8") as f:
+            f.write("-- the role grants\nGRANT SELECT ON public.ham_callbook_parking_view TO parking_ro;\n")
+        run_cmd = MagicMock()
+        self.safe_patch_object(infra, "_role_exists", return_value=False)
+        self.safe_patch_object(infra, "apply_permissions")
+        probe = self.safe_patch_object(
+            infra.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, stdout="t\n" if view_exists else "f\n", stderr="")
+        )
+        env_file = os.path.join(self.tmp, "keys", "parking", "parking_db.env")
+        infra._provision_parking_role(run_cmd, "hams_test", sql_path=sql_path, env_file=env_file)
+        return run_cmd, probe, env_file
+
+    def test_the_login_is_written_for_parking_ro_and_the_grant_follows_the_view(self):
+        run_cmd, probe, env_file = self._provision(view_exists=True)
+        with open(env_file, encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("DB_USER=parking_ro\n", content)
+        self.assertIn("DB_NAME=hams_test\n", content)
+        self.assertRegex(content, r"DB_PASS=[A-Za-z0-9]{32}\n")
+        self.assertEqual(os.stat(env_file).st_mode & 0o777, 0o600)  # apply_permissions is mocked: the file itself is never wider
+        self.assertIn("CREATE ROLE", run_cmd.call_args_list[0].kwargs["input"])
+        self.assertIn("GRANT SELECT ON public.ham_callbook_parking_view", run_cmd.call_args_list[-1].kwargs["input"])
+        self.assertIn("ON_ERROR_STOP=1", run_cmd.call_args_list[-1].args[0])
+        self.assertNotIn("parking_ro.sql", " ".join(run_cmd.call_args_list[-1].args[0]))  # piped over stdin, no path for postgres to read
+
+    def test_no_view_yet_means_a_login_but_no_grant_and_no_failure(self):
+        run_cmd, probe, env_file = self._provision(view_exists=False)
+        self.assertTrue(os.path.exists(env_file))
+        for c in run_cmd.call_args_list:
+            self.assertNotIn("GRANT SELECT", c.kwargs.get("input", ""))
+
+    def test_a_failure_is_logged_and_never_raised(self):
+        self.safe_patch_object(infra, "_provision_cache_manager_role", side_effect=RuntimeError("psql down"))
+        infra._provision_parking_role(MagicMock(), "hams_test")
+
+    def test_provisioning_runs_it_after_the_cache_manager_role(self):
+        text = open(infra.__file__, encoding="utf-8").read()
+        self.assertLess(text.index("_provision_cache_manager_role(run_cmd_func, db_name)\n"), text.index("_provision_parking_role(run_cmd_func, db_name)\n"))
+
+    def test_the_unit_is_the_audited_shape_and_never_started_by_provisioning(self):
+        spec = self._unit()
+        self.assertEqual(spec["environments"], ["prod"])
+        self.assertIn(self.UNIT, infra.opt_in_unit_names())
+        self.assertNotIn(self.UNIT, infra.boot_service_unit_names())
+        content = spec["content"]
+        for line in ("User=hamsd_parking", "Group=hamsd_parking", "AmbientCapabilities=CAP_NET_BIND_SERVICE",
+                     "CapabilityBoundingSet=CAP_NET_BIND_SERVICE", "NoNewPrivileges=true", "ProtectSystem=strict",
+                     "ExecStart=/usr/bin/python3 /opt/hams/daemons/callsign_parking/main.py"):
+            self.assertIn(line, content)
+        self.assertNotIn("EnvironmentFile", content)
+        self.assertNotIn("ReadWritePaths", content)
+        self.assertEqual(infra.FAMILY_ACCOUNT_UNITS[self.UNIT]["db_login"], infra.PARKING_DB_ENV_FILE)
+        # The daemon reads the path provisioning writes (the path is a constant in main.py, like cache_manager.py's).
+        main = os.path.join(os.path.dirname(infra.__file__), "..", "..", "daemons", "callsign_parking", "main.py")
+        if os.path.exists(main):
+            with open(main, encoding="utf-8") as f:
+                self.assertIn('DB_ENV_FILE = "' + infra.PARKING_DB_ENV_FILE + '"', f.read())
+
+    def test_the_key_directory_and_account_match_the_login(self):
+        directory = [d for d in infra.MANIFEST["directories"] if d["path"] == os.path.dirname(infra.PARKING_DB_ENV_FILE)]
+        self.assertEqual([(d["owner"], d["provision_mode"], d["environments"]) for d in directory],
+                         [("odoo:hamsd_parking", "750", ["prod", "test"])])
+
+    def test_the_grant_file_names_the_role_and_view_provisioning_assumes(self):
+        # The SQL ships in hams_com daemons/callsign_parking (hams_shared has no copy); skip on a checkout without it.
+        sql = os.path.join(os.path.dirname(infra.__file__), "..", "..", "daemons", "callsign_parking", "parking_ro.sql")
+        if not os.path.exists(sql):
+            self.skipTest("hams_shared checked out without hams_com")
+        with open(sql, encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn(infra.PARKING_DB_ROLE, text)
+        self.assertIn(infra.PARKING_VIEW, text)
+        self.assertEqual(os.path.basename(infra.PARKING_RO_SQL), "parking_ro.sql")
+
+
 class CacheManagerUnitTests(unittest.TestCase):
     """The cache-manager.service unit in the MANIFEST.
 
@@ -7854,7 +7944,7 @@ class FirewallRulesProvisioningTests(_TmpDirTestCase):
     active ufw, only when missing, never on a test host. subprocess.run (`ufw status`) is mocked."""
 
     ACTIVE = "Status: active\n\nTo   Action   From\n--   ------   ----\n51820/udp   ALLOW   Anywhere\n"
-    WITH_STUN = ACTIVE + "3478/udp   ALLOW   Anywhere\n3478/udp (v6)   ALLOW   Anywhere (v6)\n"
+    WITH_STUN = ACTIVE + "3478/udp   ALLOW   Anywhere\n3478/udp (v6)   ALLOW   Anywhere (v6)\n80/tcp   ALLOW   Anywhere\n80/tcp (v6)   ALLOW   Anywhere (v6)\n"
 
     def _ufw(self, status_text, installed=True):
         self.safe_patch("infrastructure.shutil.which", return_value="/usr/sbin/ufw" if installed else None)
@@ -7863,19 +7953,23 @@ class FirewallRulesProvisioningTests(_TmpDirTestCase):
             return_value=subprocess.CompletedProcess([], 0, stdout=status_text, stderr=""),
         )
 
-    def test_the_manifest_opens_only_stun_udp_and_only_on_production(self):
+    def test_the_manifest_opens_only_stun_udp_and_parking_http_and_only_on_production(self):
         # Tests [@ANCHOR: infrastructure:provision_firewall_rules]
         rules = infra.MANIFEST["firewall_rules"]
-        self.assertEqual([r["args"] for r in rules], [["allow", "3478/udp"]])
-        self.assertEqual(rules[0]["environments"], ["prod"])
+        self.assertEqual([r["args"] for r in rules], [["allow", "3478/udp"], ["allow", "80/tcp"]])
+        self.assertEqual([r["environments"] for r in rules], [["prod"], ["prod"]])
 
     def test_adds_the_rule_to_an_active_ufw_that_lacks_it(self):
         # Tests [@ANCHOR: infrastructure:provision_firewall_rules]
         self._ufw(self.ACTIVE)
         run = MagicMock()
         infra.provision_firewall_rules(run, environment="prod")
-        run.assert_called_once_with(
-            ["ufw", "allow", "3478/udp", "comment", "stun.hams.com (hams_relay_bridge STUN responder)"]
+        self.assertEqual(
+            run.call_args_list,
+            [
+                call(["ufw", "allow", "3478/udp", "comment", "stun.hams.com (hams_relay_bridge STUN responder)"]),
+                call(["ufw", "allow", "80/tcp", "comment", "callsign parking page (daemons/callsign_parking), HTTP only"]),
+            ],
         )
 
     def test_a_rule_already_present_is_left_alone(self):
@@ -7909,15 +8003,16 @@ class FirewallRulesProvisioningTests(_TmpDirTestCase):
         with infra.planning() as plan:
             infra.provision_firewall_rules(run, environment="prod")
         run.assert_not_called()
-        self.assertEqual([k for k, _ in plan.actions], ["firewall"])
+        self.assertEqual([k for k, _ in plan.actions], ["firewall", "firewall"])
         self.assertIn("3478/udp", plan.actions[0][1])
+        self.assertIn("80/tcp", plan.actions[1][1])
 
     def test_a_failing_ufw_is_a_hook_failure_not_a_crash(self):
         # Tests [@ANCHOR: infrastructure:provision_firewall_rules]
         self._ufw(self.ACTIVE)
         run = MagicMock(side_effect=subprocess.CalledProcessError(1, ["ufw"]))
         infra.provision_firewall_rules(run, environment="prod")
-        self.assertEqual([n for n, _ in infra.get_hook_failures()], ["firewall_rules"])
+        self.assertEqual({n for n, _ in infra.get_hook_failures()}, {"firewall_rules"})
 
     def test_production_gets_a_stun_bind_default_and_a_test_host_does_not(self):
         # Tests [@ANCHOR: infrastructure:provision_firewall_rules]
