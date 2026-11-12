@@ -1850,3 +1850,16 @@ daemons/bench_mcp/docs/stories/bench_mcp_procedure_data_structures.md
 daemons/bench_mcp/docs/stories/bench_mcp_procedure_python_classes.md
 daemons/bench_mcp/docs/stories/bench_mcp_radioctl_data_structures.md
 daemons/bench_mcp/docs/stories/bench_mcp_usb_hub_data_structures.md
+daemons/radioctl/crates/radioctl-capi/src
+daemons/radioctl/crates/radioctl-splitter/src
+daemons/radioctl/crates/radioctld/src
+daemons/radioctl/crates/radioctl-station/src
+daemons/radioctl/crates/radioctl-core/src
+daemons/radioctl/docs/stories/radioctl_capi_data_structures.md
+daemons/radioctl/docs/stories/radioctl_core_a_data_structures.md
+daemons/radioctl/docs/stories/radioctl_core_b_data_structures.md
+daemons/radioctl/docs/stories/radioctl_core_c_data_structures.md
+daemons/radioctl/docs/stories/radioctl_core_d_data_structures.md
+daemons/radioctl/docs/stories/radioctl_d_data_structures.md
+daemons/radioctl/docs/stories/radioctl_splitter_data_structures.md
+daemons/radioctl/docs/stories/radioctl_station_data_structures.md
