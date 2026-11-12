@@ -444,7 +444,10 @@ class PdnsPublicConfigTests(_TmpDirTestCase):
         self.assertNotIn("recursor", c)
         self.assertNotIn("local-port", c, "port 53 is the default")
         self.assertNotEqual(c["expand-alias"] if "expand-alias" in c else "no", "yes")
-        self.assertEqual((c["primary"], c["secondary"], c["disable-axfr"], c["allow-notify-from"]), ("no", "no", "yes", ""))
+        # hams1 is the primary for prove1 (ns2) only: transfers to its address, no NOTIFY accepted, main backend DNSSEC-capable (hams.com unsigned)
+        self.assertEqual((c["primary"], c["secondary"], c["disable-axfr"], c["allow-notify-from"]), ("yes", "no", "no", ""))
+        self.assertEqual((c["allow-axfr-ips"], c["also-notify"], c["default-api-rectify"]), ("149.28.221.130", "149.28.221.130", "yes"))
+        self.assertEqual((c["gsqlite3-main-dnssec"], c["gsqlite3-callbook-dnssec"]), ("yes", "no"))
 
     def test_amplification_and_exposure_settings(self):
         c = self._settings()
