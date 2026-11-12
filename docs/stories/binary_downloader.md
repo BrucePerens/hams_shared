@@ -1,8 +1,8 @@
 # Story: Downloading, Sharing, and Retiring Third-Party Binaries
 
 As a **System Administrator**, I want the platform to **fetch, verify, and share third-party binaries
-across tenants** on its own, so that I don't have to manually install command-line dependencies (like
-`kopia`) on every machine, and so that a stale or duplicate binary never lingers on disk after the last
+across tenants** (the separate websites hosted by one Odoo) on its own, so that I don't have to manually install command-line dependencies (like
+`kopia`, a backup program) on every machine, and so that a stale or duplicate binary never lingers on disk after the last
 record referencing it is gone.
 
 ## Scenario: Registering and Installing a Binary
@@ -18,10 +18,10 @@ type.
 
 `action_install()` triggers `ensure_executable()`, which resolves the manifest (current company first,
 then the global fallback) and calls the shared download engine -- the same engine handles raw
-binaries, tarballs, and zips, verifying the SHA-256 checksum and refusing symlinked archive members
+binaries, tarballs, and zips, verifying the SHA-256 checksum (a fingerprint of the file's bytes) and refusing symlinked archive members
 [@ANCHOR: binary_downloader:binary_utils_download_and_extract].
 
-`_compute_is_installed()` reports whether the binary is already on `PATH` or already present in the
+`_compute_is_installed()` reports whether the binary is already on `PATH` (the operating system's list of program directories) or already present in the
 shared `hams_bin` pool, using a stable, checksum-derived filename [@ANCHOR: binary_downloader:binary_utils_get_target_filename].
 
 ## Scenario: Publishing a New Version and Notifying Tenants
@@ -41,7 +41,7 @@ extract-member validation as the manifest itself.
    [@ANCHOR: binary_downloader:binary_version_compute_is_downloaded].
 3. Once a new version is downloaded to the pool, `action_notify_tenants()` walks every tenant currently
    pinned to an older version of the same manifest, batching `pager.incident` alerts per company so each
-   tenant's own on-call rotation is notified through their own PagerDuty routing
+   tenant's own on-call rotation is notified through their own PagerDuty (an on-call alerting service) routing
    [@ANCHOR: binary_downloader:binary_version_action_notify_tenants].
 
 ## Scenario: A Tenant Adopts, Upgrades, and Retires a Binary
@@ -69,6 +69,6 @@ file out from under the other.
 
 - `binary.manifest.unlink()` counts how many other manifest/version rows still reference its checksum before ever asking the shared cleanup helper to remove the file [@ANCHOR: binary_downloader:binary_manifest_unlink].
 
-- `binary.version.unlink()` runs the identical dedup-by-checksum count [@ANCHOR: binary_downloader:binary_version_unlink].
+- `binary.version.unlink()` runs the identical count of other rows sharing the checksum (deduplication) [@ANCHOR: binary_downloader:binary_version_unlink].
 
 - The shared cleanup helper itself only ever removes the on-disk file once both callers agree nothing else references it [@ANCHOR: binary_downloader:binary_utils_unlink_binary_file].

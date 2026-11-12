@@ -2,11 +2,11 @@
 
 As a **DevOps Engineer** setting up a new environment,
 I want to **force the generation of all daemon keys immediately**,
-so that my external containers can start up without waiting for the next cron cycle.
+so that my external containers can start up without waiting for the next scheduled-job (cron) cycle.
 
 ## Scenario: Infrastructure Bootstrapping
 
-1.  The automated deployment script (e.g., Ansible or a Kubernetes init container) finishes installing Odoo and its modules.
+1.  The automated deployment script (e.g., Ansible, a deployment automation tool, or a Kubernetes init container, a setup step that runs before the application container) finishes installing Odoo and its modules.
 2.  The script executes a shell command to force provisioning [@ANCHOR: daemon_key_manager:COMM_action_force_provision_all_api]:
     ```bash
     odoo-bin shell ... -e "env['daemon.key.registry'].action_force_provision_all(); env.cr.commit()"
@@ -16,4 +16,4 @@ so that my external containers can start up without waiting for the next cron cy
 5.  The dependent daemon containers are then started, find their keys, and connect to Odoo immediately.
 
 ## Error Handling
-- If a file cannot be written due to permission issues (e.g., the volume isn't mounted correctly), an informative `UserError` is raised [@ANCHOR: daemon_key_manager:COMM_force_provision_error_handling].
+- If a file cannot be written due to permission issues (e.g., the volume isn't mounted correctly), an informative `UserError` (an Odoo error message shown to the user) is raised [@ANCHOR: daemon_key_manager:COMM_force_provision_error_handling].

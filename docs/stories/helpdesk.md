@@ -23,7 +23,7 @@ Operators can process tickets from submission to closure seamlessly.
 
 ## For the Portal User
 
-End users have access to self-service portals to track their requests.
+End users have access to self-service portals (the signed-in area of the website) to track their requests.
 
 ### Portal Ticket Listing
 Customers can view their historical and active requests.
@@ -38,7 +38,7 @@ Users can read operator replies and view status updates.
 ### Creating a New Ticket
 When a new issue arises, customers can quickly submit a request.
 [@ANCHOR: hams_helpdesk:COMM_helpdesk_portal_new]
-This form captures essential information like the user's callsign and problem description.
+This form captures essential information like the user's callsign (an amateur radio operator's official identifier) and problem description.
 
 ### Portal Workflow
 The end-to-end journey for a customer from reporting to resolution.

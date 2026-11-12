@@ -1,5 +1,7 @@
 # Test Coverage
 
+Each line below cites an anchor (a named tag the lint tools use to link a code feature, its documentation, and its test) to show the item has test coverage.
+
 - Coverage for COMM_documentation_installed: [@ANCHOR: daemon_key_manager:COMM_documentation_installed]
 
 - Coverage for COMM_action_rotate_key_api: [@ANCHOR: daemon_key_manager:COMM_action_rotate_key_api]
