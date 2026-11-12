@@ -12436,6 +12436,10 @@ def provision_daemon_families(accounts, run_cmd_func, env_vars=None, environment
             os.symlink(unit_path, dst)
     if not _plan("run", "systemctl daemon-reload"):
         run_cmd_func(["systemctl", "daemon-reload"])
+    if "hamsd_parking" in accounts:
+        # The family's one credential, the parking_ro login, is made by the full run's database section; this narrow path must make it too
+        # (docs/runbooks/HAMS1_PARKING_GO_LIVE_2026-11-12.md). Same function, so the same generated-password and grant-after-view rules.
+        _provision_parking_role(run_cmd_func, env_vars.get("DB_NAME", "hams_test" if environment == "test" else "hams_prod"))
     _logger.info("[*] Daemon families %s provisioned. Nothing was enabled, started or restarted.", ", ".join(accounts))
 
 
