@@ -360,10 +360,13 @@ daemons/shack_console/docs/stories/s2_operating.md
 daemons/shack_console/docs/stories/s2_repeater_call_recording.md
 daemons/shack_console/docs/stories/s2_rig_controls.md
 daemons/shack_console/docs/stories/s2_rig_controls_ctl.md
+daemons/shack_console/docs/stories/s2_satellite_orbit.md
+daemons/shack_console/docs/stories/s2_satellite_tracker.md
 daemons/shack_console/docs/stories/s2_saved_frequencies.md
 daemons/shack_console/docs/stories/s2_settings_backup.md
 daemons/shack_console/docs/stories/s2_simband_conversation_spectrogram.md
 daemons/shack_console/docs/stories/s2_tx_level.md
+daemons/shack_console/docs/stories/s2_upload_adapters_lotw.md
 daemons/shack_console/docs/stories/s2_voice_log_parser_dupe.md
 daemons/shack_console/docs/stories/s2_voice_log_undo.md
 daemons/shack_console/docs/stories/scope_cw_and_decode_overlay.md
