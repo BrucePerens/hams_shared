@@ -94,8 +94,17 @@ def is_live_checkout(path, workspace=None):
     """True when `path` (symlinks resolved) is the main hams_com, hams_open or hams_shared checkout under `workspace` (default ~/workspace) or inside one
     that is not a worktree: a fuzz run builds there and writes `Cargo.lock`, so it belongs in a clean worktree."""
     workspace = workspace or os.path.expanduser("~/workspace")
-    real = os.path.realpath(path)
-    return any(real == os.path.realpath(os.path.join(workspace, live)) for live in LIVE_CHECKOUTS)
+    live = {os.path.realpath(os.path.join(workspace, name)) for name in LIVE_CHECKOUTS}
+    here = os.path.realpath(path)
+    while True:
+        if here in live:
+            return True
+        if os.path.exists(os.path.join(here, ".git")):
+            return False  # the root of some other checkout (a worktree): not a main one
+        parent = os.path.dirname(here)
+        if parent == here:
+            return False
+        here = parent
 
 
 # [@ANCHOR: fuzz_run:state_paths]
