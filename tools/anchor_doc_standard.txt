@@ -722,6 +722,7 @@ daemons/shack_console/docs/stories/waterfall_demo_band.md
 daemons/shack_console/docs/stories/waterfall_menus_rig_bar_and_edit_handlers.md
 daemons/shack_console/docs/stories/zoom_group_and_panel_drag.md
 daemons/loupedeck_ct/docs/stories/loupedeck_ct_driver.md
+daemons/loupedeck_ct/docs/stories/spectrum_display.md
 ham_shack/docs/stories/03_dx_cluster_and_shack.md
 ham_shack/docs/stories/07_satellite_and_repeaters.md
 ham_dx_cluster/docs/stories/03_dx_cluster_and_shack.md
