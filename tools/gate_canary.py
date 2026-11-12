@@ -293,6 +293,17 @@ def _write_json(path, data):
     os.replace(temporary, path)
 
 
+def _rebuild_overwritten_artifacts(problems, trees, cargo_target_dir, out):
+    """The cargo target is shared with the cycle's own snapshots, which rebuild the relay binary for their commits; when a
+    shard finds an artifact's stamp gone ("has no stamp for the current sources") the artifact is built again from this
+    snapshot's sources. Returns True when anything was rebuilt (the caller verifies again)."""
+    names = [a for a in gate_snapshot.ARTIFACTS if any(p.startswith(a.name + ":") and "has no stamp" in p for p in problems)]
+    for artifact in names:
+        out("gate_canary: %s was overwritten by another build; building it again" % artifact.name)
+        gate_snapshot.build_artifact(artifact, gate_snapshot.Trees(**trees), cargo_target_dir, out=out)
+    return bool(names)
+
+
 # [@ANCHOR: gate_canary:run_canary]
 def run_canary(workspace=gate_snapshot.DEFAULT_WORKSPACE, parent=None, state_dir=DEFAULT_STATE_DIR, shards=gate_snapshot.DEFAULT_SHARDS,
                shards_file=None, jobs=1, idle_jobs=2, only_if_new_commit=False, bisect=True, fetch=True, runner=None, snapshot=None,
@@ -346,6 +357,10 @@ def run_canary(workspace=gate_snapshot.DEFAULT_WORKSPACE, parent=None, state_dir
         # origin/main moving while an earlier shard ran is normal (merges); the snapshot was current when it was made and the
         # status names its commits, so only a damaged tree or artifact stops a later shard.
         problems = [problem for problem in problems if "is behind origin/main" not in problem]
+        if _rebuild_overwritten_artifacts(problems, trees, manifest["cargo_target_dir"], out):
+            problems = [problem for problem in gate_snapshot.verify_snapshot(
+                trees["parent"], fetch=False, environ={gate_snapshot.OPEN_TREE_ENV: trees["open"]}, cargo_target_dir=manifest["cargo_target_dir"])
+                if "is behind origin/main" not in problem]
         if problems:
             return {"number": index + 1, "modules": shard_modules[index], "exit_status": 2, "results": None, "problems": problems}
         for stale in glob.glob(os.path.join(directory, "test_results*.json")):
