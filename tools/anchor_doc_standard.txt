@@ -228,6 +228,7 @@ daemons/shack_console/docs/stories/arrange_room.md
 daemons/shack_console/docs/stories/band_map_waterfall_layout.md
 daemons/shack_console/docs/stories/console_access_state_and_misc_helpers.md
 daemons/shack_console/docs/stories/console_asset_pipeline.md
+daemons/shack_console/docs/stories/console_audio_alerts_cw_text_and_award_helpers.md
 daemons/shack_console/docs/stories/console_award_order_and_antenna_selector.md
 daemons/shack_console/docs/stories/console_gps_notice_indicator.md
 daemons/shack_console/docs/stories/console_gps_sky_page.md
