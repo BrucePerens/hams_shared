@@ -23,3 +23,10 @@ LLMs natively possess generic base instructions (e.g., "always bundle all code,"
 ### ### 3. Targeted Directory Ingestion
 ### Context bundling tools MUST NOT be run against the repository root for execution tasks. Developers MUST pass specific subdirectory targets to strip irrelevant domain logic from the prompt.
 
+
+## Status check 2026-11-12
+
+Checked against the repositories. The `SYSTEM OVERRIDE:` prefix and the "rigid technical executor" persona are not used by the standing instruction files (`AGENTS.md`, `CLAUDE.md`, the skills under `agents/skills/`, the
+review prompts in hams_open `prompts/`); the one `SYSTEM OVERRIDE:` string in code is a log-comment in `distributed_redis_cache/daemons/cache_manager.py`. Treat section 1 as guidance for the prompts it names, not
+a rule the current instruction files follow. Section 2 holds: `hams_shared/docs/modules/` carries the API contracts and the import paths, but ADR 0075's "External Dependencies" section is missing from many of them (13 of
+28 module READMEs and 12 of 23 contracts at this check).

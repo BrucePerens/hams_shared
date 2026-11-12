@@ -31,3 +31,8 @@ A version MUST NOT be removed from the codebase until the CI/CD pipeline verifie
 * **Third-Party Stability:** External desktop loggers and hardware relays will remain functional during major platform upgrades.
 * **Controlled Evolution:** Developers can iterate on Phase 2 AI features in V2 without risking V1 logbook integrity.
 * **Operational Visibility:** Sunset headers provide proactive notification to developers of external tools.
+
+## Status check 2026-11-12
+
+Checked against the code. Nothing is deprecated yet, so the Sunset-header protocol has no user: no controller sends a `Sunset` header and no check of `ir.logging` for 30-day route use exists in the pipeline. No `/api/v2/` route exists.
+The policy is therefore standing guidance, not an enforced rule; the first deprecation has to build the header helper and the 30-day check.

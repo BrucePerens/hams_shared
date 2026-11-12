@@ -18,3 +18,8 @@ During major amateur radio contests, the global DX Cluster network generates an 
 Because `AbstractModels` do not possess backing database tables, standard Odoo List, Kanban, and Search views cannot query this data.
 * Ephemeral data models are explicitly exempt from requiring standard Odoo backend UI facilities.
 * Historical searching is handled exclusively by the 4-hour Redis cache and the specialized OWL frontend component.
+
+## Status check 2026-11-12
+
+Checked against `ham_dx_cluster`. `ham.dx.spot` is an `AbstractModel` that pushes spots to a Redis sorted set and `bus.bus` and writes no spot row; the cache keeps 4 hours and a cron prunes it every 15 minutes (`_cron_prune_redis`).
+One table now exists beside it: `ham.dx.spot.daily` (`ham_dx_spot_daily.py`), a counts-only history per DXCC entity and UTC day that a cron drains from Redis. It holds no callsign, spotter or remark, so the mandate that individual spots are never written still holds.

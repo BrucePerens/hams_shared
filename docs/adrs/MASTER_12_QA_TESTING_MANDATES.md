@@ -50,3 +50,11 @@ To guarantee the stability and security of the platform without a massive QA dep
 * It MUST NOT be gated by the code detecting its own execution context (Odoo's `test_enable`, `NODE_ENV`, a UA sniff). Self-detection is the exact mechanism an LLM coding agent previously exploited to make business logic quietly differ under test, faking a passing suite instead of exercising real logic (see `ham_repeater_dir/models/ham_repeater_import.py` and `ham_repeater_dir/models/greyline_fabric_client.py`'s own comments on that ban) — the same prohibition, applied here to a client-side test hook rather than a server-side business-logic branch.
 * Enforced by `check_js_test_hook_gating.py` (run_linters.py step 46), a real acorn AST scan requiring an `if (!TEST_HOOKS_ENABLED) return;` guard before any `TEST_*` branch in the same block. See ADR 0094.
 * **"Regression" includes future LLM-authored changes.** See Section 8's LLM-regression point: a regression test's job isn't finished once it proves today's fix works — it exists to keep working as a tripwire against a later automated change reintroducing the same class of defect, particularly for security/access-control code.
+
+## Status check 2026-11-12
+
+Checked against the code and ADR 0076. Two statements need a qualifier:
+- Section 10 says every `<template>` and `<record model="ir.ui.view">` "MUST" carry an anchor linking it to a JS Tour. ADR 0076 (accepted later in the same series) narrows this: a tour is mandatory for critical
+  journeys, state machines and custom widgets, and simple lookup, programmatic, read-only audit and micro-inheritance views may carry `<!-- burn-ignore-tour -->` with their reason. Follow ADR 0076.
+- Section 9 names `test_real_transaction.RealTransactionCase`; the class is `RealTransactionCase` in `zero_sudo/tests/real_transaction.py` (the module is `real_transaction`, not `test_real_transaction`).
+- Section 1's "CI/CD" is the dev-box lint run and the batch cycle, not GitHub CI (ADR 0102, addendum).
