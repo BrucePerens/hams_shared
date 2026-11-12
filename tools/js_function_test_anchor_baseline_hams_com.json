@@ -1,7 +1,4 @@
 [
-  "daemons/hams_local_relay/src/trust/trust.js::start",
-  "daemons/hams_local_relay/tests/trust_wizard_logic.js::obs",
-  "daemons/hams_local_relay/tests/trust_wizard_logic.js::text",
   "ham_base/static/src/js/hams_key.js::HamsKey.setup",
   "ham_base/static/src/js/hams_key_shortcut.js::t-on-keydown",
   "ham_base/static/src/js/use_my_location.js::requestMyLocation",
