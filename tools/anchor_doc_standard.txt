@@ -922,3 +922,4 @@ daemons/relay_ca/docs/stories/relay_ca_wrap_for_import.md
 ingest/docs/stories/ingest_daemon_utils.md
 ingest/docs/stories/ingest_draw_course_charts.md
 ingest/docs/stories/ingest_draw_course_diagrams.md
+ingest/docs/stories/ingest_extract_pdf_instructions.md
