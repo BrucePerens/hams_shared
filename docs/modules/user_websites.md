@@ -292,15 +292,15 @@ This section ensures all module functions and their developer usage are thorough
 * **Owner toolbar** ``user_websites:UX_OWNER_TOOLBAR`` (`views/owner_site_templates.xml`, called from `user_navbar`): shown above the site's own navbar to the site's owner, or a member of the owning group, on every page of that site (an internal user sees it on their own site only). `?visitor=1` hides it.
 * **Dashboard** `/my/site/<slug>` ``user_websites:COMM_owner_site_dashboard``, `/my/site` redirects to the caller's own. Page editor `/my/site/<slug>/page/new|<id>` ``user_websites:UX_OWNER_PAGE_EDITOR``, save ``user_websites:COMM_owner_page_save``, publish toggles ``user_websites:COMM_owner_page_publish`` and ``user_websites:COMM_owner_post_publish``, image upload ``user_websites:COMM_owner_image_upload`` (`controllers/owner_site.py`). Every route resolves the site from the database and answers 404 unless the caller owns it, or belongs to the owning group (``user_websites:owner_resolve_site``); an administrator who is not the owner gets the 404 too. The owner of a suspended or not-yet-eligible site gets a 403 page that says why instead (hidden from everyone else); a retired slug redirects to the live one.
 * **Editor** ``user_websites:UX_RICH_EDITOR``: a contenteditable WYSIWYG (`static/src/js/rich_editor.js`), no raw HTML and no external library. Odoo's own `html_editor` is an OWL backend component tied to the website builder's `website.group_website_designer` permission and its asset bundles; mounting it for portal members would hand them the sitewide editor, which this module deliberately never grants.
-* **Sanitizer** `[@ANCHOR: user_websites:member_html_sanitize]` (`models/member_html.py`): strict allow-list in the request path for every caller, administrators included; hostile input is also filed through `website.page._trigger_malicious_arch_violation()`.
+* **Sanitizer** ``user_websites:member_html_sanitize`` (`models/member_html.py`): strict allow-list in the request path for every caller, administrators included; hostile input is also filed through `website.page._trigger_malicious_arch_violation()`.
 * **Limits**: title 120 characters, body 200,000 characters, images JPEG/PNG/GIF/WebP at most 2 MB and 100 per site, 30 writes and 10 uploads per user per minute (Redis counters, ``user_websites:owner_rate_limit``; Redis down answers 503).
 * **Retention**: no route erases. Unpublish keeps the record as a draft. Delete (`POST .../<page|post>/<id>/delete`, with a confirmation step) takes a page or post off the site and every public surface but archives it (`active` false, `deleted_by_owner` stamped; a page is moved to a private address so its own can be reused), and the dashboard's Deleted list can restore it, unpublished. The home page cannot be deleted. Uploaded images are public `ir.attachment` rows owned by the account (`res_model='res.users'`/`user.websites.group`, description `user_websites site image`); a member's account-erasure flow removes the images owned by that member's own account (not a group's images).
 * **Layout** ``user_websites:member_site_standalone_layout``: on a member site `layout_inherit_user_navbar` sets `no_header`/`no_footer`, so the main site's header and footer are not rendered, and the site's own header (`user_navbar`) and footer (`member_site_footer`) are. Assets: `static/src/css/member_site.css` and `rich_editor.js` in `web.assets_frontend`.
 * **Home address** `/<slug>` ``user_websites:COMM_user_home_fallback``; `/<slug>/home` answers 301 `[@ANCHOR: user_websites:COMM_user_home_legacy_redirect]`.
 * **Owner-site internals**: `/my/site` ``user_websites:COMM_owner_site_entry``; the new-page and edit-page forms ``user_websites:COMM_owner_page_new``, ``user_websites:COMM_owner_page_edit``; a page's arch is the fixed member-page frame around sanitized body markup ``user_websites:owner_page_arch`` and the editor reads the body back out of it ``user_websites:owner_page_arch_body``; uploads are accepted by magic number, not by file name or declared type ``user_websites:owner_image_mimetype``.
-* **Editor functions** (`static/src/js/rich_editor.js`, exercised by ``test_tour_owner_site``): `[@ANCHOR: user_websites:rich_editor_apply_link]`, `[@ANCHOR: user_websites:rich_editor_clean_node]`, `[@ANCHOR: user_websites:rich_editor_close_link_bar]`, `[@ANCHOR: user_websites:rich_editor_image_picked]`, `[@ANCHOR: user_websites:rich_editor_link_bar_click]`, `[@ANCHOR: user_websites:rich_editor_link_keydown]`, `[@ANCHOR: user_websites:rich_editor_open_link_bar]`, `[@ANCHOR: user_websites:rich_editor_paste]`, `[@ANCHOR: user_websites:rich_editor_remember_range]`, `[@ANCHOR: user_websites:rich_editor_restore_range]`, `[@ANCHOR: user_websites:rich_editor_say]`, `[@ANCHOR: user_websites:rich_editor_start]`, `[@ANCHOR: user_websites:rich_editor_sync_field]`, `[@ANCHOR: user_websites:rich_editor_toolbar_click]`, `[@ANCHOR: user_websites:rich_editor_toolbar_state]`, `[@ANCHOR: user_websites:rich_editor_wrap_code]`.
-* **Helper functions** (owner interface and sanitizer, each exercised by `tests/test_owner_site.py`): ``user_websites:fn_main_serve_core_fallback``, ``user_websites:fn_owner_escape``, ``user_websites:fn_owner_escape_attr``, ``user_websites:fn_owner_svc``, ``user_websites:fn_owner_owner_domain``, ``user_websites:fn_owner_qcontext``, ``user_websites:fn_owner_report_if_hostile``, ``user_websites:fn_owner_clean_body``, ``user_websites:fn_owner_own_page``, ``user_websites:fn_owner_back_to_editor``, ``user_websites:fn_owner_attachment_owner``, `[@ANCHOR: user_websites:fn_hmtl_clean_url]`, `[@ANCHOR: user_websites:fn_hmtl_is_hostile]`, `[@ANCHOR: user_websites:fn_hmtl_sanitize_member_html]`, `[@ANCHOR: user_websites:fn_hmtl_clean_children]`, `[@ANCHOR: user_websites:fn_hmtl_clean_attributes]`, `[@ANCHOR: user_websites:fn_hmtl_drop]`, `[@ANCHOR: user_websites:fn_hmtl_unwrap]`, `[@ANCHOR: user_websites:fn_hmtl_menu_pages]`, `[@ANCHOR: user_websites:fn_users_user_websites_menu_pages]`, `[@ANCHOR: user_websites:fn_group_user_websites_menu_pages]`.
-* **SVG schematics** survive the sanitizer through zero_sudo's SVG allow-list `[@ANCHOR: user_websites:member_html_svg_allowlist]`; every other active or unknown element is removed.
+* **Editor functions** (`static/src/js/rich_editor.js`, exercised by ``test_tour_owner_site``): ``user_websites:rich_editor_apply_link``, ``user_websites:rich_editor_clean_node``, ``user_websites:rich_editor_close_link_bar``, ``user_websites:rich_editor_image_picked``, ``user_websites:rich_editor_link_bar_click``, ``user_websites:rich_editor_link_keydown``, ``user_websites:rich_editor_open_link_bar``, ``user_websites:rich_editor_paste``, ``user_websites:rich_editor_remember_range``, ``user_websites:rich_editor_restore_range``, ``user_websites:rich_editor_say``, ``user_websites:rich_editor_start``, ``user_websites:rich_editor_sync_field``, ``user_websites:rich_editor_toolbar_click``, ``user_websites:rich_editor_toolbar_state``, ``user_websites:rich_editor_wrap_code``.
+* **Helper functions** (owner interface and sanitizer, each exercised by `tests/test_owner_site.py`): ``user_websites:fn_main_serve_core_fallback``, ``user_websites:fn_owner_escape``, ``user_websites:fn_owner_escape_attr``, ``user_websites:fn_owner_svc``, ``user_websites:fn_owner_owner_domain``, ``user_websites:fn_owner_qcontext``, ``user_websites:fn_owner_report_if_hostile``, ``user_websites:fn_owner_clean_body``, ``user_websites:fn_owner_own_page``, ``user_websites:fn_owner_back_to_editor``, ``user_websites:fn_owner_attachment_owner``, ``user_websites:fn_hmtl_clean_url``, ``user_websites:fn_hmtl_is_hostile``, ``user_websites:fn_hmtl_sanitize_member_html``, ``user_websites:fn_hmtl_clean_children``, ``user_websites:fn_hmtl_clean_attributes``, ``user_websites:fn_hmtl_drop``, ``user_websites:fn_hmtl_unwrap``, ``user_websites:fn_hmtl_menu_pages``, ``user_websites:fn_users_user_websites_menu_pages``, ``user_websites:fn_group_user_websites_menu_pages``.
+* **SVG schematics** survive the sanitizer through zero_sudo's SVG allow-list ``user_websites:member_html_svg_allowlist``; every other active or unknown element is removed.
 
 <stage1_sweep>
 ## 7. Function-Level Anchors
@@ -1105,3 +1105,123 @@ The tour `owner_site_tour` (`static/tests/tours/owner_site_tour.js`), started by
 ### `user_websites:fn_owner_attachment_owner` [@ANCHOR: user_websites:fn_owner_attachment_owner]
 
 `_attachment_owner(self, profile_user, profile_group)`. **Returns:** `("res.users", user.id)` for a user site, else `("user.websites.group", group.id)`: the `res_model` and `res_id` under which a site's images are stored and counted. Account erasure removes the images of the member's own account (not a group's). Pure. Test: `test_20_image_limit_per_site`.
+
+## 11. Anchor reference: owner site, part 2 (rich editor script and member HTML sanitizer)
+
+The editor script is `static/src/js/rich_editor.js` (a public `Interaction` named `RichEditor`, selector `.uw-rich-editor`, no external library). It is a convenience only: the server (`models/member_html.py`) decides what is kept. All the editor functions are exercised by the tour `test_tour_owner_site`, which types, formats, links, undoes and publishes in a real browser. The sanitizer functions are exercised by `tests/test_owner_site.py` (class with `test_script_handlers_and_qweb_are_removed_and_flagged`, `test_svg_schematic_is_kept_and_hostile_svg_is_stripped`, `test_toolbar_markup_survives`, `test_external_images_and_foreign_classes_are_dropped`).
+
+### `user_websites:rich_editor_start` [@ANCHOR: user_websites:rich_editor_start]
+
+`RichEditor.start()`, run by Odoo's public interaction framework for each element matching `.uw-rich-editor` (the template `user_websites.rich_editor`). It finds the editable area (`[data-uw-area]`), the hidden field (`[data-uw-field]`), the status line, the link bar and its input, and the hidden file input; initialises the private undo history (the area's current HTML, index 0, because the browser's own undo is shared with the title field); copies the area into the field once; and registers listeners: toolbar click and mousedown (the latter keeps the selection in the page), paste, input, keydown, beforeinput, keyup and mouseup (toolbar state), the link bar click and keydown, the file input change, and the enclosing form's submit. Takes no arguments, returns nothing, and does not touch the network.
+
+### `user_websites:rich_editor_sync_field` [@ANCHOR: user_websites:rich_editor_sync_field]
+
+`RichEditor.syncField()`. Copies `area.innerHTML` into the hidden form field, so the form always posts the page the member sees. It is called at start, after every input, toolbar action, paste, link and image insertion, and on form submit. No arguments or return value. The server treats the posted value as untrusted and sanitizes it (`user_websites:fn_hmtl_sanitize_member_html`).
+
+### `user_websites:rich_editor_say` [@ANCHOR: user_websites:rich_editor_say]
+
+`RichEditor.say(message)`. Sets the text of the status element (`[data-uw-status]`, an `aria-live` region in the template) to `message`, or clears it when `message` is empty or missing. It is how the editor reports link-format errors, upload progress, upload failures and the reminder to describe an image. Returns nothing; no network.
+
+### `user_websites:rich_editor_toolbar_click` [@ANCHOR: user_websites:rich_editor_toolbar_click]
+
+`RichEditor.onToolbarClick(ev)`. Handles a click inside the toolbar. It finds the nearest enabled `button[data-uw-cmd]`, focuses the area and acts on the command: `link` opens the link bar, `image` remembers the selection and opens the file chooser, `code` wraps the selection in `<code>`, `undo` and `redo` step the private history, `formatBlock` runs `document.execCommand` with the button's `data-uw-arg` (a heading, quote or code block), and every other command is passed straight to `execCommand` (bold, italic, lists, alignment and so on). Commands other than link, image, undo and redo record one history step. It then syncs the field and refreshes the pressed state of the buttons.
+
+### `user_websites:rich_editor_toolbar_state` [@ANCHOR: user_websites:rich_editor_toolbar_state]
+
+`RichEditor.refreshToolbarState()`. For each toolbar button whose command is in `TOGGLE_STATE` (bold, italic, underline, the two list types, the three alignments) it asks `document.queryCommandState` and sets `aria-pressed` and the `active` class accordingly. A browser exception counts as "off". Run after toolbar clicks, key-up and mouse-up inside the area. It reads the current selection and changes only button attributes.
+
+### `user_websites:rich_editor_remember_range` [@ANCHOR: user_websites:rich_editor_remember_range]
+
+`RichEditor.rememberRange()`. If the page selection has a range and its anchor lies inside the editable area, it stores a clone in `this.savedRange`; otherwise it leaves any earlier value. It is called before the link bar or the file chooser takes focus away, because those would lose the selection. Returns nothing.
+
+### `user_websites:rich_editor_restore_range` [@ANCHOR: user_websites:rich_editor_restore_range]
+
+`RichEditor.restoreRange()`. Focuses the area and, if a range was saved by `rememberRange`, makes it the current selection again so an inserted link or image lands where the member was working. With no saved range it just focuses. Called when the link bar closes and before an uploaded image is inserted. Returns nothing.
+
+### `user_websites:rich_editor_wrap_code` [@ANCHOR: user_websites:rich_editor_wrap_code]
+
+`RichEditor.wrapSelectionInCode()`. Replaces a non-empty selection with a `<code>` element holding the selected plain text (nested formatting inside the selection is flattened). With no selection or a collapsed one it does nothing. The caller records the history step and syncs the field. It exists because `execCommand` has no inline-code command.
+
+### `user_websites:rich_editor_open_link_bar` [@ANCHOR: user_websites:rich_editor_open_link_bar]
+
+`RichEditor.openLinkBar()`. Remembers the selection, shows the link bar (removes `d-none`), prefills its input with `https://` and focuses it. A small in-page bar replaces `window.prompt`, which is not accessible and is blocked in some browsers. No arguments or return value.
+
+### `user_websites:rich_editor_close_link_bar` [@ANCHOR: user_websites:rich_editor_close_link_bar]
+
+`RichEditor.closeLinkBar()`. Hides the link bar and restores the saved selection. Used by the Cancel button (through `onLinkBarClick`), the Escape key (through `onLinkKeydown`) and at the start of `applyLink`, so the bar is always closed before a link is inserted or refused. It takes no arguments and returns nothing; the status message, if any, is left as it was.
+
+### `user_websites:rich_editor_link_bar_click` [@ANCHOR: user_websites:rich_editor_link_bar_click]
+
+`RichEditor.onLinkBarClick(ev)`. A click on an element inside `[data-uw-link-apply]` calls `applyLink()`; one inside `[data-uw-link-cancel]` calls `closeLinkBar()`; any other click in the bar, such as one in the input itself, is ignored. The listener is on the bar element, so it also catches clicks on the icon inside a button. It takes the click event, returns nothing and changes no state of its own.
+
+### `user_websites:rich_editor_link_keydown` [@ANCHOR: user_websites:rich_editor_link_keydown]
+
+`RichEditor.onLinkKeydown(ev)`. Keyboard handling for the link input: Enter applies the link and Escape closes the bar, both with `preventDefault` so Enter does not submit the page form. Other keys are left alone, so the member can type the address normally. The handler is attached to the link input only, not to the page area. It takes the keyboard event and returns nothing.
+
+### `user_websites:rich_editor_apply_link` [@ANCHOR: user_websites:rich_editor_apply_link]
+
+`RichEditor.applyLink()`. Reads and trims the link input and closes the bar. A URL that does not start with `http://`, `https://`, `mailto:` or `/` (case-insensitive) is refused with a status message "Links must start with http://, https://, mailto: or /." and nothing is inserted. Otherwise the message is cleared, `document.execCommand("createLink", false, url)` wraps the restored selection, one history step is recorded and the field is synced. The server filters links again.
+
+### `user_websites:rich_editor_image_picked` [@ANCHOR: user_websites:rich_editor_image_picked]
+
+`RichEditor.onImagePicked()` (async), the change handler of the hidden file input. It clears the input, ignores an empty choice, refuses a file over 2 MB with a status message, then POSTs a `FormData` (`ufile`, `json_reply=1`, the CSRF token from `data-csrf`) to the URL in `data-upload-url` (`/my/site/<slug>/image`, same-origin credentials). A network failure or `ok: false` reply is reported through `say`. On success it restores the selection, inserts `<img src="<reply.url>" alt="<file name without extension, quotes and angle brackets removed>"/>` with `insertHTML`, records history, syncs, and reminds the member to describe the image. The server enforces type, size and quota; this check is only a courtesy.
+
+### `user_websites:rich_editor_paste` [@ANCHOR: user_websites:rich_editor_paste]
+
+`RichEditor.onPaste(ev)`. Cancels the browser's paste. If the clipboard holds HTML it is parsed with `DOMParser` and reduced by `cleanNode` before `insertHTML`; otherwise the plain text is inserted with `insertText`. Then one history step is recorded and the field synced. Nothing from the pasted markup reaches the page unfiltered. Without `clipboardData` it does nothing and lets the browser paste.
+
+### `user_websites:rich_editor_clean_node` [@ANCHOR: user_websites:rich_editor_clean_node]
+
+`RichEditor.cleanNode(node)`. **Returns:** an HTML string built from the children of a DOM node. Text is escaped (`&`, `<`, `>`); elements in `DROP_TAGS` (script, style, frames, forms, SVG and similar) vanish with their content; `A` keeps only an `href` starting with `http(s)://`, `mailto:` or `/`, else just its inner text; `IMG` is dropped (pasted images are never hot-linked); `BR` and `HR` are written as self-closing tags; tags in `BLOCK_TAGS` or `INLINE_TAGS` are kept without attributes, except `SPAN` and `DIV`, which are unwrapped; any other element is replaced by its cleaned children. Styles, classes and ids are never copied. Recursive; no side effects.
+
+## 12. Anchor reference: member HTML sanitizer and site menu
+
+`models/member_html.py` holds the allow-list sanitizer used by the owner routes. It runs in the request path for every caller, administrators included, because the model-level sanitizers skip administrators and the service account.
+
+### `user_websites:member_html_sanitize` [@ANCHOR: user_websites:member_html_sanitize]
+
+The allow-list constants at the top of `models/member_html.py` that define what member HTML may contain, with the public entry point `sanitize_member_html`. `ALLOWED_TAGS`: p, br, hr, h1 to h4, strong, b, em, i, u, s, strike, sub, sup, ul, ol, li, blockquote, pre, code, a, img, div, span, table, thead, tbody, tr, th, td, figure, figcaption. `DROP_WITH_CONTENT`: script, style, iframe, frames, object, embed, applet, form controls, link, meta, base, head, title, noscript, template, math, audio, video, source, track, canvas, dialog. `ALLOWED_CLASSES`: only the alignment classes `text-start`, `text-center`, `text-end`, `text-justify` (a `text-align` style is converted to one). `LINK_SCHEMES`: http, https, mailto. `IMAGE_PATH_RE`: only `/web/image/<id>...` and `/web/content/<id>...`. `MAX_BODY_CHARS` is 200,000. Tests: `test_member_html_sanitize_strips_hostile_markup` and its cases.
+
+### `user_websites:fn_hmtl_clean_url` [@ANCHOR: user_websites:fn_hmtl_clean_url]
+
+`_clean_url(value, image=False)`. **Returns:** the stripped URL when allowed, else `None`. Empty values and any value with a control character are refused. With `image=True` only a path matching `IMAGE_PATH_RE` passes, so a member cannot hot-link an external tracking image. For links: a `#fragment`, a same-site path starting with a single `/` (not `//`), or a URL whose scheme is http, https or mailto passes; `javascript:`, `data:` and everything else returns `None`. Pure.
+
+### `user_websites:fn_hmtl_is_hostile` [@ANCHOR: user_websites:fn_hmtl_is_hostile]
+
+`_is_hostile(el)`. **Returns:** true when the lxml element is something only a hand-made request would carry: a tag in `DROP_WITH_CONTENT`, an attribute starting with `on`, `t-` or `xlink`, or an `href`, `src`, `action` or `formaction` using `javascript:`, `vbscript:` or a `data:` URL other than `data:image/`. It only classifies; removal is done by `_clean_children`. The flag is what lets the controller file the input as a violation. Pure.
+
+### `user_websites:fn_hmtl_sanitize_member_html` [@ANCHOR: user_websites:fn_hmtl_sanitize_member_html]
+
+`sanitize_member_html(source)` (public). `source` is the posted HTML string, cut to twice `MAX_BODY_CHARS`. **Returns:** `(clean_html, hostile)`: a well-formed fragment of allow-listed markup (stripped of the wrapping `<div>`), and true when any element was hostile per `_is_hostile`. A blank input gives `("", False)`; markup the parser cannot read also gives `("", False)`. Parsing uses lxml's fragment parser, then `_clean_children` rewrites the tree. No database or network access. Callers: the owner save route (through `_clean_body`) and the editor display. Tests: the sanitizer cases in `tests/test_owner_site.py`.
+
+### `user_websites:fn_hmtl_clean_children` [@ANCHOR: user_websites:fn_hmtl_clean_children]
+
+`_clean_children(parent)`, recursive. For each child: a comment or processing instruction is dropped; a tag in `DROP_WITH_CONTENT` is dropped with its content; `svg` goes through `_replace_with_sanitized_svg`; anything else is cleaned first (depth first), then a tag outside `ALLOWED_TAGS` is unwrapped (its text and children stay), an allowed tag gets `_clean_attributes`, an `a` with no surviving `href` is unwrapped, an `img` with no `src` is dropped, and every kept link gets `rel="nofollow noopener ugc"`. Mutates the tree in place; returns nothing.
+
+### `user_websites:fn_hmtl_clean_attributes` [@ANCHOR: user_websites:fn_hmtl_clean_attributes]
+
+`_clean_attributes(el, tag)`. Removes every attribute, then sets back only what is allowed: a `class` made of the alignment classes (a `text-align:` value in the old `style` replaces it with the matching class), for `a` a cleaned `href` and a `title` of up to 300 characters, for `img` a cleaned same-site `src`, an `alt` of up to 300 characters and numeric `width` and `height`, for `td` and `th` numeric `colspan` and `rowspan`. No `style`, `id`, `data-*`, event handler or QWeb attribute survives. Mutates in place.
+
+### `user_websites:fn_hmtl_drop` [@ANCHOR: user_websites:fn_hmtl_drop]
+
+`_drop(el)`. Removes the element and everything in it from its parent, but keeps the element's tail text by appending it to the previous sibling's tail or the parent's text. An element without a parent is left alone. Returns nothing; mutates the tree.
+
+### `user_websites:fn_hmtl_unwrap` [@ANCHOR: user_websites:fn_hmtl_unwrap]
+
+`_unwrap(el)`. Removes the element's tag but keeps its content: its text and its children move into the parent at the same position, and its tail text follows. An element with no parent is left alone. It is how disallowed but harmless tags (for example `font`) lose their markup and keep their words. Returns nothing; mutates the tree.
+
+### `user_websites:fn_hmtl_menu_pages` [@ANCHOR: user_websites:fn_hmtl_menu_pages]
+
+`menu_pages(env, domain_field, record_id, slug)`. **Returns:** a list of `{"name", "url"}` for the site's own navbar: up to 8 published `website.page` records owned by the record (`domain_field` is `owner_user_id` or `user_websites_group_id`, `record_id` its id), whose url is `/<slug>/<one segment>`, ordered by name, excluding any whose last segment is in `RESERVED_PAGE_SLUGS`. The search runs as the module service account. Read only. Callers: the two `_user_websites_menu_pages` methods.
+
+### `user_websites:fn_users_user_websites_menu_pages` [@ANCHOR: user_websites:fn_users_user_websites_menu_pages]
+
+`res.users._user_websites_menu_pages(self)` (`models/res_users.py`). Calls `ensure_one()` and returns `menu_pages(env, "owner_user_id", self.id, self.website_slug)`, or `[]` when the user has no site slug. Used by the `user_navbar` template to list the member's pages. Read only.
+
+### `user_websites:fn_group_user_websites_menu_pages` [@ANCHOR: user_websites:fn_group_user_websites_menu_pages]
+
+`user.websites.group._user_websites_menu_pages(self)` (`models/user_websites_groups.py`). Calls `ensure_one()` and returns `menu_pages(env, "user_websites_group_id", self.id, self.website_slug)`, or `[]` for a group without a slug. The group-site twin of `fn_users_user_websites_menu_pages`, used by the navbar when the site belongs to a group. It needs one record (`ensure_one`) and is read only; the search itself runs as the module service account inside `menu_pages`.
+
+### `user_websites:member_html_svg_allowlist` [@ANCHOR: user_websites:member_html_svg_allowlist]
+
+`_replace_with_sanitized_svg(el)` in `models/member_html.py`. An `<svg>` element is serialised and passed through Odoo's `html_sanitize` with zero_sudo's SVG allow-list, which keeps shapes and text and removes scripts, handlers, links, `<use>` and `data:` URLs. The cleaned nodes replace the original at the same position, tail text kept. If the cleaned result cannot be parsed the element is removed. The editor cannot draw SVG; this keeps schematics members pasted or imported earlier. Test: `test_svg_allowlist_sanitizer_fields`, and `test_svg_schematic_is_kept_and_hostile_svg_is_stripped`.
