@@ -11,8 +11,6 @@
   "daemons/bench_mcp/src/sdr.rs::survey",
   "daemons/bench_mcp/src/vna.rs::status",
   "daemons/bench_mcp/src/vna.rs::sweep",
-  "daemons/codec2_3200_capi/src/lib.rs::decode_ber_impl",
-  "daemons/codec2_3200_capi/src/lib.rs::encode_impl",
   "daemons/ham_digital_modes/docs/references/codec2_fixedpoint_codegen_check/src/lib.rs::cheb_poly_eval_fixed_i32",
   "daemons/ham_digital_modes/docs/references/codec2_fixedpoint_codegen_check/src/lib.rs::cheb_poly_eval_fixed_i64",
   "daemons/ham_digital_modes/docs/references/codec2_fixedpoint_codegen_check/src/lib.rs::div_round_i128_fn",
