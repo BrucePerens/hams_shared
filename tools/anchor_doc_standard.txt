@@ -1868,3 +1868,6 @@ daemons/elad_usb/src
 daemons/rsp_open/src
 daemons/rsp_open/examples
 daemons/rsp_open/tools
+daemons/cloudflared/component-tests
+daemons/cloudflared/release_pkgs.py
+daemons/cloudflared/release_script_testing.py
