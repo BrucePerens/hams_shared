@@ -1,9 +1,9 @@
 # Story: Other Websites as Tenants of hams.com's Odoo
 
 As the **owner of hams.com** I want **perens.com, postopen.org and other sites to be websites of the same Odoo**
-(one database, one Cloudflare tunnel, one place that says what the tunnel does), so that each site shows only
+(one database, one Cloudflare tunnel (the connection that carries public web traffic to the machine), one place that says what the tunnel does), so that each site shows only
 its own public content, nothing of hams.com's members or backend is reachable on its names, and the Cloudflare
-configuration has a single source of truth. The decision is [ADR 0106](../adrs/0106_tenants_inside_one_odoo.md): a *tenant* is a website of hams.com's own Odoo, bound to one or more hostnames, with no company or database of its own.
+configuration has a single source of truth. The decision is [ADR (Architecture Decision Record) 0106](../adrs/0106_tenants_inside_one_odoo.md): a *tenant* is a website of hams.com's own Odoo, bound to one or more hostnames, with no company or database of its own.
 
 ## Scenario: What a request for a hostname is
 
@@ -27,7 +27,7 @@ The tenant's hostnames select its website, `www.` included [@ANCHOR: tenant_site
 [@ANCHOR: tenant_sites:COMM_website_id_for_host] [@ANCHOR: tenant_sites:COMM_current_website_id]
 [@ANCHOR: tenant_sites:COMM_request_website_id] [@ANCHOR: tenant_sites:COMM_request_state].
 
-Only GET, HEAD and OPTIONS are served [@ANCHOR: tenant_sites:COMM_tenant_match]. Only the paths of an allow-list
+Only GET, HEAD and OPTIONS (the read-only HTTP methods) are served [@ANCHOR: tenant_sites:COMM_tenant_match]. Only the paths of an allow-list
 are routes, and only from the `website`, `website_blog`, `web`, `http_routing` and `edge_cache` controllers
 [@ANCHOR: tenant_sites:COMM_tenant_path_allowed] [@ANCHOR: tenant_sites:COMM_tenant_module_allowed]. Everything
 else (the backend, login, JSON-RPC, XML-RPC, JSON-2, the websocket, every route of a members' module) is refused

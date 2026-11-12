@@ -3,14 +3,14 @@
 As a **System Administrator**, I want to **create an isolated Odoo instance for a small site from a
 short declarative spec**, so that perens.com, postopen.org and a parking instance can share the
 production machine without any of them being able to reach hams.com's database, Redis, RabbitMQ or
-daemon keys. Design: `docs/proposals/MULTI_TENANT_ODOO.md` (hams_com), ADR 0106 (the separate-instance design it replaced). (These tools live under `tools/`, which the anchor
+daemon keys. Design: `docs/proposals/MULTI_TENANT_ODOO.md` (hams_com), ADR (Architecture Decision Record) 0106 (the separate-instance design it replaced). (These tools live under `tools/`, which the anchor
 linters do not scan, so this story carries no anchors.)
 
 **Status note.** [ADR 0106](../adrs/0106_tenants_inside_one_odoo.md) decided that perens.com, postopen.org and the parking site are tenants *inside* hams.com's Odoo (one database), not separate instances, and retired the per-instance tooling (`tenant_ctl.py`, `tenant_lib.py`, the `hams-tenant@` units). The scenarios below that use `tenant_ctl` (writing a spec, creating a tenant, backups and removal, upgrading, the tunnel) describe that retired separate-instance design; the current design is in [tenant_sites.md](tenant_sites.md) and [parking.md](parking.md).
 
 ## Scenario: Writing a spec
 
-A spec names the tenant, its domains, its loopback port and its limits. Names, domains (IDNA, never
+A spec names the tenant, its domains, its loopback (this machine's own network address) port and its limits. Names, domains (IDNA, the encoding for non-ASCII domain names; never
 under hams.com), ports (only 18000-18999), worker counts (a gevent port must be explicit: Odoo's default
 8072 is hams_prod's), modules (only an allow-list of hams_open modules besides vanilla ones) and the
 whole fleet (unique names, domains and ports, one tunnel catch-all) are validated before anything
@@ -20,12 +20,12 @@ runs.
 
 `tenant_ctl create SPEC` prints the plan and changes nothing; `--apply` runs the same steps. Every step
 has a read-only check, so a second run, or a run after a failure, does only what is left. The tenant gets its own account, a PostgreSQL role that
-authenticates by peer over the unix socket (no database password exists), its own database, an odoo.conf with no secret in it, a systemd drop-in with its memory and CPU limits, and a firewall table that stops its account opening new
+authenticates by peer (the database trusts the operating-system account name) over the unix socket (no database password exists), its own database, an odoo.conf with no secret in it, a systemd drop-in (an override file for a service unit) with its memory and CPU limits, and a firewall table that stops its account opening new
 connections to local services.
 
 ## Scenario: Backups, restore tests, status and removal
 
-A backup is a `pg_dump -Fc` plus the filestore with checksums; the
+A backup is a `pg_dump -Fc` (PostgreSQL's compressed dump format) plus the filestore (Odoo's directory of uploaded files) with checksums; the
 weekly restore test restores the newest backup into a scratch database and drops it. Status reports the unit, sizes, backup age and HTTP probes. Removal needs the tenant's exact name, takes a final backup first and
 never touches the backups.
 
@@ -37,7 +37,7 @@ account and starts it, and reports whether it answers; tenants are done one at a
 
 ## Scenario: Sending the tenants through the tunnel
 
-The tunnel's existing path-only rules match every hostname, so they are first scoped to hams.com, then
+The tunnel's (the Cloudflare Tunnel that carries public web traffic to this machine) existing path-only rules match every hostname, so they are first scoped to hams.com, then
 tenant hostnames are put in front and the catch-all goes to the parking instance. Only a reviewed list
 whose digest was approved can be applied, and only when the live configuration has not changed since
 it was read.

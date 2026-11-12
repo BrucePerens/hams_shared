@@ -1,15 +1,15 @@
 # Story: Parking Many Domains in hams.com's Odoo
 
 As a **System Administrator** who owns many domains, I want **the Odoo that already serves hams.com to answer for all
-of them** (a parked page, a redirect, a for-sale page, or 410 Gone, per domain), so that each domain
+of them** (a parked page, a redirect, a for-sale page, or 410 Gone, the HTTP status for permanently removed, per domain), so that each domain
 needs a DNS record and one row, not its own website, and so that nothing but those few pages is ever
 reachable from the internet on those names.
 
 ## Scenario: A visitor opens a parked domain
 
-The request's Host is read as the client sent it, never from `X-Forwarded-Host`, which Odoo's proxy mode
+The request's Host is read as the client sent it, never from `X-Forwarded-Host` (the header a proxy uses to pass on the original host name), which Odoo's proxy mode
 would otherwise substitute (that would let a visitor make one domain answer as another and poison the
-edge cache) [@ANCHOR: tenant_sites:COMM_normalize_host] [@ANCHOR: tenant_sites:COMM_original_host]. The Host must be a plausible DNS name; IP addresses and
+edge cache, Cloudflare's cache in front of the site) [@ANCHOR: tenant_sites:COMM_normalize_host] [@ANCHOR: tenant_sites:COMM_original_host]. The Host must be a plausible DNS name; IP addresses and
 single labels are refused.
 
 Every public request is answered from the `parking.domain` table by the `ir.http` fallback: the router
@@ -18,7 +18,7 @@ JSON-RPC, XML-RPC and websocket routes answer exactly like any other path
 [@ANCHOR: tenant_sites:COMM_match_guard] [@ANCHOR: tenant_sites:COMM_serve_fallback] [@ANCHOR: parking:COMM_serve_other].
 
 A parked page is a few kilobytes of self-contained HTML with no script, no cookie and a content
-security policy that allows none [@ANCHOR: parking:COMM_render_pages]. A host that is not in the table gets a
+security policy (a browser rule listing what a page may load) that allows none [@ANCHOR: parking:COMM_render_pages]. A host that is not in the table gets a
 plain, non-cacheable 404.
 
 ## Scenario: A domain redirects
@@ -32,7 +32,7 @@ the target's own path; the scheme and host always come from the target, so a cra
 
 The page carries a contact form. The form posts to one fixed path and is protected by a stateless token bound to the host and to the time
 the page was rendered (at least three seconds old, at most a day, so the page may sit in Cloudflare's
-cache) [@ANCHOR: parking:COMM_form_token]. A filled honeypot, a bad token or a token for another host is
+cache) [@ANCHOR: parking:COMM_form_token]. A filled honeypot (a hidden form field that people leave empty and bots fill), a bad token or a token for another host is
 answered like a success and stores nothing; one address may send five inquiries an hour
 [@ANCHOR: parking:COMM_inquiry_controller].
 
@@ -53,7 +53,7 @@ domains and write inquiries and nothing else [@ANCHOR: parking:COMM_service_acco
   [@ANCHOR: parking:COMM_render_gone]; `robots.txt` follows the domain's indexing switch
   [@ANCHOR: parking:COMM_robots_txt].
 * The visitor's address is trusted only with Cloudflare's own headers present
-  [@ANCHOR: parking:COMM_client_ip] and is stored only as a keyed hash [@ANCHOR: parking:COMM_hash_ip].
+  [@ANCHOR: parking:COMM_client_ip] and is stored only as a keyed hash (a hash made with a secret key, so it cannot be guessed back to the address) [@ANCHOR: parking:COMM_hash_ip].
 * A form token is checked against the host, the render time and a keyed signature
   [@ANCHOR: parking:COMM_verify_form_token]; the key is set once at install and never overwritten
   [@ANCHOR: parking:COMM_post_init_hook] and is read by the handler or the request fails
