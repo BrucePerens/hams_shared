@@ -29,7 +29,6 @@
   "ham_member_certs/static/src/js/member_cert_enroll.js::MemberCertEnroll.setup",
   "ham_member_certs/static/src/js/member_cert_enroll.js::MemberCertEnroll.showKeyLost",
   "ham_member_certs/static/src/js/member_cert_enroll.js::MemberCertEnroll.showOwnership",
-  "ham_profile/static/src/js/s_member_badges.js::MemberBadgesInteraction._loadBadges",
   "ham_repeater_dir/static/src/js/repeater_directory_page.js::RepeaterDirectoryInteraction.attachCardListeners",
   "ham_repeater_dir/static/src/js/repeater_directory_page.js::RepeaterDirectoryInteraction.clearPlace",
   "ham_repeater_dir/static/src/js/repeater_directory_page.js::RepeaterDirectoryInteraction.onUseLocation",
