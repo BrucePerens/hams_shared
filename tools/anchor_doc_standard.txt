@@ -1377,3 +1377,16 @@ distributed_redis_cache/docs/stories/resilience.md
 hams_rabbitmq/README.md
 advertising/README.md
 hams_s3/docs/stories/s3_configuration.md
+zero_sudo/README.md
+zero_sudo/docs/stories/secret_store_tier_a.md
+zero_sudo/docs/stories/secret_store_tier_b.md
+zero_sudo/docs/stories/robots_txt_policy.md
+zero_sudo/docs/stories/multi_website.md
+zero_sudo/docs/stories/js_offline_store.md
+zero_sudo/docs/stories/documentation_bootstrap.md
+zero_sudo/docs/stories/js_security_dashboard.md
+zero_sudo/docs/stories/member_page_stylesheet_filter.md
+zero_sudo/docs/stories/csp_safe_confirmation.md
+zero_sudo/docs/stories/service_account_scoped_erasure.md
+zero_sudo/docs/stories/svg_allowlist_sanitizer.md
+zero_sudo/docs/stories/trusted_client_ip.md
