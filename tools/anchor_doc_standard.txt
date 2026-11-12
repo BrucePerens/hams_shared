@@ -59,6 +59,7 @@ daemons/bench_mcp/docs/stories/hamlib_a.md
 daemons/bench_mcp/docs/stories/hamlib_b.md
 daemons/bench_mcp/docs/stories/hamlib_c.md
 daemons/bench_mcp/docs/stories/hamlib_d.md
+daemons/bench_mcp/docs/stories/procedure_run.md
 daemons/bench_mcp/docs/stories/procedure_runtime.md
 daemons/bench_mcp/docs/stories/procedure_store_checklist.md
 daemons/bench_mcp/docs/stories/sa_core.md
