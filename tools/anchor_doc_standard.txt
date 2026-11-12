@@ -57,6 +57,7 @@ daemons/bench_mcp/docs/stories/audio_b.md
 daemons/bench_mcp/docs/stories/audio_c.md
 daemons/bench_mcp/docs/stories/elad_example.md
 daemons/bench_mcp/docs/stories/gla.md
+daemons/bench_mcp/docs/stories/glasgow_a.md
 daemons/bench_mcp/docs/stories/hamlib_a.md
 daemons/bench_mcp/docs/stories/hamlib_b.md
 daemons/bench_mcp/docs/stories/hamlib_c.md
