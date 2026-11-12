@@ -758,3 +758,4 @@ daemons/radioctl/docs/stories/radioctl_function_anchors_40.md
 daemons/radioctl/docs/stories/radioctl_function_anchors_41.md
 daemons/radioctl/docs/stories/radioctl_function_anchors_42.md
 daemons/radioctl/docs/stories/radioctl_function_anchors_43.md
+daemons/radioctl/README.md
