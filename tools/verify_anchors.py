@@ -86,6 +86,9 @@ CODE_ISLANDS_UNDER_DOCS = [
     # Markdown files are still scanned as docs; only these directories' code is added.
     "docs/proposals",
     "docs/talks/pacificon",
+    # radioctl's Python tools (hamlib_caps_matrix, wire_to_transcript, ...): the scan prunes every directory named
+    # `tools`, so their anchors were invisible and the `radioctl:` entries in the story files reported missing.
+    "daemons/radioctl/tools",
 ]
 
 # Directories every os.walk below prunes before descending -- never real, first-party source or
