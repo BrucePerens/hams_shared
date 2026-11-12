@@ -3577,8 +3577,13 @@ MANIFEST = {
             # own documented settings (https://doc.powerdns.com/authoritative/settings.html):
             #   authoritative only: no recursion exists in this server, `resolver` stays unset
             #     (it is only for ALIAS lookups) and `expand-alias` stays at its default no;
-            #     a name outside our zones gets REFUSED. primary/secondary=no, disable-axfr=yes
-            #     and an empty allow-notify-from: no zone transfer or NOTIFY surface at all.
+            #     a name outside our zones gets REFUSED. Zone transfers (primary=yes, disable-axfr=no) go
+            #     only to prove1 (ns2, 149.28.221.130) through allow-axfr-ips, or to a holder of its TSIG
+            #     key; secondary=no and an empty allow-notify-from: hams1 accepts no NOTIFY. Since
+            #     2026-11-12 (docs/runbooks/HAMS1_POWERDNS_CONFIG_CHANGE_2026-11-12.md) the main backend
+            #     has DNSSEC support enabled (gsqlite3-main-dnssec=yes; hams.com itself stays unsigned
+            #     until the registrar move) and default-api-rectify, also-notify and the SOA refresh of
+            #     new zones follow `pdns_replication_setup.py conf primary`.
             #   lua-prequery-script (/opt/hams/etc/pdns-prequery.lua, the next entry): any query whose
             #     type we do not serve (ANY, AXFR/IXFR, anything exotic) gets a REFUSED reply no larger
             #     than the query. NOT in the settings documentation as a supported feature: it says
@@ -3600,11 +3605,11 @@ MANIFEST = {
             "content": """\
 launch=gsqlite3:main,gsqlite3:callbook
 gsqlite3-main-database=/var/lib/powerdns/pdns.sqlite3
-gsqlite3-main-dnssec=no
+gsqlite3-main-dnssec=yes
 gsqlite3-callbook-database=/var/lib/powerdns/callbook/callbook.sqlite3
 gsqlite3-callbook-dnssec=no
 local-address=0.0.0.0
-default-soa-content=ns1.{DOMAIN} hostmaster.{DOMAIN} 0 10800 3600 604800 3600
+default-soa-content=ns1.{DOMAIN} hostmaster.{DOMAIN} 0 600 300 604800 300
 api=yes
 api-key={PDNS_API_KEY}
 webserver=yes
@@ -3613,9 +3618,12 @@ webserver-port=8081
 webserver-allow-from=127.0.0.0/8,::1/128
 dnsupdate=yes
 allow-dnsupdate-from=127.0.0.0/8,::1/128
-primary=no
+primary=yes
 secondary=no
-disable-axfr=yes
+disable-axfr=no
+allow-axfr-ips=149.28.221.130
+default-api-rectify=yes
+also-notify=149.28.221.130
 allow-notify-from=
 any-to-tcp=yes
 udp-truncation-threshold=1232
