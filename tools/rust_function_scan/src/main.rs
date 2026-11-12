@@ -151,6 +151,12 @@ fn has_test_attr(attrs: &[syn::Attribute]) -> bool {
         .any(|a| a.path().segments.last().is_some_and(|s| s.ident == "test"))
 }
 
+/// `#[panic_handler]`: a `no_std` language item the compiler calls on panic. It diverges (usually `loop {}`), so no test
+/// can call it and return; it is skipped like a `#[test]` function.
+fn has_panic_handler_attr(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|a| a.path().is_ident("panic_handler"))
+}
+
 /// Whether any `#[cfg(...)]` attribute's argument tokens mention the
 /// bare identifier `ident` at all (e.g. `#[cfg(any(test, feature =
 /// "..."))]` for `ident = "test"`) -- a permissive superset, matching
@@ -237,7 +243,11 @@ fn walk_items(items: &[syn::Item], prefix: &str, lines: &[&str], out: &mut Vec<F
     for item in items {
         match item {
             syn::Item::Fn(f) => {
-                if has_test_attr(&f.attrs) || has_cfg_test(&f.attrs) || has_cfg_kani(&f.attrs) {
+                if has_panic_handler_attr(&f.attrs)
+                    || has_test_attr(&f.attrs)
+                    || has_cfg_test(&f.attrs)
+                    || has_cfg_kani(&f.attrs)
+                {
                     continue;
                 }
                 let start = attrs_or_span_start_line(&f.attrs, f.sig.fn_token.span());
@@ -378,6 +388,15 @@ mod tests {
     fn skips_functions_inside_a_cfg_test_module() {
         let entries = scan_source(
             "fn real() {\n    1;\n}\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn it_works() {\n        assert!(true);\n    }\n}\n",
+        );
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "real");
+    }
+
+    #[test]
+    fn skips_a_panic_handler_language_item() {
+        let entries = scan_source(
+            "#[panic_handler]\nfn panic(_i: &u8) -> ! {\n    loop {}\n}\nfn real() {\n    1;\n}\n",
         );
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, "real");
