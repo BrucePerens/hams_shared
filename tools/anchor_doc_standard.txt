@@ -214,6 +214,7 @@ daemons/shack_console/console/src/vendor
 daemons/shack_console/console/src/wasm
 daemons/shack_console/console/tests
 daemons/shack_console/docs/stories/arrange_room.md
+daemons/shack_console/docs/stories/console_asset_pipeline.md
 daemons/shack_console/docs/stories/console_shared_receiver_and_speech_dock.md
 daemons/shack_console/docs/stories/layout_height.md
 daemons/shack_console/docs/stories/layout_library.md
