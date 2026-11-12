@@ -305,6 +305,7 @@ daemons/shack_console/docs/stories/s2_demo_lock.md
 daemons/shack_console/docs/stories/s2_keyboard_settings_profiles_help.md
 daemons/shack_console/docs/stories/s2_operating.md
 daemons/shack_console/docs/stories/s2_saved_frequencies.md
+daemons/shack_console/docs/stories/s2_simband_conversation_spectrogram.md
 daemons/shack_console/docs/stories/s2_voice_log_parser_dupe.md
 daemons/shack_console/docs/stories/s2_voice_log_undo.md
 daemons/shack_console/docs/stories/scope_cw_and_decode_overlay.md
