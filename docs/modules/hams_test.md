@@ -116,12 +116,12 @@ To prevent CSS bloat, the AST (abstract syntax tree) Burn List linter (`check_bu
 
 ### Core Architecture
 The module implements three primary testing facilities:
-1. **Real Transaction Testing (`RealTransactionCase`)**: Bypasses Odoo's standard `TestCursor` to provide a real, committable database connection. It uses ORM instrumentation ([@ANCHOR: orm_instrumentation]) and row-count snapshots of every table ([@ANCHOR: leak_snapshotting]) to ensure database integrity.
+1. **Real Transaction Testing (`RealTransactionCase`)**: Bypasses Odoo's standard `TestCursor` to provide a real, committable database connection. It uses ORM instrumentation (`orm_instrumentation`) and row-count snapshots of every table (`leak_snapshotting`) to ensure database integrity.
 
-2. **Integration Daemon Testing (`HamsTransactionCase`)**: The shared test base class; it provides `start_daemon()`, a lifecycle wrapper for external Python daemons with health polling. ([@ANCHOR: integration_daemon_testing]) Verified by [@ANCHOR: COMM_test_integration_daemon_testing]
+2. **Integration Daemon Testing (`HamsTransactionCase`)**: The shared test base class; it provides `start_daemon()`, a lifecycle wrapper for external Python daemons with health polling. (`integration_daemon_testing`) Verified by `COMM_test_integration_daemon_testing`
 3. **UI Tour Governance**: Defines standards for JavaScript-based UI tours and provides `TourUtils` for robust frontend testing.
 
-It also includes a **Noisy Table Management** interface ([@ANCHOR: COMM_UX_NOISY_TABLE_MANAGEMENT]) to allow administrators to whitelist tables from leak detection.
+It also includes a **Noisy Table Management** interface (`COMM_UX_NOISY_TABLE_MANAGEMENT`) to allow administrators to whitelist tables from leak detection.
 
 ### Security Design
 - **Service Accounts**: The testing facility defines no service account of its own in this repository's data files; the anchor [@ANCHOR: user_real_transaction_service] is only a documentation marker. The documentation installation described in [zero_sudo.md](zero_sudo.md) is a separate part of `zero_sudo`.
@@ -129,8 +129,74 @@ It also includes a **Noisy Table Management** interface ([@ANCHOR: COMM_UX_NOISY
 - **SQL Injection Prevention**: Uses `psycopg2.sql.Identifier` and `psycopg2.sql.Literal` for the dynamic SQL in the leak detector and the fallback cleanup ([@ANCHOR: leak_verification]).
 
 ### Stories & Journeys
-- **Real Transaction Testing Story**: Explains the need for real commits and how the facility handles them ([@ANCHOR: cursor_hijacking]).
+- **Real Transaction Testing Story**: Explains the need for real commits and how the facility handles them (`cursor_hijacking`).
 
 - **Documentation Injection Story**: Describes the automated documentation setup process ([@ANCHOR: documentation_bootstrap]).
 - **Developer Testing Flow Journey**: Guides developers through using `RealTransactionCase` for advanced integration tests.
 - **Documentation Setup Flow Journey**: Details the technical steps of injecting documentation into the knowledge base.
+
+---
+
+## 7. Anchor reference
+
+Entries for the testing-facility anchors cited above; the code is in `zero_sudo/tests/real_transaction.py`, `zero_sudo/tests/common.py` and `zero_sudo/models/noisy_table.py` (the code spells these ids with a `zero_sudo:COMM_` prefix).
+
+### `orm_instrumentation` [@ANCHOR: orm_instrumentation]
+
+**Purpose.** Lets `RealTransactionCase` clean up after itself even though its data is really committed: every record the test creates through the ORM is remembered, so teardown can delete it.
+
+**Where.** `zero_sudo/tests/real_transaction.py`, `RealTransactionCase.setUp`; in code the anchor id is `zero_sudo:COMM_orm_instrumentation`. `odoo.models.BaseModel.create` is replaced by `tracking_create`, which calls the original (saved at import in `_original_create`) and adds `records.ids` to `self._tracked_records[model_name]` (a `defaultdict` of sets). `addCleanup` restores the original method.
+
+**Teardown use.** `_real_teardown` walks the tracked models in reverse order for up to 5 passes, unlinking the records as user 2 inside savepoints; on the last pass a raw `DELETE` on the model's table (built with `psycopg2.sql.Identifier`) is the fallback; then it commits and runs the leak check (`leak_snapshotting`).
+
+**Concerns.** The patch is process-wide while the test runs, so creates in other threads of the same test process are tracked too. Records created by raw SQL are not tracked; the leak check reports them. Test: `COMM_test_orm_instrumentation` in `tests/test_facility.py`. To-do: this document's id lacks the `zero_sudo:COMM_` prefix used by the code.
+
+### `leak_snapshotting` [@ANCHOR: leak_snapshotting]
+
+**Purpose.** Detects data a test leaves behind: it records how many rows each table has before the test and compares after cleanup.
+
+**Where.** `zero_sudo/tests/real_transaction.py`, `RealTransactionCase.setUp` (code id `zero_sudo:COMM_leak_snapshotting`) and `_real_teardown`. Setup lists every table in schema `public` (except `pg_stat_statements%`) from `information_schema.tables` into `self._tables` and counts rows with `count_rows_in_batches`, giving `self._initial_counts`. That helper counts in small batches, each on its own short connection committed at once, so only a few dozen relation locks are held (a single query over every table once exhausted PostgreSQL's lock slots when shards ran in parallel).
+
+**Verification.** After automated cleanup and a commit, teardown recounts every table that is not noisy and raises `AssertionError` ("Database pollution detected ...") listing each table with a non-zero difference as `table (+n)`. Noisy tables are the active `zero_sudo.noisy_table` records plus `LEAK_CHECK_FALLBACK_TABLES` (see `COMM_UX_NOISY_TABLE_MANAGEMENT`).
+
+**Concerns.** Cost is one count per table at start and end. Test: `COMM_test_leak_snapshotting` in `tests/test_facility.py`.
+
+### `integration_daemon_testing` [@ANCHOR: integration_daemon_testing]
+
+**Purpose.** Lets an integration test run a real Python daemon next to the Odoo test run and wait until it is healthy.
+
+**Call interface.** `HamsTransactionCase.start_daemon(script_path, args=None, env_vars=None, health_url=None, timeout=600)` in `zero_sudo/tests/common.py` (code id `zero_sudo:hams_transaction_case_start_daemon`). `script_path` is a Python file; `args` a list of extra arguments; `env_vars` a dict added to the environment; `health_url` an HTTP URL to poll; `timeout` seconds to wait (default 600). Returns the `subprocess.Popen`.
+
+**Behaviour.** It calls `zero_sudo.daemon.utils._start_daemon_process`, which runs `sys.executable script_path args` with `PYTHONPATH` set from `sys.path`, `start_new_session=True` and no shell, and logs only the program and argument count (arguments can be secrets). The process is added to the per-class list `_active_daemons`, which `tearDownClass` terminates. With `health_url` it does a `GET` every 0.5 s (1 s timeout) until status 200 or 204. It raises `RuntimeError` if the daemon exits first and `TimeoutError` when the time runs out, and blocks the test thread meanwhile.
+
+**See also.** `COMM_test_integration_daemon_testing`.
+
+### `COMM_test_integration_daemon_testing` [@ANCHOR: COMM_test_integration_daemon_testing]
+
+**Purpose.** Test anchor that proves `start_daemon` starts a process and waits for its health check.
+
+**What it does.** `TestIntegrationFacility.test_01_daemon_lifecycle` (`zero_sudo/tests/test_integration.py`, tagged `post_install`, `-at_install`, `integration`, base class `HamsTransactionCase`) launches `tests/dummy_daemon.py`, which listens on port 1234, with `health_url` `http://<DAEMON_HOST or odoo>:1234`. It asserts that the returned process has a pid and is still running (`poll()` is `None`), then sends an HTTP `HEAD` with `urllib` and asserts status 200.
+
+**Scope.** It covers the success path only: the crash (`RuntimeError`) and timeout (`TimeoutError`) branches are not exercised here (to-do: add tests). The daemon is stopped by the class teardown. In code the anchor id is `zero_sudo:COMM_test_integration_daemon_testing`.
+
+**See also.** `integration_daemon_testing`.
+
+### `COMM_UX_NOISY_TABLE_MANAGEMENT` [@ANCHOR: COMM_UX_NOISY_TABLE_MANAGEMENT]
+
+**Purpose.** Lets an administrator exclude tables from the test leak check when background processes write to them all the time and would cause false failures.
+
+**Definition.** Model `zero_sudo.noisy_table` (`zero_sudo/models/noisy_table.py`), global and not multi-tenant: `name` (Char, required, indexed, unique, the PostgreSQL table name) and `active` (Boolean, default True; unchecking it brings the table back into the check); ordered by name. Administrators manage the records under Settings > Zero-Sudo Security > Noisy Tables; the user guide section "Noisy Table Management" is in `zero_sudo/data/documentation.html`.
+
+**Use.** `RealTransactionCase._real_teardown` reads the active records (limit 1000), adds the built-in `LEAK_CHECK_FALLBACK_TABLES` (bus, mail, cron, log and statistics tables) and skips these tables when recounting rows. If the table cannot be read the fallback list alone is used, with a warning.
+
+**Concerns.** Excluding a table hides real leaks in it, so keep the list short. Only test runs read it; production is unaffected. Documentation anchor: also `zero_sudo:COMM_UX_NOISY_TABLE_MANAGEMENT`.
+
+### `cursor_hijacking` [@ANCHOR: cursor_hijacking]
+
+**Purpose.** Gives a test (and the HTTP threads it starts) a real, committable PostgreSQL connection instead of Odoo's shared test cursor, so it behaves like production.
+
+**Where.** `zero_sudo/tests/real_transaction.py`, `RealTransactionCase.setUp` (code id `zero_sudo:COMM_cursor_hijacking`). Odoo's `HttpCase` gives the test a `TestCursor` that holds a global lock and never commits. Setup stashes it (`_test_cursor`, `_test_env`), then makes `registry.cursor` return `odoo.sql_db.db_connect(db).cursor()`: if `registry.cursor` is a `Mock` only its `side_effect` is replaced (deleting it would deadlock Werkzeug threads or crash `unittest.mock`), otherwise the attribute is swapped. `self.cr` becomes a real cursor and `self.env` an environment for the user with login `admin` (id 2 if absent), not the superuser.
+
+**Undo.** `addCleanup` restores the registry; `_real_teardown` rolls back, clears caches and closes the cursor in a `finally` block, then restores the test cursor so Odoo's own teardown succeeds.
+
+**Concerns.** Everything is really committed, so cleanup (`orm_instrumentation`) is mandatory. Test: `COMM_test_cursor_hijacking` in `tests/test_facility.py`.
