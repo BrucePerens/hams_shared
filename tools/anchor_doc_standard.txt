@@ -934,3 +934,13 @@ daemons/shack_console/docs/stories/allstar_bridge_call.md
 daemons/shack_console/docs/stories/controller_connection_and_rig.md
 daemons/loupedeck_ct/docs/stories/loupedeck_ct_model.md
 daemons/hams_simulated_band/README.md
+agents/skills/bug-hunt/README.md
+daemons/hams_relay_bridge/README.md
+daemons/relay_signer/README.md
+docs/proposals/CLUB_SPAM_SITES.md
+ham_dx_cluster/README.md
+ham_member_certs/docs/stories/function_reference.md
+ham_member_certs/docs/stories/js_member_cert_auto.md
+ham_member_certs/docs/stories/js_member_cert_enroll.md
+ham_member_certs/docs/stories/test_signer_support_reference.md
+ham_relay_bridge/README.md
