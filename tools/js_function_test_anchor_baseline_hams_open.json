@@ -37,10 +37,5 @@
   "user_websites/static/src/js/violation_report.js::ViolationReportModal.start",
   "zero_sudo/static/src/components/security_dashboard/security_dashboard.js::SecurityDashboard.loadLogs",
   "zero_sudo/static/src/components/security_dashboard/security_dashboard.js::SecurityDashboard.setup",
-  "zero_sudo/static/src/components/security_dashboard/security_dashboard.js::SecurityDashboard.togglePause",
-  "zero_sudo/static/src/js/offline_store.js::OfflineStore.constructor",
-  "zero_sudo/static/src/js/offline_store.js::OfflineStore.deleteLog",
-  "zero_sudo/static/src/js/offline_store.js::OfflineStore.getPendingLogs",
-  "zero_sudo/static/src/js/offline_store.js::OfflineStore.init",
-  "zero_sudo/static/src/js/offline_store.js::OfflineStore.saveLog"
+  "zero_sudo/static/src/components/security_dashboard/security_dashboard.js::SecurityDashboard.togglePause"
 ]
