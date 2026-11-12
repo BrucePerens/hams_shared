@@ -305,6 +305,19 @@ class RunTests(unittest.TestCase):
         self.assertTrue(self.commands)
 
     # Tests [@ANCHOR: gate_canary:run_canary]
+    def test_an_artifact_another_build_overwrote_is_rebuilt_before_the_shard_runs(self):
+        """The shared cargo target is rebuilt by the cycle's own snapshot; shard 4 of the 2026-11-12 canary found the stamp gone."""
+        stale = ["relay_test_hooks: /t/debug/hams_local_relay has no stamp for the current sources (copied in, or built from other sources)"]
+        answers = [stale, []]
+        built = []
+        with unittest.mock.patch.object(gate_snapshot, "verify_snapshot", side_effect=lambda *a, **k: answers.pop(0) if answers else []), \
+                unittest.mock.patch.object(gate_snapshot, "Trees", lambda **k: k), \
+                unittest.mock.patch.object(gate_snapshot, "build_artifact", lambda art, trees, target, **k: built.append(art.name)):
+            code, status = self.run_canary({})
+        self.assertEqual(built, ["relay_test_hooks"])
+        self.assertEqual(status["shard_errors"], [])
+
+    # Tests [@ANCHOR: gate_canary:run_canary]
     def test_only_if_new_commit_skips_an_unchanged_origin(self):
         self.run_canary({})
         self.commands.clear()
