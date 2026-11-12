@@ -267,6 +267,7 @@ daemons/shack_console/docs/stories/log_spot_anchor_reference.md
 daemons/shack_console/docs/stories/my_preferences_anchor_reference.md
 daemons/shack_console/docs/stories/no_scope_design.md
 daemons/shack_console/docs/stories/s1_award_status_logic.md
+daemons/shack_console/docs/stories/s1_key_dispatch_readout.md
 daemons/shack_console/docs/stories/s1_keyboard_system.md
 daemons/shack_console/docs/stories/s1_keys.md
 daemons/shack_console/docs/stories/s1_links_chat.md
