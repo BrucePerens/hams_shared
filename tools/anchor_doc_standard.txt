@@ -214,6 +214,8 @@ daemons/shack_console/console/src/tuning
 daemons/shack_console/console/src/vendor
 daemons/shack_console/console/src/wasm
 daemons/shack_console/console/tests
+daemons/shack_console/docs/stories/alerts_queue_and_sources.md
+daemons/shack_console/docs/stories/alerts_waterfall_status_and_panels.md
 daemons/shack_console/docs/stories/arrange_room.md
 daemons/shack_console/docs/stories/console_relay_identity_wire_and_asn1.md
 daemons/shack_console/docs/stories/console_shared_receiver_and_speech_dock.md
@@ -221,6 +223,7 @@ daemons/shack_console/docs/stories/layout_height.md
 daemons/shack_console/docs/stories/layout_library.md
 daemons/shack_console/docs/stories/layout_presets.md
 daemons/shack_console/docs/stories/no_scope_design.md
+daemons/shack_console/docs/stories/settings_page_alerts.md
 daemons/shack_console/docs/stories/sim_roster.md
 daemons/shack_console/docs/stories/sim_spectrum.md
 daemons/shack_console/docs/stories/stt_translate_panel.md
