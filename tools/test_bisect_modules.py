@@ -204,6 +204,21 @@ class RunTests(unittest.TestCase):
             self.assertEqual(json.load(handle)["needed"], ["m12"])
 
     # Tests [@ANCHOR: bisect_modules:run]
+    def test_run_passes_preflight_done_to_every_trial_when_the_parent_run_had_it(self):
+        commands = []
+        runner = fake_runner({"ham_club", "m12"})
+
+        def recording(command):
+            commands.append(command)
+            return runner(command)
+
+        bisect_modules.run(self.args(preflight_done=True), "/x/test.py", ["ham_club"], runner=recording, out=lambda *_: None, slots=2)
+        self.assertTrue(commands and all("--preflight-done" in command for command in commands))
+        commands.clear()
+        bisect_modules.run(self.args(), "/x/test.py", ["ham_club"], runner=recording, out=lambda *_: None, slots=2)
+        self.assertFalse(any("--preflight-done" in command for command in commands))
+
+    # Tests [@ANCHOR: bisect_modules:run]
     def test_run_refuses_nothing_to_reduce_and_a_bad_job_count_and_reports_exit_codes(self):
         out = []
         self.assertEqual(bisect_modules.run(self.args(module="ham_club"), "/x", ["ham_club"], out=out.append), 2)
