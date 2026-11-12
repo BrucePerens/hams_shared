@@ -211,23 +211,11 @@ class CreateTests(SnapshotTestBase):
         return run
 
     # Tests [@ANCHOR: gate_snapshot:create_snapshot]
-    def test_a_merge_during_the_build_makes_the_snapshot_again_at_the_new_commit(self):
-        manifest = self.create(run=self.racing_run(1))
-        self.assertEqual(manifest["trees"]["com_commit"], git(self.ws.path("hams_com"), "rev-parse", "origin/main"))
-        self.assertTrue(any("moved during the snapshot" in line for line in self.out))
-
-    # Tests [@ANCHOR: gate_snapshot:create_snapshot]
-    def test_main_that_keeps_moving_fails_after_three_tries_with_the_behind_message(self):
-        with self.assertRaises(gs.SnapshotError) as caught:
-            self.create(run=self.racing_run(9))
-        self.assertIn("com is behind origin/main", str(caught.exception))
-        self.assertEqual(sum("moved during the snapshot" in line for line in self.out), 2)
-
-    # Tests [@ANCHOR: gate_snapshot:create_snapshot]
-    def test_allow_behind_keeps_a_snapshot_that_main_moved_past_without_retrying(self):
-        manifest = self.create(run=self.racing_run(9), allow_behind=True)
+    def test_a_merge_during_the_build_keeps_the_first_snapshot_without_retrying(self):
+        manifest = self.create(run=self.racing_run(9))
         self.assertNotEqual(manifest["trees"]["com_commit"], git(self.ws.path("hams_com"), "rev-parse", "origin/main"))
-        self.assertFalse(any("moved during the snapshot" in line for line in self.out))
+        self.assertEqual(sum("keeping it" in line for line in self.out), 1)
+        self.assertEqual(sum("gate_snapshot: hams_com" in line for line in self.out), 1)
 
     # Tests [@ANCHOR: gate_snapshot:create_snapshot]
     def test_create_refuses_on_the_production_host_and_for_a_missing_build(self):

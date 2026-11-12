@@ -393,9 +393,6 @@ def shard_command(trees, shard, log_directory, relay_binary, extra_env=None, tag
     )
 
 
-SNAPSHOT_TRIES = 3
-
-
 class SnapshotBehind(SnapshotError):
     """The snapshot is complete but origin/main moved past it while it was built; `manifest` is that snapshot."""
 
@@ -547,25 +544,22 @@ def _create_snapshot_once(workspace=DEFAULT_WORKSPACE, parent=None, shards=DEFAU
 
 # [@ANCHOR: gate_snapshot:create_snapshot]
 def create_snapshot(workspace=DEFAULT_WORKSPACE, parent=None, shards=DEFAULT_SHARDS, shards_file=None, fetch=True,
-                    build=True, cargo_target_dir=None, run=None, out=print, hostname=None, balance=None, allow_behind=False):
+                    build=True, cargo_target_dir=None, run=None, out=print, hostname=None, balance=None):
     """Builds the gate tree for the current `origin/main` commits and returns its manifest (also written to
     `<gate>/gate_snapshot.json`, with `gate_shards.json` beside it). Steps: refuse on a production host; fetch and read the
     three commits; make the worktrees; build every artifact (unless `build` is False); choose the shards (from `shards_file`,
     a list of lists, when given); verify. Raises `SnapshotError` when any step fails or the finished snapshot does not verify
     (nothing is returned for a stale one). The manifest holds `trees`, `workspace`, `cargo_target_dir`, `shards`, `commands`
     and `created`. `run` and `hostname` are for tests.
-    When origin/main moved while the snapshot was being built (merges during the build), the snapshot is made again at the new
-    commits: re-fetch, new trees, up to `SNAPSHOT_TRIES` attempts; if main still moves, the last attempt's `SnapshotError`
-    ("... is behind origin/main ...") is raised. With `allow_behind` the first complete snapshot is returned as it is, no retry. Without `fetch` nothing can be seen to move, so there is one attempt."""
-    for attempt in range(1, SNAPSHOT_TRIES + 1):
-        try:
-            return _create_snapshot_once(workspace, parent, shards, shards_file, fetch, build, cargo_target_dir, run, out, hostname, balance)
-        except SnapshotBehind as error:
-            if allow_behind:  # a long, advisory run (the canary) tests the commits it built; main always moves meanwhile
-                return error.manifest
-            if attempt == SNAPSHOT_TRIES:
-                raise SnapshotError(str(error)) from error
-            out("gate_snapshot: origin/main moved during the snapshot (attempt %d of %d), making it again" % (attempt, SNAPSHOT_TRIES))
+    A snapshot tests an exact set of commits (recorded in the manifest), so one that origin/main moved past while it was being
+    built (merges during a long build) is kept as it is: `deploy_to_production.py` still refuses a checkout that is not at
+    origin/main. Only a real problem (a tree missing, dirty or at the wrong commit, a missing artifact, an inconsistent
+    hams_shared pointer) raises `SnapshotError`; nothing is retried."""
+    try:
+        return _create_snapshot_once(workspace, parent, shards, shards_file, fetch, build, cargo_target_dir, run, out, hostname, balance)
+    except SnapshotBehind as error:
+        out("gate_snapshot: origin/main moved during the snapshot; keeping it, it tests the commits it built")
+        return error.manifest
 
 
 # [@ANCHOR: gate_snapshot:prune_snapshots]
