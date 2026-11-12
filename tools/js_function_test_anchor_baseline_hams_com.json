@@ -1,7 +1,4 @@
 [
-  "ham_base/static/src/js/hams_key.js::HamsKey.setup",
-  "ham_base/static/src/js/hams_key_shortcut.js::t-on-keydown",
-  "ham_base/static/src/js/use_my_location.js::requestMyLocation",
   "ham_dns/static/src/js/dns_map.js::DnsRecordMap._initLeaflet",
   "ham_dns/static/src/js/dns_map.js::DnsRecordMap._initMap",
   "ham_dns/static/src/js/dns_map.js::DnsRecordMap._renderMarkers",
