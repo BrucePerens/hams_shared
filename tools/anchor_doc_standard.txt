@@ -270,6 +270,7 @@ daemons/shack_console/docs/stories/console_waterfall_control_bar_and_view.md
 daemons/shack_console/docs/stories/console_waterfall_screen_and_host.md
 daemons/shack_console/docs/stories/console_waterfall_transmit_sync_rtt_settings.md
 daemons/shack_console/docs/stories/cw_tone_detector_and_voice_log.md
+daemons/shack_console/docs/stories/drag_reveal_waterfall_host.md
 daemons/shack_console/docs/stories/hams_core_dx_rows.md
 daemons/shack_console/docs/stories/hams_core_wasm_binding.md
 daemons/shack_console/docs/stories/layout_height.md
@@ -303,6 +304,7 @@ daemons/shack_console/docs/stories/s1_tabs_operate_mode.md
 daemons/shack_console/docs/stories/sim_roster.md
 daemons/shack_console/docs/stories/sim_spectrum.md
 daemons/shack_console/docs/stories/stt_translate_panel.md
+daemons/shack_console/docs/stories/tap_to_log_and_drag_maths.md
 daemons/shack_console/docs/stories/tx_capability.md
 daemons/shack_console/hams_core/src
 daemons/shack_console/hams_core/tests
