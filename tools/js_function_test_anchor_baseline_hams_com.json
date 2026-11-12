@@ -1,9 +1,4 @@
 [
-  "ham_logbook/static/src/js/awards_dashboard.js::dxccToGeoName",
-  "ham_logbook/static/src/js/awards_dashboard.js::gridToBounds",
-  "ham_logbook/static/src/js/awards_dashboard.js::onEachFeature",
-  "ham_logbook/static/src/js/awards_dashboard.js::style",
-  "ham_logbook/static/src/js/awards_dashboard.js::tierStyle",
   "ham_logbook/static/src/js/qsl_collection.js::loadCard",
   "ham_logbook/static/src/js/qsl_collection.js::renderPlaceholder",
   "ham_logbook/static/src/js/qsl_collection.js::renderQslCard",
