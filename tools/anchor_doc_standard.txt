@@ -233,6 +233,7 @@ daemons/shack_console/docs/stories/console_rarity_spot_rows_webrtc_limit.md
 daemons/shack_console/docs/stories/console_relay_identity_wire_and_asn1.md
 daemons/shack_console/docs/stories/console_server_settings_updater_backup.md
 daemons/shack_console/docs/stories/console_shared_receiver_and_speech_dock.md
+daemons/shack_console/docs/stories/console_shared_receiver_client_anchors.md
 daemons/shack_console/docs/stories/console_small_helpers_and_repeater_list.md
 daemons/shack_console/docs/stories/console_speech_repair_guards_language.md
 daemons/shack_console/docs/stories/console_style_adapter_region_tones_sources.md
