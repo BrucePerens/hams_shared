@@ -135,7 +135,7 @@ def importance(path):
 def find_data_structures(path, root=None):
     """Data-structure definitions in one source file that carry no anchor: a list of `(line, kind, name)`.
 
-    A definition counts as anchored when an anchor tag is on the definition line or in the unbroken run of
+    An indented Rust `type` (an associated type in an impl or trait) is not a definition and is skipped. A definition counts as anchored when an anchor tag is on the definition line or in the unbroken run of
     attribute, decorator and comment lines directly above it (a blank line or code ends the run). Rust code from a
     `#[cfg(test)]` line to the end of the file, and files in test paths, are skipped. Python classes nested in
     functions are found as well. An unreadable file gives `[]`. With `root`, the test-path rule is applied to the path
@@ -157,6 +157,8 @@ def find_data_structures(path, root=None):
         match = pattern.match(line)
         if not match:
             continue
+        if suffix == ".rs" and match.group(1) == "type" and line[:1].isspace():
+            continue  # an associated type in an impl or trait (`type Output = ...`), not a data structure of its own
         block, above = [line], number - 1
         while above >= 0 and lines[above].strip().startswith(("#", "//", "@", "/*", "*")):
             block.append(lines[above])
