@@ -138,6 +138,7 @@ daemons/hams_local_relay/docs/stories/relay_function_anchors_claim_signature_pee
 daemons/hams_local_relay/docs/stories/relay_function_anchors_ice_link.md
 daemons/hams_local_relay/docs/stories/relay_function_anchors_offline.md
 daemons/hams_local_relay/docs/stories/relay_function_anchors_rig_audio.md
+daemons/hams_local_relay/docs/stories/relay_function_anchors_rig_controls_rigctld.md
 daemons/hams_local_relay/docs/stories/relay_function_anchors_sip_bridge.md
 daemons/hams_local_relay/docs/stories/relay_function_anchors_trust_page.md
 daemons/hams_local_relay/docs/stories/relay_function_anchors_tx_ownership.md
