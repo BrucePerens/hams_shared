@@ -1,13 +1,4 @@
 {
  "version": 1,
- "entries": [
-  {
-   "rule": "rpc-service-identity",
-   "path": "pager_duty/models/incident.py",
-   "symbol": "PagerIncident.report_incident",
-   "owner": "Bruce Perens (pager_duty)",
-   "reason": "Deliberately open to every daemon and to non-service callers (ham_simulated_band's child-safety page runs it as the reporter); it is rate-limited per source and website. Gating it by caller group breaks those paths and needs a product decision on which accounts may file incidents.",
-   "recorded": "2026-11-09"
-  }
- ]
+ "entries": []
 }
