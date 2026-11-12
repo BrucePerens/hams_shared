@@ -946,3 +946,8 @@ ham_member_certs/docs/stories/test_signer_support_reference.md
 ham_relay_bridge/README.md
 ham_demo_mode/README.md
 daemons/hams_simulated_bots/fine_tuning/README.md
+daemons/relay_ca/README.md
+ham_club_management/README.md
+ham_nets/README.md
+ham_shared_callsigns/README.md
+hamcall_verify/README.md
