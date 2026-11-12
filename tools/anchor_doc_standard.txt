@@ -627,6 +627,17 @@ ham_shack/static/tests
 ham_shack/tests
 ham_shared_callsigns/static/src/js/tours
 ham_shared_callsigns/tests
+hams_helpdesk/README.md
+hams_helpdesk/docs/stories/server_exception_tickets.md
+hams_helpdesk/docs/stories/helpdesk_ticket_creation.md
+hams_helpdesk/docs/stories/helpdesk_ticket_lifecycle.md
+hams_helpdesk/docs/stories/relay_exception_reports.md
+hams_helpdesk/docs/stories/ai_triage_reads_filtered_ticket_text.md
+hams_helpdesk/docs/stories/multi_website_segregation.md
+hams_helpdesk/docs/stories/malformed_requests_are_400.md
+hams_helpdesk/docs/stories/suspicion_record_name.md
+hams_helpdesk/docs/journeys/shift_handoff_protocol.md
+hams_helpdesk/docs/journeys/incident_resolution.md
 hams_helpdesk/daemon/README.md
 hams_helpdesk/docs/stories/ai_triage_internal_notes.md
 hams_helpdesk/docs/stories/ncmec_mandatory_reporting.md
