@@ -18,8 +18,8 @@ should only be used when the hams local relay is not directly reachable. I think
 a very big help here because it mostly does not use NAT."
 
 This is not a green-field cryptography project. `hams_local_relay` already has a real, working
-public-key verification pipeline: `noise_channel.rs`/`noise_session.rs` implement a Noise Protocol
-secure channel plus Ed25519 (`ed25519_dalek`) attestation verification, where a client presents a
+public-key verification pipeline: `noise_channel.rs` implements a Noise Protocol
+secure channel (there is no `noise_session.rs`) and `attestation_subcarrier.rs`, `revocation.rs` and `noise_channel.rs` use Ed25519 (`ed25519_dalek`) verification, where a client presents a
 signed attestation the relay verifies against a signing key sourced from Odoo (per
 `docs/proposals/TRANSMITTER_HIJACK_PREVENTION.md` section 1). Friend/club authorization via public
 keys is a natural extension of infrastructure that already exists and is already proven, not a new
@@ -66,7 +66,18 @@ that tries direct connectivity before falling back to hams.com's own relay, and 
 connectivity preference in that strategy. The concrete technical scoping (which existing key
 material to build on, the real current connection-establishment architecture and how much of it
 already attempts direct connectivity vs. defaults to a hams.com-proxied path, and the specific
-revocation-sync interval to adopt) is tracked in `night_shift_todo.md`, not restated here -- this
+revocation-sync interval to adopt) is tracked in the night-shift to-do files, not restated here -- this
 document states the standing architectural direction, independent of today's implementation status.
 This ADR is the concrete resolution of the tension ADR 0097 named without resolving; read them
 together.
+
+## Status check 2026-11-12
+
+Checked against the code: decision 1 is built. Browsers register keys (`ham_relay_bridge/controllers/relay_access.py`:
+`browser_key/register`, `account_keys`), hams.com signs the per-relay operator list and sends it down at login (`validate_node`
+returns `operator_list`), and the relay verifies a browser by key with no live Odoo call
+(`docs/proposals/RELAY_PROTOCOL_SIMPLE.md` 1.5 to 1.6, 7.3). The revocation bound is "the next uplink login or change", with no
+expiry on a stored list; the owner can also block a key at the relay. For decisions 2 and 3 the relay has ICE (Interactive
+Connectivity Establishment) code under `daemons/hams_local_relay/src/ice_control*`, `ice_link*`, `ice_signaling*`, and the
+protocol document's section 8.6 covers the mapped address and IPv6; hams.com's signaling ticket route is
+`/api/relay_bridge/signaling_ticket`.

@@ -7,7 +7,7 @@
 
 `hams_local_relay` terminates TLS itself, because a browser on an `https://` page will not open a
 plain `ws://` connection (mixed content). It already obtains a per-user certificate for
-`u<id>.local.hams.com` for itself (`local_cert_acme.rs`, DNS-01 through `ham_dns`; the key never
+`u<id>.local.hams.com` for itself (`local_cert_acme.rs`, since removed by ADR 0108; DNS-01 through `ham_dns`; the key never
 leaves the operator's machine). That certificate serves LAN (local area network) devices well. It does not serve a
 browser on the same machine as the relay well: such a browser has no per-user hostname to use, and
 Safari and other browsers that do not treat plain `localhost` as a secure context will not connect

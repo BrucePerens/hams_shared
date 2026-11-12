@@ -13,7 +13,7 @@ should be able to control your radios, your friends and clubs authorized radios,
 that are reachable via the Internet and for which you are authorized."
 
 This lands the same night as several real, concrete instances of the opposite pattern being found
-and fixed: `daemons/lotw_eqsl_sync`/`daemons/clublog_sync` centrally decrypting and using a user's
+and fixed: the former central `lotw_eqsl_sync` and `clublog_sync` daemons (both removed; the relay now does the ClubLog and eQSL work, `clublog.rs`, `eqsl.rs`) centrally decrypting and using a user's
 own third-party credentials from hams.com's own server (ADR 0095), and `ham_shack`'s WebRTC-direct-
 client-offload path handing an AllStar/EchoLink password to the browser from the server on every
 connection (`docs/proposals/ALLSTAR_ECHOLINK_RELAY_INTEGRATION.md`). Those are two concrete
@@ -38,13 +38,13 @@ hams.com's own server completely unreachable:**
    existing design (`hams_local_relay` talks to the radio directly; hams.com is not in that loop
    today). This ADR names it explicitly so it is never regressed, not because it needs new work.
 2. **Controlling a friend's or club's radio you are authorized to use** (the `ham_station_timeshare`
-   /`ham_operator_friendship` pattern) -- this is NOT yet true. `ham_relay_bridge/controllers/api.py`'s
-   `validate_browser` -- the real gate for attaching a browser to ANY relay with PTT control,
-   including someone else's equipment via timeshare -- is a live Odoo authorization check today,
-   requiring hams.com to be reachable at the moment of connection. Making this ADR true requires the
-   relay itself (the one being connected TO, i.e. the equipment owner's/club's own relay) to hold a
-   locally-cacheable, periodically-refreshed authorization grant it can check without a live
-   round-trip to hams.com -- see "Real tension to design around" below.
+   /`ham_operator_friendship` pattern) -- when this ADR was written this was NOT true: a live Odoo check
+   (a `validate_browser` route in `ham_relay_bridge/controllers/api.py`) was the gate for attaching a
+   browser to any relay with PTT control. That route no longer exists. Since the relay-protocol redesign
+   (`docs/proposals/RELAY_PROTOCOL_SIMPLE.md`, sections 1.6 and 7.3) the relay checks the connecting
+   browser's key against its own stored lists (`owners`, `local_operators`, and the hams.com-signed
+   operator list it keeps from the last login), so an operator granted through hams.com keeps working
+   while hams.com is down. The relay's own "Real tension to design around" answer is below.
 3. **Connecting to any repeater reachable via the Internet that you are authorized for** -- this
    includes AllStar/EchoLink (in progress, see the sibling proposal) and any other Internet-reachable
    repeater-linking system this platform supports or will support. The same authorization-caching
@@ -52,7 +52,7 @@ hams.com's own server completely unreachable:**
    checkable without hams.com being reachable at connection time.
 4. **Logging queues, it never blocks.** QSO (a contact between two stations) records, usage tracking, and any other data destined for
    Odoo must be written locally first and synced when hams.com becomes reachable again -- this
-   pattern already exists (`hams_local_relay`'s own SQLite-backed QSO tracker, three independent
+   pattern already exists (`hams_local_relay`'s own QSO tracker, `qso_tracker.rs`, with independent
    status flags including `pushed_to_hams_com`) and is the model for every other operational record
    this ADR touches. A logging/sync failure must never be surfaced as an operational failure to the
    ham trying to use their radio.
@@ -70,7 +70,7 @@ Caching an authorization grant locally so it survives hams.com being unreachable
 with revocation: if Bruce (or a club admin) revokes someone's timeshare access, or a ham's own
 authorization to reach a given repeater lapses, a purely-cached grant on the equipment owner's own
 relay could keep honoring it until the cache refreshes. This ADR does not resolve that tension by
-picking a specific bounded-staleness window here -- that is real design work (see night_shift_todo.md
+picking a specific bounded-staleness window here -- that is real design work (see the night-shift to-do files
 for the concrete investigation this ADR requires) -- but it does set the shape of the answer: the
 relay's own cache needs an explicit, bounded validity window and a clear, honestly-disclosed
 worst-case revocation-propagation delay, not an unbounded "valid until told otherwise" grant. A
@@ -89,5 +89,17 @@ for LoTW/eQSL/ClubLog/AllStar/EchoLink (ADR 0095) as a strict subset of this bro
 standing review question for every future feature ("does this need hams.com up at the moment of
 use, and if so, why is that unavoidable"). The concrete audit of what in the current codebase still
 violates this ADR, and the specific remediation plan for each gap found, is tracked in
-`night_shift_todo.md`, not restated here -- this document states the standing policy, independent of
+the night-shift to-do files, not restated here -- this document states the standing policy, independent of
 today's compliance status.
+
+## Status check 2026-11-12
+
+Checked against the code: the operator-list answer to the revocation tension is built. hams.com signs the
+whole operator list per relay with a dedicated Cloud HSM (hardware security module) key
+(`docs/proposals/OPERATOR_LIST_HSM_SIGNING.md`); the relay keeps the last list and the list carries a
+version, so it cannot be rolled back. There is deliberately no expiry on a stored list
+(`RELAY_PROTOCOL_SIMPLE.md` 1.6): a revocation reaches a relay when its uplink next connects, and an
+owner can also block a key locally at the relay. This is a different answer from the bounded-validity
+window the "Real tension" section above asked for; Bruce chose it, and the proposal states the worst
+case. The audit this ADR points to lives in the night-shift to-do files (the old `night_shift_todo.md`
+archive is no longer the place).
