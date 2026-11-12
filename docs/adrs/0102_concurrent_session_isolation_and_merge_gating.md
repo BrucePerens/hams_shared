@@ -201,3 +201,14 @@ this addendum wins.
   depends on.
 * `docs/proposals/GENERALIZED_AI_CONTEXT_MCP_SERVER.md` -- the ticket-triage agent's own design, including
   the earlier `gh pr merge --admin` bypass finding that prompted decision 3.
+
+## Status check 2026-11-12
+
+Checked against the repository. Still true: the shared `pre-push` hook (`hams_shared/tools/git-hooks/pre-push`, installed by
+`install_git_hooks.sh`), `sweep_orphan_worktrees.py`, the `ai-triage/` branch prefix in `daemons/hams_ticket_triage_mcp/main.py`,
+and the deletion of the burn-list workflow and `night_watch_review_and_merge.py` (neither file exists). Changed since this ADR:
+- Decision 1 names the harness's `EnterWorktree` tool and `.claude/worktrees/`. Sessions now create worktrees with
+  `devbox_tools/new_agent_worktree.py <hams_com|hams_open|hams_shared> <branch>`, in a job directory outside every repository;
+  `EnterWorktree` and any worktree nested inside a repository are not used, and `hams_shared/tools/worktree_hygiene.py` flags them.
+- The addendum's list of CI workflows is not complete today. `hams_com/.github/workflows/` also holds `shack-console-node-tests.yml`
+  (the console's Node tests, its `bundle_tests` cargo test and a layout-stability check), `test-pi500-runner-smoke.yml` and `pip-audit.yml`. The rule that CI never runs `test.py` still holds.

@@ -83,7 +83,9 @@ The date is when (c) was run. The tag must have all three fields. Re-verify when
 egress changes, and delete the exception when the honest UA works again. The test in decision 6 fails a
 browser-like UA without a well-formed tag.
 
-**Registry of current exceptions: none.** Every source was audited on 2026-10-03:
+**Registry of current exceptions: none for a third-party source.** One tag exists for a loopback bench tool, not a source we
+fetch from: `daemons/hams_local_relay/tools/drive_by_check.py` (`relay.localhost`, 2026-10-19), which sends a browser-like UA to our own
+relay on the same machine to prove the relay accepts it. Every source was audited on 2026-10-03:
 - FCC ULS: IP/ASN block, not a UA block (see Context). Not an exception.
 - Ofcom, ACMA, ANATEL, ISED, NZ RSM, QRZ and the rest: no recorded evidence of any block of an honest UA.
   They use the honest UA. If one is later blocked, follow decisions 2 and 3.
