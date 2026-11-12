@@ -259,7 +259,9 @@ def run(args, test_py, tag_modules, runner=None, out=print, slots=1):
     base = os.path.abspath(os.path.expanduser(args.log_directory))
     work = os.path.join(base, "bisect_" + stamp)
     report_path = args.bisect_report or os.path.join(base, "bisect_%s.json" % stamp)
-    bisector = Bisector(test_py, fixed, args.test_tags, work, runner=runner)
+    # The parent run skipped the pre-flight (the gate lints on its own); a trial must not run it again and halt on a lint-red tree.
+    extra = ("--preflight-done",) if getattr(args, "preflight_done", False) else ()
+    bisector = Bisector(test_py, fixed, args.test_tags, work, runner=runner, extra=extra)
     try:
         report = bisect(bisector, candidates, jobs, args.bisect_max_runs or DEFAULT_MAX_RUNS, out)
     except BisectError as error:
