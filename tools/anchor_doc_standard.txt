@@ -1469,3 +1469,4 @@ user_websites_seo/README.md
 daemons/radioctl/docs/stories/radioctl_function_anchors_58.md
 daemons/radioctl/docs/stories/radioctl_function_anchors_59.md
 edge_routing/README.md
+hams_shared/tools/README.md
