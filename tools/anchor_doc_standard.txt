@@ -409,9 +409,11 @@ daemons/vnwa_open/src/bin
 daemons/vnwa_open/tests
 database_management/static/src/tours
 database_management/tests
+devbox_tools/README.md
 devbox_tools/ice_e2e
 devbox_tools/lima
 devbox_tools/pacificon_demo_kit
+devbox_tools/relay_gate/README.md
 devbox_tools/tls13_spike
 devbox_tools/wk3_sidetone
 distributed_redis_cache/daemons
