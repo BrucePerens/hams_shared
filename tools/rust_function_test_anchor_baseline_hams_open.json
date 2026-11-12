@@ -1,10 +1,3 @@
 [
-  "daemons/ham_digital_modes/docs/references/codec2_fixedpoint_codegen_check/src/lib.rs::panic",
-  "daemons/ham_digital_modes/tools/codec2_riscv32_bench/src/main.rs::Uart::write_str",
-  "daemons/ham_digital_modes/tools/codec2_riscv32_bench/src/main.rs::exit",
-  "daemons/ham_digital_modes/tools/codec2_riscv32_bench/src/main.rs::main",
-  "daemons/ham_digital_modes/tools/codec2_riscv32_bench/src/main.rs::paint_stack",
-  "daemons/ham_digital_modes/tools/codec2_riscv32_bench/src/main.rs::stack_high_water",
-  "daemons/ham_digital_modes/tools/codec2_riscv32_bench/src/prof.rs::instret",
-  "daemons/ham_digital_modes/tools/codec2_riscv32_bench/src/prof.rs::mark"
+  "daemons/ham_digital_modes/docs/references/codec2_fixedpoint_codegen_check/src/lib.rs::panic"
 ]
