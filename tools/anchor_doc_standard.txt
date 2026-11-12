@@ -1401,3 +1401,9 @@ zero_sudo/docs/stories/csp_safe_confirmation.md
 zero_sudo/docs/stories/service_account_scoped_erasure.md
 zero_sudo/docs/stories/svg_allowlist_sanitizer.md
 zero_sudo/docs/stories/trusted_client_ip.md
+zero_sudo/docs/stories/glyph_normalizer.md
+zero_sudo/docs/stories/test_personas.md
+zero_sudo/docs/stories/secure_escalation.md
+zero_sudo/docs/stories/club_spam_detection.md
+zero_sudo/docs/stories/repeater_page_text.md
+zero_sudo/docs/stories/testing_facility.md
