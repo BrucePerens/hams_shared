@@ -3651,8 +3651,10 @@ loglevel=4
             # The served set is what our zones can hold: SOA NS A AAAA CNAME MX TXT LOC SRV NAPTR SSHFP CAA
             # (ham_dns's record types and the callbook exporter's SOA/NS/TXT/LOC), plus DS, SVCB and HTTPS
             # which resolvers and browsers ask for any name and which PowerDNS answers with a small NODATA:
-            # refusing those would make a resolver treat this server as broken. DNSKEY, RRSIG, NSEC and
-            # friends are absent because the zones are unsigned (gsqlite3-*-dnssec=no).
+            # refusing those would make a resolver treat this server as broken. DNSKEY is served too (2026-11-12): a
+            # validating resolver asks for it once hams.com is signed, and measured on 4.9.18 a signed zone behind
+            # this script answered DNSKEY with REFUSED, so nothing could validate. RRSIG, NSEC and friends come
+            # inside answers (with the DO bit), they are never asked for directly, so they stay refused.
             "path": "/opt/hams/etc/pdns-prequery.lua",
             "content": """\
 -- Answer REFUSED, in a reply no larger than the query, to any query type we do not serve.
@@ -3668,7 +3670,8 @@ local served = {{
   [29] = true,   -- LOC (the callbook position record)
   [33] = true,   -- SRV
   [35] = true,   -- NAPTR
-  [43] = true,   -- DS (asked at zone cuts; small NODATA, zones are unsigned)
+  [43] = true,   -- DS (asked at zone cuts; small NODATA while the zone is unsigned)
+  [48] = true,   -- DNSKEY (asked by validating resolvers once hams.com is signed; small NODATA until then)
   [44] = true,   -- SSHFP
   [64] = true,   -- SVCB
   [65] = true,   -- HTTPS
