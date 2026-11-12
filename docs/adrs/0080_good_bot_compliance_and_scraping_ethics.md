@@ -117,3 +117,10 @@ We have reviewed the top CDNs and WAFs for any specific "Good Bot" registration 
     *   **Good Bot Behavior:** Default adherence to the "Good Bot" Standard: Descriptive User-Agent, Forward-confirmed reverse DNS (FCrDNS), `robots.txt` compliance, and aggressive rate limiting to avoid triggering heuristics.
 
 *Note: For CDNs without a formal verified bot program, our default adherence to the "Good Bot" Standard (Descriptive User-Agent, FCrDNS, Robots.txt compliance) serves as the primary mechanism to avoid being blocked by default rule sets.*
+## Status check 2026-11-12
+
+Checked against the code. The "Good Bot" half is partly built: `daemons/web_bot_auth.py` signs outbound requests with HTTP Message Signatures (RFC 9421, Ed25519) in the
+shape of the IETF Web Bot Auth draft, and the sync daemons (for example `au_callsign_sync`, `br_anatel_sync`, `amsat_tle_sync`, `event_sync`) call it. The honest
+`User-Agent` and forward-confirmed reverse DNS are governed by [ADR 0104](0104_honest_user_agent_unless_a_firewall_forces_otherwise.md), which is accepted and
+narrower than "Exception Mode" here: no daemon sends a browser string, and the registry of exceptions is empty for third-party sources. The Exception Mode
+techniques (headless browsers, IP rotation) are not in use. The status stays Proposed because Exception Mode was never adopted as written.
