@@ -1320,3 +1320,7 @@ daemons/shack_console/docs/stories/simband_over_capture.md
 daemons/shack_console/docs/stories/simband_sim_cw_tx.md
 daemons/shack_console/docs/stories/storage_health.md
 daemons/shack_console/docs/stories/voice_ml_env.md
+daemons/shack_console/docs/stories/digital_constellation.md
+daemons/shack_console/docs/stories/js_ui_status_panels.md
+daemons/shack_console/docs/stories/js_ui_toggle_dock_owner_label.md
+daemons/shack_console/docs/stories/js_voice_speech_model.md
