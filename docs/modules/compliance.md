@@ -86,7 +86,7 @@ This module adheres to **ADR-0002 (Zero-Sudo)** and **ADR-0005 (Service Account 
 
 ## 4b. Documents Portal and GDPR Base Contract
 * **Compliance Documents:** Dependent modules provision `compliance.document` records (via `noupdate` XML, as `data/compliance_data.xml` does). The public `/compliance` page lists up to 100 active ones.
-* **GDPR (General Data Protection Regulation) hooks on `res.users`:** `_execute_gdpr_erasure()` deactivates the account (writing as the `zero_sudo.gdpr_service_internal` service account) [@ANCHOR: compliance_execute_gdpr_erasure]; `_get_gdpr_export_data()` returns an empty dict that overriding modules extend [@ANCHOR: compliance_get_gdpr_export_data]; `_get_gdpr_streamed_keys()` returns an empty dict to which modules add `{key: generator_function}` entries for datasets too large to hold in memory [@ANCHOR: compliance_get_gdpr_streamed_keys]. Every override must call `super()` and merge into, not replace, the returned dict.
+* **GDPR (General Data Protection Regulation) hooks on `res.users`:** `_execute_gdpr_erasure()` deactivates the account (writing as the `zero_sudo.gdpr_service_internal` service account) (`compliance_execute_gdpr_erasure`); `_get_gdpr_export_data()` returns an empty dict that overriding modules extend (`compliance_get_gdpr_export_data`); `_get_gdpr_streamed_keys()` returns an empty dict to which modules add `{key: generator_function}` entries for datasets too large to hold in memory (`compliance_get_gdpr_streamed_keys`). Each hook has its own entry under "GDPR hook reference" at the end of this file. Every override must call `super()` and merge into, not replace, the returned dict.
 
 ## 5. Website-Aware Scope
 The module is multi-website aware. When detecting custom pages at target URLs, it only unpublishes a boilerplate page whose `website_id` matches the custom page's (both global, or both the same website); a website-specific custom page does not unpublish the global boilerplate. The check that unpublishes and restores the boilerplate lives in a PostgreSQL function the module's `post_init_hook` creates and runs, so it runs only when the module is installed (Odoo runs the hook only then), not when a page is deleted or the module is updated: after a custom page is removed, the boilerplate returns on the next install, and between installs a site owner re-publishes it manually in Site > Pages. [@ANCHOR: compliance_website_aware_scope]
@@ -250,3 +250,32 @@ Comprehensive test coverage ensures ongoing compliance:
 **Cost.** Slow (headless browser). Run with `test.py --wait -u compliance`.
 
 **See also.** `compliance_post_init_cookie_bar`, `compliance_privacy_policy_template`, `story_cookie_consent`.
+
+## GDPR hook reference
+
+### `compliance_execute_gdpr_erasure` [@ANCHOR: compliance_execute_gdpr_erasure]
+`res.users._execute_gdpr_erasure(self)` in `compliance/models/res_users.py` is the base of the erasure chain. Modules that hold user-generated content (`user_websites`, blog and similar) override it, hard-delete their own records and call `super()`; this base implementation does the one thing every erasure must do, which is deactivate the account. It does not scrub identity fields (callsign, login or name anonymization): the module that owns that data does so.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `self` | `res.users` recordset | Exactly one user; `ensure_one()` raises `ValueError` otherwise. |
+
+**Returns:** `None`. **Errors:** `ValueError` for a multi-record or empty set; `AccessError` if the `zero_sudo.group_gdpr_service` write grant is missing (`compliance` ships its own `access_res_users_gdpr_svc_compliance` row so it works without `user_websites`).
+
+**Concurrency and security:** it looks up the `zero_sudo.gdpr_service_internal` account with `zero_sudo.security.utils._get_service_uid` and writes `{"active": False}` through `with_user(svc_uid)`, never `sudo()` and never as the caller (MASTER_02). It takes no explicit lock beyond the row lock of the ordinary ORM write, and is idempotent: a second call writes the same value. It touches only the database.
+
+**See also:** tests `COMM_test_execute_gdpr_erasure_deactivates_the_account` and `COMM_test_execute_gdpr_erasure_uses_the_service_account_not_the_caller`, and the sibling hooks `compliance_get_gdpr_export_data` and `compliance_get_gdpr_streamed_keys`.
+
+### `compliance_get_gdpr_export_data` [@ANCHOR: compliance_get_gdpr_export_data]
+`res.users._get_gdpr_export_data(self)` is the base contract for the data-export half of GDPR. It returns an empty `dict`; each module that stores personal data overrides it, calls `super()`, merges its own `{section_name: json_serializable_value}` entries into the result and returns the merged dict, never replacing it. The export endpoint collects the result for one user, so an override should read only that user's records.
+
+**Arguments:** only `self`, a single `res.users` record. **Returns:** a `dict`, always (never `None`); the base value is `{}`. **Errors:** none in the base. **Side effects:** none; it is read-only, takes no locks and is safe to call repeatedly. Values that are too large to hold in memory belong in `_get_gdpr_streamed_keys` instead.
+
+**See also:** test `COMM_test_get_gdpr_export_data_always_returns_a_dict` and `compliance_get_gdpr_streamed_keys`.
+
+### `compliance_get_gdpr_streamed_keys` [@ANCHOR: compliance_get_gdpr_streamed_keys]
+`res.users._get_gdpr_streamed_keys(self)` is the base contract for exporting large or unbounded per-user datasets (QSO logs, blog posts and similar) without building them in memory. It returns an empty `dict`; a module overrides it, calls `super()`, adds `{key: generator_function}` entries and returns the merged dict. The export endpoint calls each generator and streams its items into the response under `key`.
+
+**Arguments:** only `self`, a single `res.users` record. **Returns:** a `dict`, always, mapping each key to a generator function; the base value is `{}`. The exact call signature the endpoint uses for a generator is defined by that endpoint, not here (unknown from this module alone; to-do: document it where the endpoint lives). **Errors:** none in the base. **Side effects:** none, and no locks.
+
+**See also:** test `COMM_test_get_gdpr_streamed_keys_always_returns_a_dict` and `compliance_get_gdpr_export_data`.

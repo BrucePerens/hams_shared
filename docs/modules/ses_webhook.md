@@ -6,9 +6,10 @@
 
 ### 1. Amazon SNS/SES Webhook Ingestion
 Receives Amazon SNS (Simple Notification Service) webhooks for incoming SES (Simple Email Service) emails and event notifications (bounce/complaint) at the public endpoint `POST /mail/webhook/sns?token=<secret_token>`. It first checks the per-domain secret token (a missing or unknown token gets 403 and is not logged, since no domain exists to attach a log to), then the body (empty or non-JSON or non-object gets 400), then a real AWS SNS message signature (two independent layers, both required; a valid token with a bad signature is logged as `rejected_signature` and refused). Only then does it dispatch: it confirms an SNS subscription only for an `https://sns.<region>.amazonaws.com/` address, treats a Notification with a raw email as inbound mail passed to Odoo's `mail.thread.message_process` for the domain's company, and logs a Notification with no email content as `ignored`. A processing error is logged as `failed` yet answered 200, because SNS retries any non-2xx response. Each request leaves a `ses.webhook.log` row with status `success`, `failed`, `ignored`, `rejected_subscribe_url` or `rejected_signature`.
-* **SES Event Notification Handling (Bounce/Complaint Suppression; every complaint, and a bounce only when SES marks it `Permanent`, adds the address to Odoo's `mail.blacklist` so later outbound mail is suppressed -- a transient bounce such as a full mailbox is not suppressed):** [@ANCHOR: ses_webhook:COMM_handle_ses_event_notification]
-* **AWS SNS Signature Verification (fails closed on a missing field, a certificate host that is not a real `sns.<region>.amazonaws.com` host, an unusable certificate, an unsupported `SignatureVersion`, or a signed `Timestamp` more than 15 minutes from now):** [@ANCHOR: ses_webhook:COMM_verify_sns_signature]
-* **Signing Certificate Fetch/Cache:** [@ANCHOR: ses_webhook:COMM_fetch_sns_signing_cert]
+* **SES Event Notification Handling (Bounce/Complaint Suppression; every complaint, and a bounce only when SES marks it `Permanent`, adds the address to Odoo's `mail.blacklist` so later outbound mail is suppressed -- a transient bounce such as a full mailbox is not suppressed):** `ses_webhook:COMM_handle_ses_event_notification`
+* **AWS SNS Signature Verification (fails closed on a missing field, a certificate host that is not a real `sns.<region>.amazonaws.com` host, an unusable certificate, an unsupported `SignatureVersion`, or a signed `Timestamp` more than 15 minutes from now):** `ses_webhook:COMM_verify_sns_signature`
+* **Signing Certificate Fetch/Cache:** `ses_webhook:COMM_fetch_sns_signing_cert`
+* Each of the three has its own entry under "SNS anchor reference" at the end of this file.
 
 ### 2. Multi-Tenant Domain Configuration
 `ses.webhook.domain` maps an inbound domain to a tenant company and a secret webhook token, keeping a dedicated cross-tenant service account's `company_ids` in sync so `with_company()` never raises for a newly-configured tenant.
@@ -141,3 +142,45 @@ None beyond the shared `mail.thread`/`mail.blacklist` core models this module's 
 **Special concerns.** Runs as the already-elevated ses_webhook service account, no `sudo()`. The mail goes to an unauthenticated address, so the notice names only the domain. `consumed` is reserved for a future flow and is not yet set by any code.
 
 **See also.** `ses_webhook:COMM_pending_submission_compute_name`; test `test_ses_webhook.py`.
+
+## SNS anchor reference
+
+### `ses_webhook:COMM_handle_ses_event_notification` [@ANCHOR: ses_webhook:COMM_handle_ses_event_notification]
+`SesWebhookController._handle_ses_event_notification(self, notification_type, ses_message)` in `ses_webhook/controllers/webhook_api.py` suppresses future mail to addresses SES reports as bounced or complained about, by adding them to Odoo's own `mail.blacklist`, the list that `message_process()` and every outbound send already consult, so no new send-time check is needed. `receive_sns_webhook` calls it for a `Notification` whose inner `notificationType` is `Bounce` or `Complaint`, before the raw-email branch (such payloads carry no `content` field).
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `notification_type` | str | `Complaint` or `Bounce`; any other value suppresses nothing. |
+| `ses_message` | dict | The parsed SES message from the SNS `Message` field: `complaint.complainedRecipients[].emailAddress` and `complaint.feedbackId`, or `bounce.bounceType`, `bounce.bouncedRecipients[].emailAddress` and `.diagnosticCode`. |
+
+**Returns:** a `list` of the addresses suppressed (possibly empty); the caller logs its length. **Rules:** every complaint is suppressed at once, because even one is a real signal and repeat complaints trigger SES reputation action. A bounce is suppressed only when `bounceType == "Permanent"`; a `Transient` bounce (full mailbox, temporary block) is not, so a reachable recipient is not silenced. Entries without an `emailAddress` are skipped, and the blacklist note records the feedback id or diagnostic code.
+
+**Security and side effects:** runs as the `ses_webhook.user_ses_webhook_service_internal` service account (`with_user`, never `sudo()`), writing `mail.blacklist` through `_add`. It is reached only after the token and signature checks have passed (see `ses_webhook:COMM_verify_sns_signature`). No explicit locks; adding an address already listed is harmless, so a retried delivery is safe.
+
+**See also:** tests `test_24_webhook_bounce_permanent_blacklists_transient_does_not` and `test_34_forged_complaint_without_signature_does_not_blacklist`.
+
+### `ses_webhook:COMM_verify_sns_signature` [@ANCHOR: ses_webhook:COMM_verify_sns_signature]
+`_verify_sns_signature(payload)` is a module-level function in `ses_webhook/controllers/webhook_api.py`. It checks an AWS SNS message's `Signature` against the certificate named by its `SigningCertURL`, following AWS's HTTP(S) signing scheme: `SignatureVersion` 1 is SHA1withRSA and 2 is SHA256withRSA, both with PKCS#1 v1.5 padding. It is the second of two required layers, after the per-domain secret token.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `payload` | dict | The parsed SNS JSON body; uses `Signature` (base64), `SigningCertURL`, `SignatureVersion` (default `"1"`), `Timestamp` and the fields that `_build_string_to_sign` signs for its `Type`. |
+
+**Returns:** `True` only when everything checks out, otherwise `False`. It never raises: it fails closed on a missing `Signature` or `SigningCertURL`, a URL that does not match `_SNS_SIGNING_CERT_URL_RE` (`https://sns.<region>.amazonaws.com/SimpleNotificationService-<hex>.pem`), a `Type` it cannot build a string to sign for, an unparseable `Timestamp`, a `Timestamp` more than `_MAX_SNS_MESSAGE_AGE` (15 minutes) from now in either direction (replay defense), an unsupported `SignatureVersion`, a certificate that is unreachable, malformed, expired or not yet valid, and a bad signature. Any other exception is logged as a warning and treated as "not verified".
+
+**Order and cost:** cheap checks run first, so a stale replay costs no network fetch; the certificate comes from `_fetch_sns_signing_cert`. `Timestamp` is itself signed, so an attacker cannot move it forward without breaking the signature. Called synchronously inside the request, with no locks. Retry-safe.
+
+**See also:** tests `test_25b_signature_with_subject_field_accepted` and `test_26_signature_version_2_sha256_accepted`, `ses_webhook:build_string_to_sign`, and `ses_webhook:COMM_fetch_sns_signing_cert`.
+
+### `ses_webhook:COMM_fetch_sns_signing_cert` [@ANCHOR: ses_webhook:COMM_fetch_sns_signing_cert]
+`_fetch_sns_signing_cert(signing_cert_url)` in `ses_webhook/controllers/webhook_api.py` downloads an AWS SNS signing certificate and returns its raw PEM bytes. It is wrapped in `functools.lru_cache(maxsize=16)`, so each URL is fetched once per process. It is a separate small function so tests can patch it alone.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `signing_cert_url` | str | The `SigningCertURL`; the caller must already have matched it against `_SNS_SIGNING_CERT_URL_RE`. |
+
+**Returns:** `bytes`, the PEM of a certificate that parses. **Errors:** the SSRF-safe opener raises for a private, loopback or link-local address or a failed redirect hop; a network failure raises; `x509.load_pem_x509_certificate` raises `ValueError` on a body that is not a certificate. `lru_cache` never caches a raised exception, so a transient failure, or a 200 response carrying an error page, is retried on the next message rather than sticking for the life of the process.
+
+**Side effects and security:** one HTTPS GET with a 10 second timeout through `urlopen_ssrf_safe(..., "ses_webhook_sns_signing_cert", https_only=True)`; the regex fixes the host name and the opener checks the address. Blocking network I/O inside the request. The cache is per worker process and holds no secrets.
+
+**See also:** tests `test_33b_fetch_sns_signing_cert_does_not_cache_a_malformed_response` and `test_33c_fetch_sns_signing_cert_refuses_a_link_local_address`, and `ses_webhook:COMM_verify_sns_signature`.
