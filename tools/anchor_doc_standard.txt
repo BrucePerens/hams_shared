@@ -248,6 +248,7 @@ daemons/shack_console/docs/stories/layout_presets.md
 daemons/shack_console/docs/stories/link_state_rotator_antenna.md
 daemons/shack_console/docs/stories/no_scope_design.md
 daemons/shack_console/docs/stories/s1_links_chat.md
+daemons/shack_console/docs/stories/s1_psk_reporter_spots.md
 daemons/shack_console/docs/stories/s1_rig_pins_mode_sync.md
 daemons/shack_console/docs/stories/scope_cw_and_decode_overlay.md
 daemons/shack_console/docs/stories/settings_page_alerts.md
