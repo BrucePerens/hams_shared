@@ -462,7 +462,7 @@ class RewriteTests(unittest.TestCase):
                 '<a href="https://other.example/web/image/55">keep</a>')
         out = mig.rewrite_html(html, ["old.example"], {55: 301, 56: 302}, {1: 7}, {12: 90}, report)
         self.assertIn('href="/about"', out)
-        self.assertIn('href=""', out)
+        self.assertIn('href="/">home', out)  # the bare address is the site root, not the current page ("")
         self.assertIn("/web/image/301?w=1", out)
         self.assertIn("/web/image/ir.attachment/302/datas", out)
         self.assertIn("/blog/news-7/hello-90#c", out)
@@ -483,6 +483,11 @@ class RewriteTests(unittest.TestCase):
         report = {}
         mig.rewrite_html('<a href="https://example.org/blog/releasing-bsl-11">', [], {}, {1: 7}, {}, report)
         self.assertEqual(report["blog_refs_unresolved"], 1)
+
+    def test_a_bare_domain_link_becomes_the_site_root_not_an_empty_href(self):
+        out = mig.rewrite_html('<a href="https://old.example">a</a><a href="https://www.old.example?x=1">b</a>'
+                               '<a href="https://old.example#c">c</a><a href="https://old.example/p">d</a>', ["old.example"])
+        self.assertEqual(out, '<a href="/">a</a><a href="/?x=1">b</a><a href="/#c">c</a><a href="/p">d</a>')
 
     def test_non_strings_pass_through(self):
         self.assertIsNone(mig.rewrite_html(None, ["x.example"]))
