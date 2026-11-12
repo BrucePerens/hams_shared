@@ -238,6 +238,7 @@ daemons/shack_console/docs/stories/console_identity_flow.md
 daemons/shack_console/docs/stories/console_member_cert_device_and_enrol.md
 daemons/shack_console/docs/stories/console_operator_notices.md
 daemons/shack_console/docs/stories/console_owner_pairing_copy_setup_manuals.md
+daemons/shack_console/docs/stories/console_pure_functions_misc.md
 daemons/shack_console/docs/stories/console_rarity_spot_rows_webrtc_limit.md
 daemons/shack_console/docs/stories/console_relay_identity_wire_and_asn1.md
 daemons/shack_console/docs/stories/console_rf_scope_m17_simband_anchors.md
