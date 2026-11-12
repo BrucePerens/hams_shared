@@ -397,7 +397,9 @@ SNAPSHOT_TRIES = 3
 
 
 class SnapshotBehind(SnapshotError):
-    """The snapshot is complete but origin/main moved past it while it was built."""
+    """The snapshot is complete but origin/main moved past it while it was built; `manifest` is that snapshot."""
+
+    manifest = None
 
 
 NOTE_PATHS = ("night_shift_todo/", "night_shift_history/", "night_shift_questions/")
@@ -535,7 +537,9 @@ def _create_snapshot_once(workspace=DEFAULT_WORKSPACE, parent=None, shards=DEFAU
                                cargo_target_dir=cargo_target_dir)
     message = "the new snapshot does not verify:\n  " + "\n  ".join(problems)
     if problems and all("is behind origin/main" in problem for problem in problems):
-        raise SnapshotBehind(message)
+        behind = SnapshotBehind(message)
+        behind.manifest = manifest
+        raise behind
     if problems:
         raise SnapshotError(message)
     return manifest
@@ -543,7 +547,7 @@ def _create_snapshot_once(workspace=DEFAULT_WORKSPACE, parent=None, shards=DEFAU
 
 # [@ANCHOR: gate_snapshot:create_snapshot]
 def create_snapshot(workspace=DEFAULT_WORKSPACE, parent=None, shards=DEFAULT_SHARDS, shards_file=None, fetch=True,
-                    build=True, cargo_target_dir=None, run=None, out=print, hostname=None, balance=None):
+                    build=True, cargo_target_dir=None, run=None, out=print, hostname=None, balance=None, allow_behind=False):
     """Builds the gate tree for the current `origin/main` commits and returns its manifest (also written to
     `<gate>/gate_snapshot.json`, with `gate_shards.json` beside it). Steps: refuse on a production host; fetch and read the
     three commits; make the worktrees; build every artifact (unless `build` is False); choose the shards (from `shards_file`,
@@ -552,11 +556,13 @@ def create_snapshot(workspace=DEFAULT_WORKSPACE, parent=None, shards=DEFAULT_SHA
     and `created`. `run` and `hostname` are for tests.
     When origin/main moved while the snapshot was being built (merges during the build), the snapshot is made again at the new
     commits: re-fetch, new trees, up to `SNAPSHOT_TRIES` attempts; if main still moves, the last attempt's `SnapshotError`
-    ("... is behind origin/main ...") is raised. Without `fetch` nothing can be seen to move, so there is one attempt."""
+    ("... is behind origin/main ...") is raised. With `allow_behind` the first complete snapshot is returned as it is, no retry. Without `fetch` nothing can be seen to move, so there is one attempt."""
     for attempt in range(1, SNAPSHOT_TRIES + 1):
         try:
             return _create_snapshot_once(workspace, parent, shards, shards_file, fetch, build, cargo_target_dir, run, out, hostname, balance)
         except SnapshotBehind as error:
+            if allow_behind:  # a long, advisory run (the canary) tests the commits it built; main always moves meanwhile
+                return error.manifest
             if attempt == SNAPSHOT_TRIES:
                 raise SnapshotError(str(error)) from error
             out("gate_snapshot: origin/main moved during the snapshot (attempt %d of %d), making it again" % (attempt, SNAPSHOT_TRIES))
