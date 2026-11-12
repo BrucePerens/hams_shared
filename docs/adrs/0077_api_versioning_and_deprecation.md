@@ -13,7 +13,7 @@ We mandate a strict versioning and deprecation lifecycle for all HTTP/JSONRPC co
 ### 1. Semantic Versioning in URIs
 All public or integration APIs MUST utilize a major version prefix in the URI: `/api/v{major}/`.
 * **V1 (Stable):** Core logbook, callbook, and hardware relay functions.
-* **V2 (Experimental/Phase 2):** AI Simulator, RAG (retrieval-augmented generation) memory extraction, and STT/TTS (speech-to-text and text-to-speech) streams.
+* **V2 (Experimental/Phase 2):** AI Simulator, RAG (retrieval-augmented generation) memory extraction, and STT/TTS (speech-to-text and text-to-speech) streams. No `/api/v2/` routes exist yet; the simulated band endpoints currently live under `/api/v1/ham_simulated_band`.
 
 ### 2. The "Sunset" Header Protocol
 When an endpoint is marked for deprecation:

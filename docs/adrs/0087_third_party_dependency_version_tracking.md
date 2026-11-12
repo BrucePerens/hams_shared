@@ -45,7 +45,7 @@ That category splits into three distinct shapes, each needing a different answer
    the code that shells out to it. This already happened for real, independent of this ADR:
    `find_pat_binary()` only ever searched for a binary literally named `pat`, never Debian's
    actual `pat-winlink` name, so it could never have found a real Debian install of `pat`, ever
-   (see `WINLINK_RELAY_DAEMON_INTEGRATION.md`).
+   (see `hams_com/docs/proposals/done/WINLINK_RELAY_DAEMON_INTEGRATION.md`).
 
 ## Decision
 
@@ -57,7 +57,7 @@ That category splits into three distinct shapes, each needing a different answer
    on it. On mismatch at startup, log a `WARNING` naming exactly what drifted and pointing at
    this ADR; per this codebase's no-hard-bricking philosophy, a version check must never be the
    reason a working install stops working. Tracking table and implementation plan:
-   `hams_com/docs/proposals/ODOO_VENDORED_DEPENDENCY_VERSION_CHECK.md`.
+   `hams_com/docs/proposals/done/ODOO_VENDORED_DEPENDENCY_VERSION_CHECK.md`.
 
 2. **When a category-1 warning fires: test the specific feature against the new version before
    doing anything else.** Do not pin the framework backward -- we don't control that lever, and

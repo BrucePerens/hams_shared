@@ -6,10 +6,11 @@ Accepted
 **Superseded in part 2026-10-23:** hams.com no longer uses ARRL Logbook of the World (LoTW) or TQSL (Bruce's decision); LoTW mentions below are kept as history.
 
 ## Context
-`ham_logbook/models/res_users.py` stores six Fernet-encrypted credential fields on `res.users` --
+`ham_logbook/models/res_users.py` originally stored six Fernet-encrypted credential fields on `res.users` --
 `lotw_password`, `eqsl_password`, `allstar_password`, `echolink_password`, `clublog_password`,
 `clublog_api_key` -- third-party passwords/API keys a ham entrusts to this platform so it can sync
-their logbook with LoTW, eQSL, AllStar, EchoLink, and ClubLog. A real bug-hunt pass found these
+their logbook with LoTW, eQSL, AllStar, EchoLink, and ClubLog. Today only the AllStar password
+(`allstar_password_crypt`, read back only by its owner) and `adif_api_secret` remain there. A real bug-hunt pass found these
 fields' compute-method guard trusted **any** service account platform-wide to decrypt and read every
 user's credentials, rather than one specific, narrowly-scoped account -- and while investigating
 whether narrowing the guard to "the one right account" was a sufficient fix, the deeper question of
@@ -65,9 +66,9 @@ account name, never confirmed against the real system, is not a fix.
 Every current and future third-party credential field on `res.users` (or any other model) is
 measured against this ADR: is central decryption actually necessary for this credential's real
 purpose, is the guard scoped to one confirmed real consumer, and does the plaintext ever travel
-further than that one legitimate use requires. `ham_logbook`'s six fields are the first audit
-subject under this ADR -- their own end-to-end trace and remediation is tracked in
-`night_shift_todo.md`, not restated here, since this ADR states the standing policy independent of
+further than that one legitimate use requires. `ham_logbook`'s original six fields were the first audit
+subject under this ADR -- their own end-to-end trace and remediation was tracked in
+`night_shift_todo/`, not restated here, since this ADR states the standing policy independent of
 any one field's current compliance status. A future credential-handling feature that centralizes
 decryption/use without checking against principle 1 first, or that widens a guard back to a blanket
 service-account check for convenience, is a regression against this ADR, not a acceptable shortcut.

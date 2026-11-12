@@ -118,7 +118,7 @@ server.
 - The earlier belief that "FCC needs a browser" is retired; the FCC path stays on its egress fix
   (`FCC_ULS_PROXY_URL`, pi500-1).
 - Existing scripts outside `daemons/` that still send browser strings (one-off scripts under
-  `docs/Clubs/scripts/` and `ingest/` in hams_com, `binary_downloader` in hams_open) are outside the
+  `docs/Clubs/scripts/` in hams_com, `binary_downloader` in hams_open) are outside the
   automated test's scope and tracked as follow-up; they should be converted when next touched.
 
 ## Verification
@@ -126,4 +126,4 @@ server.
 - `python3 -m pytest daemons/test_no_browser_user_agent.py` in hams_com, covering the tag grammar with
   positive and negative fixtures written to a temporary directory.
 - `grep -rnE "Mozilla/|AppleWebKit|Chrome/" daemons/` returns only lines that carry an exception tag
-  (today: none).
+  (today: no daemon source sends such a string; the remaining matches are test regexes and fixtures).

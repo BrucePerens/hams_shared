@@ -34,7 +34,7 @@ To prevent leaked daemon credentials from being used interactively:
 ### 3. Centralized Security Utility
 All allowed privilege escalations (such as resolving XML IDs or fetching configuration parameters) MUST route through `zero_sudo.security.utils`:
 * `_get_service_uid(xml_id)`: Safely resolves Service Account IDs.
-* `_get_system_param(key)`: Fetches configuration parameters safely. Implements a **Mechanical Secret Block** that violently rejects any key containing restricted cryptographic substrings (`secret`, `key`, `password`, `token`, `auth`, `crypt`, `cert`) to mathematically prevent Server-Side Template Injection (SSTI) data exfiltration without impeding Open Source decentralization.
+* `_get_system_param(key)`: Fetches configuration parameters safely. Implements a **Mechanical Secret Block**: only keys on an explicit read whitelist are returned, and any other key is rejected (with a restricted-pattern error when it contains one of the cryptographic substrings `secret`, `key`, `password`, `token`, `auth`, `crypt`, `cert`) to mathematically prevent Server-Side Template Injection (SSTI) data exfiltration without impeding Open Source decentralization.
 
 ### 4. Persona Capability Limit & View Abstraction
 We do not increase privilege beyond the capability of the persona requesting the data, unless there is absolutely no other way. Views (`_auto = False`) must be used preferentially rather than increasing privilege, when a view will work.

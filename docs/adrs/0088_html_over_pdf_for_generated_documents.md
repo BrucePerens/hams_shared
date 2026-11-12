@@ -28,8 +28,8 @@ surfaced that the tool itself, not just this codebase's use of it, has aged out:
 - **Its rendering engine is an abandoned WebKit fork.** It predates the CSS3 features (flexbox,
   grid, modern font handling) that real-world form layouts increasingly assume, and gets no
   security patches.
-- **The thing it's duplicating is already built, and better, elsewhere.** Every ICS (Incident Command System, the emergency-response form set) form template
-  in `ics_forms/data/*.html` already carries real `@media print` CSS -- hiding editor chrome,
+- **The thing it's duplicating is already built, and better, elsewhere.** Some ICS (Incident Command System, the emergency-response form set) form templates
+  in `ics_forms/data/*.html` (10 of 88 today, e.g. `ICS_309.html`) already carry real `@media print` CSS -- hiding editor chrome,
   cleaning up margins and shadows for the printed page. That's exactly the styling a browser's own
   "Print -> Save as PDF" already uses, for free, through a modern, actively-maintained rendering
   engine (Blink/WebKit-current, not a frozen fork) that every recipient already has. Verified
@@ -47,8 +47,8 @@ surfaced that the tool itself, not just this codebase's use of it, has aged out:
 **One real implementation obstacle, found investigating this same night, that any migration under
 this ADR must account for rather than hit blind:** Odoo's own `ir.attachment._check_contents()`
 silently downgrades an HTML-mimetype attachment to `text/plain` unless the creating user has write
-access to `ir.ui.view` -- `base.group_system` (full Administrator) only, by this codebase's own
-`ir.model.access.csv`. This is a legitimate Odoo security measure (defense against stored XSS via
+access to `ir.ui.view` -- `base.group_system` (full Administrator) in stock Odoo, plus the
+`user_websites` administrator group in this codebase's own `ham_base/security/ir.model.access.csv`. This is a legitimate Odoo security measure (defense against stored XSS via
 uploaded/generated HTML attachments), not a bug to route around casually -- but it means a naive
 `self.env["ir.attachment"].create({"mimetype": "text/html", ...})` called by an ordinary user (the
 realistic case for anything a field responder or portal user generates) will silently serve as raw
@@ -78,7 +78,7 @@ solve this deliberately -- see Decision item 5.
      serving already-rendered HTML (spawning a browser process per render), so it should follow
      `MASTER_08`'s existing daemon-offload posture rather than running inline in an Odoo worker --
      the same output-pacing/concurrency-limiting shape already designed for
-     `docs/proposals/GDPR_CSV_EXPORT.md` is a directly reusable reference for whoever builds this.
+     `docs/proposals/done/GDPR_CSV_EXPORT.md` is a directly reusable reference for whoever builds this.
 5. **Migrating a call site must solve the `ir.attachment` HTML-mimetype-downgrade problem
    deliberately, not by accident.** Serving generated HTML to an actual recipient (not just storing
    it) needs a real design -- e.g. a dedicated, access-controlled controller that explicitly sets
@@ -86,7 +86,7 @@ solve this deliberately -- see Decision item 5.
    generic attachment guard currently absorbs for free. Do not "fix" this by widening the calling
    user's `ir.ui.view` access, which would grant far more than intended.
 6. **New document-shaped features write real `@media print` CSS from the start**, following the
-   ICS form templates' existing precedent, so client-side print-to-PDF is always available at no
+   existing precedent of the ICS form templates that already carry it, so client-side print-to-PDF is always available at no
    engineering cost.
 
 ## Consequences

@@ -56,7 +56,7 @@ different defenses:**
    access to a capability dependency doesn't erase historical data (whatever it already verified
    stays verified, since the *result* -- `is_identity_verified`, `verification_date`,
    `onboarding_method` -- is already a real, persisted field on `res.users`, confirmed via
-   `ham_onboarding/models/res_users_verification.py`), but it does remove that path for *future*
+   `ham_onboarding/models/res_users.py` and `res_users_verification.py`), but it does remove that path for *future*
    verifications going forward.
 
 ## Decision
@@ -78,8 +78,8 @@ proof) must never rest on exactly one third party's continued willingness to coo
 `ham_onboarding` already has a real, working instance of this pattern, discovered rather than
 newly designed by this ADR: **LoTW mTLS**, **QRZ bio-edit challenge**, **official-email OTP**
 (against the FCC/ISED's own on-file public email, a *government*-sourced fact, not a commercial
-third party), **a Morse-code callsign challenge requiring no third party at all**, and **AI/admin
-review of an uploaded license document** are five structurally independent verification paths,
+third party), **a Morse-code callsign challenge requiring no third party at all** (since removed; `onboarding_method` keeps a retired `morse` label for members it already verified), and **AI/admin
+review of an uploaded license document** were five structurally independent verification paths,
 none of which depends on any of the others staying available. A future ARRL or QRZ cutoff removes
 one path, not the platform's entire ability to verify anyone -- this diversification must be
 actively preserved as new verification work is added, not allowed to erode into an unstated
@@ -99,7 +99,7 @@ commercial API integration should be checked against this decision and classifie
 candidates, not yet individually audited: `web_map`'s APRS.fi/OpenWeatherMap/AISHub/OpenSky
 integrations (believed to be proxied through a local daemon per `ham_map_settings.py`'s own
 comment, but not confirmed to persist any of that data locally), and any future integration this
-ADR doesn't yet know about. Track the audit's own findings in `night_shift_todo.md` as they're
+ADR doesn't yet know about. Track the audit's own findings in `night_shift_todo/` as they're
 confirmed, one integration at a time, rather than guessing at their current state here.
 
 ## Consequences
