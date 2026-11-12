@@ -225,6 +225,7 @@ daemons/shack_console/docs/stories/console_gps_notice_indicator.md
 daemons/shack_console/docs/stories/console_gps_sky_page.md
 daemons/shack_console/docs/stories/console_hams_redirect_role_notices.md
 daemons/shack_console/docs/stories/console_identity_flow.md
+daemons/shack_console/docs/stories/console_member_cert_device_and_enrol.md
 daemons/shack_console/docs/stories/console_operator_notices.md
 daemons/shack_console/docs/stories/console_owner_pairing_copy_setup_manuals.md
 daemons/shack_console/docs/stories/console_rarity_spot_rows_webrtc_limit.md
