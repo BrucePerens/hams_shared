@@ -368,39 +368,39 @@ This section ensures all module functions and their developer usage are thorough
   verified by `test_dropzone_settings`.
 
 ### SQL Views and Functions (`_auto=False`, proven live by any test that successfully queries the resulting view -- a broken `init()` would fail module installation before any such test could run)
-* **Public Directory View:** `[@ANCHOR: user_websites:COMM_public_directory_view_init]`.
+* **Public Directory View:** `user_websites:COMM_public_directory_view_init`.
 
-* **Content Routing View:** `[@ANCHOR: user_websites:COMM_content_routing_view_init]`.
+* **Content Routing View:** `user_websites:COMM_content_routing_view_init`.
 
-* **Weekly Digest View:** `[@ANCHOR: user_websites:COMM_weekly_digest_view_init]`.
+* **Weekly Digest View:** `user_websites:COMM_weekly_digest_view_init`.
 
-* **DB Functions (`increment_strike_count`):** `[@ANCHOR: user_websites:COMM_db_functions_init]`.
+* **DB Functions (`increment_strike_count`):** `user_websites:COMM_db_functions_init`.
 
 ### res.users Extensions
-* **Background Content Unpublish:** `[@ANCHOR: user_websites:COMM_async_unpublish_content]` -- module-level helper run on a background thread when a user is suspended or archived.
+* **Background Content Unpublish:** `user_websites:COMM_async_unpublish_content` -- module-level helper run on a background thread when a user is suspended or archived.
 
-* **Registry Hook:** `[@ANCHOR: user_websites:COMM_register_hook]` -- provisions the `sys_provisioner` service account at registry build time.
+* **Registry Hook:** `user_websites:COMM_register_hook` -- provisions the `sys_provisioner` service account at registry build time.
 
-* **Reserved Slug Checks:** `[@ANCHOR: user_websites:COMM_res_users_check_reserved_slugs]` (users), `[@ANCHOR: user_websites:COMM_group_check_reserved_slugs]` (groups).
+* **Reserved Slug Checks:** `user_websites:COMM_res_users_check_reserved_slugs` (users), `user_websites:COMM_group_check_reserved_slugs` (groups).
 
-* **Admin Check:** `[@ANCHOR: user_websites:COMM_is_admin]`.
+* **Admin Check:** `user_websites:COMM_is_admin`.
 
 * **Slug-to-User-ID Resolver:** `[@ANCHOR: user_websites:COMM_get_user_id_by_slug]` -- direct raw-SQL resolver against the content routing view. Nothing else in this repository calls this method (the cache-invalidation code only mentions it in comments); the generic `edge.routing.mixin.get_record_by_slug()` dispatch this module also relies on does its own separate ORM search instead. It is tested directly.
 
-* **User Create/Write:** `[@ANCHOR: user_websites:COMM_res_users_create]`, `[@ANCHOR: user_websites:COMM_res_users_write]` -- the latter includes the 301-redirect-on-slug-change automation.
+* **User Create/Write:** `user_websites:COMM_res_users_create`, `user_websites:COMM_res_users_write` -- the latter includes the 301-redirect-on-slug-change automation.
 
-* **Group Write:** `[@ANCHOR: user_websites:COMM_group_write]` -- the same slug-redirect automation for `user.websites.group`.
+* **Group Write:** `user_websites:COMM_group_write` -- the same slug-redirect automation for `user.websites.group`.
 
-* **Quota Helpers:** `[@ANCHOR: user_websites:COMM_get_page_limit]`, `[@ANCHOR: user_websites:COMM_get_blog_limit]`, `[@ANCHOR: user_websites:COMM_get_blog_post_limit]`.
+* **Quota Helpers:** `user_websites:COMM_get_page_limit`, `user_websites:COMM_get_blog_limit`, `user_websites:COMM_get_blog_post_limit`.
 
 ### website.page Extensions
-* **Cloudflare Cache Invalidation:** `[@ANCHOR: user_websites:COMM_page_invalidate_cloudflare_cache]`.
+* **Cloudflare Cache Invalidation:** `user_websites:COMM_page_invalidate_cloudflare_cache`.
 
-* **Automated Malicious-Arch Violation Report:** `[@ANCHOR: user_websites:COMM_trigger_malicious_arch_violation]` -- files a `content.violation.report` against the page's owner whenever the arch sanitizer actually strips something.
+* **Automated Malicious-Arch Violation Report:** `user_websites:COMM_trigger_malicious_arch_violation` -- files a `content.violation.report` against the page's owner whenever the arch sanitizer actually strips something.
 
-* **URL-to-Page-ID Resolver:** `[@ANCHOR: user_websites:COMM_get_page_id_by_url]` -- direct URL lookup respecting suspension state. Likewise, nothing else in this repository calls it. It is tested directly.
+* **URL-to-Page-ID Resolver:** `user_websites:COMM_get_page_id_by_url` -- direct URL lookup respecting suspension state. Likewise, nothing else in this repository calls it. It is tested directly.
 
-* **Page Unlink:** `[@ANCHOR: user_websites:COMM_website_page_unlink]`.
+* **Page Unlink:** `user_websites:COMM_website_page_unlink`.
 </stage1_sweep>
 
 ## 8. Anchor reference
@@ -700,3 +700,79 @@ Test `test_01_res_config_settings` in `tests/test_xpath_rendering.py`. It reques
 ### `user_websites:COMM_get_gdpr_streamed_keys` [@ANCHOR: user_websites:COMM_get_gdpr_streamed_keys]
 
 `res.users._get_gdpr_streamed_keys()` (single record) returns a dict of key name to a zero-argument generator function: `pages` (name, url, arch), `blog_posts`, `submitted_reports` and `appeals`, added to what the base class supplies. In production each generator pages through records 1000 at a time under a fresh cursor and the service account, so a large export streams instead of being held in memory. In test mode they iterate lists loaded up to 10000 rows. Test: `test_01e_consume_and_export_materializes_data_and_streamed_keys`.
+
+### `user_websites:COMM_public_directory_view_init` [@ANCHOR: user_websites:COMM_public_directory_view_init]
+
+`UserWebsitesPublicDirectoryView.init()` (`models/sql_views.py`), model `user_websites.public_directory_view`, `_auto = False`. It drops and recreates the plain SQL view `user_websites_public_directory_view` at every module load. Columns: `id` and `user_id` (the user), `name` (partner name), `website_slug`, `write_date`, and `view_count`, the sum of the user's page and post view counts. A row exists only for active users with a non-empty slug who opted in (`privacy_show_in_directory`), and who are not service accounts, not suspended and not `website_ineligible`. `/community` reads it as the service account. Test: `tests/test_lifecycle_and_groups.py`.
+
+### `user_websites:COMM_content_routing_view_init` [@ANCHOR: user_websites:COMM_content_routing_view_init]
+
+`UserWebsitesContentRoutingView.init()` recreates the plain view `user_websites_content_routing_view`, which answers "which record owns this slug". Columns: `id`, `res_model` (`res.users` or `user.websites.group`), `res_id` and `website_slug`. Users appear when active, with a slug, not a service account, not suspended and not ineligible; groups when they have a slug and are not suspended. Group ids are offset by 1,000,000 so the union has unique ids. `_get_user_id_by_slug` queries it by raw SQL. Tests: `test_slug_resolution_cache_and_filters.py`, `test_audit_edge_cases.py`.
+
+### `user_websites:COMM_weekly_digest_view_init` [@ANCHOR: user_websites:COMM_weekly_digest_view_init]
+
+`UserWebsitesWeeklyDigestView.init()` recreates the view `user_websites_weekly_digest_view` that feeds `send_weekly_digest`. One row per follower and author (a user's partner, or a group) that has posts published in the last 7 days (measured in UTC). Columns: `id` (stable `row_number()`, groups offset by 5,000,000), `partner_id` (the subscriber), `author_name`, `owner_model` (`res.partner` or `user.websites.group`), `owner_record_id`, `post_ids_string` (comma-separated post ids) and `first_post_id`. Tests: `test_subscriptions.py` covers the seven-day cutoff in real UTC and stable ids across repeated queries.
+
+### `user_websites:COMM_db_functions_init` [@ANCHOR: user_websites:COMM_db_functions_init]
+
+`UserWebsitesDbFunctions.init()`, on the abstract model `user_websites.db_functions`, creates or replaces the PostgreSQL function `increment_strike_count(tbl_name text, rec_id integer)` inside a savepoint. For `res_users` or `user_websites_group` it locks the row `FOR NO KEY UPDATE` and adds 1 to `violation_strike_count`; any other table name does nothing. The call is atomic even under concurrent reports. It returns void and is called through `_increment_strike_count`. A broken `init()` would fail module installation. Test: `test_01_three_strikes_suspension`.
+
+### `user_websites:COMM_async_unpublish_content` [@ANCHOR: user_websites:COMM_async_unpublish_content]
+
+`_async_unpublish_content(db_name, user_ids)`, a module-level function in `models/res_users.py` run on `BACKGROUND_EXECUTOR` after the suspending transaction commits (or when a user is archived). It opens its own registry cursor as `sys_provisioner` (raising `ValueError` if missing) and, as the module service account, unpublishes in batches of 5000: pages (`website_published` false), posts (`is_published` false) and archives blogs, committing after each batch with a 0.1 s pause. Access and validation errors are rolled back and logged as a warning, other failures as an error. The cursor is always closed. Test: `test_01_three_strikes_suspension` polls for the result.
+
+### `user_websites:COMM_register_hook` [@ANCHOR: user_websites:COMM_register_hook]
+
+`res.users._register_hook()` runs when the registry is built. Inside a savepoint it finds the `sys_provisioner` user (including inactive) or creates it as an active service account in the main company, then creates the `user_websites.user_websites_service_account` XML id (`noupdate`) pointing at it if missing. This lets other modules resolve the account early. It has no arguments and no return value; the base `_register_hook` runs first. Test: `test_01_three_strikes_suspension`, which depends on the account.
+
+### `user_websites:COMM_res_users_check_reserved_slugs` [@ANCHOR: user_websites:COMM_res_users_check_reserved_slugs]
+
+`res.users._check_reserved_slugs()`, an `@api.constrains("website_slug")` constraint. If a user's slug (lower-cased) is in `reserved_slug_words(env)`, the union of the fixed reserved set, first segments of registered routes and installed language prefixes, it raises `ValidationError` ("The slug '%s' is reserved and cannot be used."). Empty slugs pass. It stops a member from taking an address such as `community` that would shadow a real route. Tests: `test_09_reserved_slug_validation`, `test_member_site_home_url.py`.
+
+### `user_websites:COMM_group_check_reserved_slugs` [@ANCHOR: user_websites:COMM_group_check_reserved_slugs]
+
+`user.websites.group._check_reserved_slugs()`, the group copy of the reserved-slug constraint on `website_slug`: a slug found in `reserved_slug_words(env)` raises `ValidationError`, empty slugs pass. Tested by `test_09_reserved_slug_validation`, which creates a group with a reserved word and expects the error.
+
+### `user_websites:COMM_is_admin` [@ANCHOR: user_websites:COMM_is_admin]
+
+`res.users._is_admin()` extends the base method: true if the base check passes, or the user is in `user_websites.group_user_websites_administrator` or `base.group_system`. No arguments; returns a bool; it only reads group membership. Other code uses it to decide who may bypass ownership checks. Test: `test_res_users_is_admin` in `tests/test_tdd_fixes.py`, which creates an ERP manager and expects true.
+
+### `user_websites:COMM_res_users_create` [@ANCHOR: user_websites:COMM_res_users_create]
+
+`res.users.create(vals_list)`, `@api.model_create_multi`. An empty `website_slug` is stored as false. Each `vals` goes through `_apply_slug_policy(None, vals)`, which, when the deployment's slug policy is "callsign", derives the slug from the member's callsign and returns True when no slug may be derived yet from the name. In that case the create runs with `edge_routing_no_name_slug` so no slug is made from the name. The slug is validated and made unique by the routing mixin. Test: `test_01_user_specific_limit_enforcement` and the slug tests.
+
+### `user_websites:COMM_res_users_write` [@ANCHOR: user_websites:COMM_res_users_write]
+
+`res.users.write(vals)`. With the callsign policy and a relevant key it applies the slug policy (one record at a time for several). The base write runs in a savepoint; an `IntegrityError` naming a `website_slug` constraint becomes `ValidationError` ("The Website Slug must be unique and valid."), other errors are re-raised. After success it evicts slug and page caches for the keys named in the code, queues the unpublish of content when `active` becomes false, and, when the slug changed, records 301 redirects from the old address (and the old blog address if the user has posts) and rehomes site pages. Tests: `test_page_limits.py`, `test_cache_coherence.py`, `test_slug_resolution_cache_and_filters.py`.
+
+### `user_websites:COMM_group_write` [@ANCHOR: user_websites:COMM_group_write]
+
+`user.websites.group.write(vals)`: the group version of `res.users.write` slug handling. The base write runs in a savepoint and a violated `website_slug` constraint becomes `ValidationError` ("The Group Website Slug must be unique and valid."). Afterwards it evicts the page cache when `is_suspended_from_websites` was written; when the slug changed it rehomes the group's pages and creates 301 redirects from `/old` to `/new` and, if the group has posts, `/old/blog` to `/new/blog`, as the service account. Tested by `test_audit_edge_cases.py`.
+
+### `user_websites:COMM_get_page_limit` [@ANCHOR: user_websites:COMM_get_page_limit]
+
+`res.users._get_page_limit()` (single record) returns an int: the user's own `website_page_limit` when above 0, otherwise the system parameter `user_websites.global_website_page_limit` (default 100). It is read by the page quota check in `website.page.create()` through the service account. Test: `test_01_user_specific_limit_enforcement` in `tests/test_page_limits.py`.
+
+### `user_websites:COMM_get_blog_limit` [@ANCHOR: user_websites:COMM_get_blog_limit]
+
+`res.users._get_blog_limit()` (single record) returns the maximum number of blogs as an int, from the system parameter `user_websites.global_blog_limit`, default 5. There is no per-user override. Used by `blog.blog` quota checks. Test: `tests/test_blog_limits.py`, which sets a lower limit and expects the next blog to be refused.
+
+### `user_websites:COMM_get_blog_post_limit` [@ANCHOR: user_websites:COMM_get_blog_post_limit]
+
+`res.users._get_blog_post_limit()` (single record) returns the maximum number of posts as an int from `user_websites.global_blog_post_limit`, default 500, with no per-user override. Used by `blog.post` quota checks. Test: `test_02_blog_post_creation_is_blocked_past_the_configured_limit` creates posts up to the limit and expects `ValidationError` on the next.
+
+### `user_websites:COMM_page_invalidate_cloudflare_cache` [@ANCHOR: user_websites:COMM_page_invalidate_cloudflare_cache]
+
+`website.page._invalidate_cloudflare_cache()` queues a Cloudflare edge purge for the pages in the recordset. It groups cache tags `site-<slug>` by website for pages that have an owner or group slug, and enqueues them through `cloudflare.purge.queue.enqueue_tags` as the `cloudflare.user_cloudflare_purge` service account, in a savepoint. A failure is logged and never fails the caller's create, write or unlink. Pages without a slug are skipped. Test: `test_01_user_specific_limit_enforcement`; the failure path is `test_cloudflare_purge_failsafe`.
+
+### `user_websites:COMM_trigger_malicious_arch_violation` [@ANCHOR: user_websites:COMM_trigger_malicious_arch_violation]
+
+`website.page._trigger_malicious_arch_violation(vals, records=None)` runs when the arch sanitizer stripped something. As the service account it files, per target, a `content.violation.report` (or reuses the one for that URL and reporter) and calls `action_take_action_and_strike()`, so the owner or group gets a strike. Targets: ownership in `vals` names one target; otherwise one per distinct owner or group among `records`, keyed on the first affected URL, so a batch costs each owner one strike. The reporter is the current user. Tests: `test_orm_security.py`, `test_violation_batch_write.py`.
+
+### `user_websites:COMM_get_page_id_by_url` [@ANCHOR: user_websites:COMM_get_page_id_by_url]
+
+`website.page._get_page_id_by_url(url, website_id, override_svc_uid=None)`, `@api.model @distributed_cache()`. Returns the id of the published page at `url` for that website (or for all websites), or false. It searches as `override_svc_uid` or the module service account, and returns false for an empty url, no page, or a page whose owner user or group is suspended. Because the suspension is checked when the cache entry is filled, suspension changes evict the cache. Nothing else in this repository calls it. Tests: `tests/test_page_limits.py`.
+
+### `user_websites:COMM_website_page_unlink` [@ANCHOR: user_websites:COMM_website_page_unlink]
+
+`website.page.unlink()`. It checks `check_access("unlink")`, enqueues the Cloudflare purge, deletes as the module service account with tracking off (falling back to the caller when the account is missing), re-raises serialization and deadlock errors (`40001`, `40P01`) so the transaction can retry, and finally sends one cache invalidation for the removed page URLs. Test: `test_07_page_write_and_unlink_signal_cache_invalidation_once` proves one signal per call, not three.
