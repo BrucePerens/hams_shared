@@ -329,7 +329,7 @@ def run_canary(workspace=gate_snapshot.DEFAULT_WORKSPACE, parent=None, state_dir
             out("gate_canary: origin/main has not moved since the last run; nothing to do")
             return 0, None
         make = snapshot or gate_snapshot.create_snapshot
-        manifest = make(workspace, parent, shards, shards_file or _saved_shards(state_dir), fetch, True, None, out=out)
+        manifest = make(workspace, parent, shards, shards_file or _saved_shards(state_dir), fetch, True, None, out=out, allow_behind=True)
     except gate_snapshot.SnapshotError as error:
         out("REFUSING: %s" % error)
         return 2, None

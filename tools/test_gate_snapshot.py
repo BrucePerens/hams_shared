@@ -224,6 +224,12 @@ class CreateTests(SnapshotTestBase):
         self.assertEqual(sum("moved during the snapshot" in line for line in self.out), 2)
 
     # Tests [@ANCHOR: gate_snapshot:create_snapshot]
+    def test_allow_behind_keeps_a_snapshot_that_main_moved_past_without_retrying(self):
+        manifest = self.create(run=self.racing_run(9), allow_behind=True)
+        self.assertNotEqual(manifest["trees"]["com_commit"], git(self.ws.path("hams_com"), "rev-parse", "origin/main"))
+        self.assertFalse(any("moved during the snapshot" in line for line in self.out))
+
+    # Tests [@ANCHOR: gate_snapshot:create_snapshot]
     def test_create_refuses_on_the_production_host_and_for_a_missing_build(self):
         with self.assertRaises(gs.SnapshotError):
             gs.create_snapshot(self.ws.root, self.tmp.name, hostname="hams1")
