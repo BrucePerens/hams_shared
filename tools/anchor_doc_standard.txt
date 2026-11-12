@@ -362,7 +362,9 @@ daemons/shack_console/docs/stories/s2_audio_resources.md
 daemons/shack_console/docs/stories/s2_demo_lock.md
 daemons/shack_console/docs/stories/s2_digital.md
 daemons/shack_console/docs/stories/s2_graticule.md
+daemons/shack_console/docs/stories/s2_heard_callsigns_rx_clip.md
 daemons/shack_console/docs/stories/s2_keyboard_settings_profiles_help.md
+daemons/shack_console/docs/stories/s2_logbook_uploads.md
 daemons/shack_console/docs/stories/s2_m17_receive.md
 daemons/shack_console/docs/stories/s2_operating.md
 daemons/shack_console/docs/stories/s2_repeater_call_recording.md
