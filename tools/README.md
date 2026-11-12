@@ -4905,6 +4905,14 @@ Options: `--out-dir`, `--only NAMES`, `--budget-total MINUTES`, `--dry-run` and 
 
 Replace the Hypothesis settings of `function` (the test function a `@given` produced; a bound method's `__func__` is used). Returns True when changed.
 
+| Argument | Type | Meaning |
+|---|---|---|
+| `function` | callable | A test function produced by `@given` (a bound method's `__func__` is used). |
+| `examples` | int | The new `max_examples`. |
+| `database` | str or None | A directory for Hypothesis's example database; None disables the database. |
+
+The settings become the current ones with `max_examples` set, `deadline=None` and every health check suppressed (a long run must not fail on speed). Returns False without change when `function` has no `hypothesis` attribute, True otherwise. It sets the private attribute `_hypothesis_internal_use_settings`, so a Hypothesis release that renames it would stop the scaling (the caller then prints "0 test(s)"). Imports `hypothesis` lazily and raises `ImportError` without it. Called by the pytest hook `pytest_collection_modifyitems` for each item when `HAMS_HYPOTHESIS_EXAMPLES` is set; `HAMS_HYPOTHESIS_DB` names the database directory. Test: `test_fuzz_run.py`.
+
 ## Moving instruction text without losing a rule (`check_no_rule_lost.py`, 2026-11-09)
 
 Every agent re-reads `AGENTS.md` / `CLAUDE.md` from the prompt cache on every turn (measured 2026-11-09: over 96 % of agent input tokens are cache reads,
@@ -4965,6 +4973,14 @@ identical; a file that cannot be collected, or whose table names a test that no 
 ### `[@ANCHOR: lint_test_durations:split_units]` `split_units(path, entry, collect)`
 The units ((node id, ...), seconds) of one split file, or None (keep the file whole). `collect(path)` returns its node ids.
 
+| Argument | Type | Meaning |
+|---|---|---|
+| `path` | str | The test file. |
+| `entry` | dict | The file's split entry: `tests` (test name to seconds) and optional `rest_seconds` (default 1.0). |
+| `collect` | callable | `collect(path)` returns the file's pytest node ids. |
+
+Each test named in `tests` becomes its own unit `((node id,), seconds)` in name order; all other collected tests form one more unit with `rest_seconds`. Returns None, so the caller keeps the whole file, when nothing is collected, nothing is named, or a named test no longer exists: a split can therefore never drop or invent a test. Non-numeric seconds are ignored. Pure apart from `collect`. Test: `test_lint_test_durations.py`.
+
 ## Step scheduling: a dependency graph, longest critical path first (`lint_exec.py`)
 
 `run_linters.py` hands its steps to `lint_exec.execute`, which runs them on `-j` workers as a dependency graph. A step is ready when every
@@ -4983,11 +4999,40 @@ before: one run used about two of 32 cores on average.
 ### `[@ANCHOR: lint_exec:elastic_jobs]` `elastic_jobs(jobs, environ=None, cpus=None)`
 The number of extra workers: `HAMS_LINT_ELASTIC_JOBS` when a whole number, else `jobs`, never more than `cpus // 2 - jobs`.
 
+| Argument | Type | Meaning |
+|---|---|---|
+| `jobs` | int | The normal worker count of the run. |
+| `environ` | mapping or None | Replaces `os.environ` (tests). |
+| `cpus` | int or None | Processor count; `os.cpu_count()` (or 2) when None. |
+
+`HAMS_LINT_ELASTIC_JOBS` gives the wanted number (0 turns elastic workers off); a value that is not an integer, or no variable, means `jobs` (the run may double). The result is limited to `cpus // 2 - jobs`, so the run never plans to use more than half the processors, and is never negative. The extras join only while the machine has spare capacity (`_Admission`). Called by `run_linters.py` (line 2876) as `execute(..., extra=...)`. Pure. Test: `test_lint_exec.py`.
+
 ### `[@ANCHOR: lint_exec:critical_paths]` `critical_paths(steps, estimates)`
 Each step's own estimate plus the longest chain of steps that need it; `needs` names not in the run are dropped; a cycle raises ValueError naming it.
 
+| Argument | Type | Meaning |
+|---|---|---|
+| `steps` | list of `Step` | The planned steps (`name`, `needs`). |
+| `estimates` | dict index -> float | Each step's own estimated seconds. |
+
+Returns `(paths, needs)`: `paths[i]` is step `i`'s own estimate plus the longest chain of steps that depend on it (transitively), and `needs[i]` the sorted indexes it waits for. A `needs` name that is not among the steps, or a step needing itself, is ignored; for duplicate names the first step wins. The scheduler starts the largest path first, so work others wait for starts before an equally long step nobody waits for. A dependency cycle raises `ValueError` naming the steps. Recursive depth-first walk. Pure. Test: `test_lint_exec.py`.
+
 ### `[@ANCHOR: lint_exec:execute]` `execute(steps, jobs, cache=None, fingerprints=None, out=None, durations=None)`
 Runs the steps as described above (cache hits are served as before) and returns Results in declaration order.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `steps` | list of `Step` | The lint steps; a step with `argv` None is computed in-process. |
+| `jobs` | int | Worker threads. |
+| `cache` | object or None | The result cache (`hit`, `recent_seconds`); with `fingerprints`, serves cacheable steps. |
+| `fingerprints` | object or None | Produces `step_key(step)`. |
+| `out` | file or None | Where each step's output is printed, default standard output. |
+| `durations` | dict or None | Step name to median seconds, for the schedule. |
+| `extra` | int | Extra workers allowed while the machine is idle. |
+| `admission` | `_Admission` or None | The rule that admits an extra worker. |
+| `trace_cache` | `TraceCache` or None | Result cache for test steps (see `traced_work`). |
+
+Steps run as a dependency graph, longest critical path first; a step sharing a `lock` name never overlaps another with the same lock. Output is printed in declaration order as soon as every earlier step has printed. Every step is limited by `hang_guard` (a per-step limit and a whole-run deadline from `hang_guard.run_cap()`). Returns the list of `Result` in declaration order. It sets the shared pytest worker count and may start threads and subprocesses. Test: `test_lint_exec.py`.
 
 ## Result cache of the test steps, keyed by the files they really read (`lint_trace_cache.py`)
 
@@ -5027,30 +5072,85 @@ untraced run would.
 ### `[@ANCHOR: lint_trace_cache:parse_trace]` `parse_trace(lines)`
 A `Trace` (reads, directory listings, absent paths, writes, programs, bound Unix sockets, network contacts) from `strace -f -y` output.
 
+Argument `lines`: lines of `strace -f -qq -y` output, each prefixed by a pid. `<unfinished ...>` and `resumed` pairs are joined; signal and exit lines are skipped; unparseable lines are ignored. The returned `Trace` collects file reads, directory listings, absent paths (failed opens), writes, executed programs, Unix sockets the step bound, and network contacts. Between a process's `pause` and `resume` markers (`lint_cache.trace_marker`) its file reads are skipped, because copying a tree into a Cargo work checkout reads every file; contacts, binds and executions are always recorded. Pure. Test: `test_lint_trace_cache.py`.
+
 ### `[@ANCHOR: lint_trace_cache:vetoes]` `vetoes(trace, listening_before=frozenset())`
 The reasons a traced pass must not be stored; [] when it may.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `trace` | `Trace` | From `parse_trace`. |
+| `listening_before` | set of int | Loopback ports already listening before the step started. |
+
+Returns a sorted list of reasons; empty means the pass may be stored. Reasons: a connection to a non-loopback address (network), to a loopback port that was already listening or to a Unix socket the step did not bind itself (host service; name-service sockets are allowed), a read of a `/dev` path outside the allowed list (hardware), a `/proc` or `/sys` read outside the allowed patterns (environment), and a read of a Hypothesis example database (randomised). Paths the step wrote are exempt. Pure. Test: `test_lint_trace_cache.py`.
 
 ### `[@ANCHOR: lint_trace_cache:trace_blockers]` `trace_blockers(trace)`
 Why a traced run cannot stand for an untraced one: setuid/setgid or capability programs, tracers. [] when none.
 
+Argument `trace`: a `Trace`. For every program the traced run executed, `privileged_program(path)` reports setuid or setgid bits, file capabilities (privileges that do not work under ptrace and `no_new_privs`) and tracers (one tracer per process), so sudo-like or debugging tools make the traced result untrustworthy. Returns the list of reasons, empty when there are none. A missing file is not a reason. Reads file modes only. The caller reruns the step untraced and marks it untraceable. Test: `test_lint_trace_cache.py`.
+
 ### `[@ANCHOR: lint_trace_cache:build_manifest]` `build_manifest(trace, roots, hasher, started_ns)`
 The manifest of a passing run and the problems (inputs changed while it ran, unreadable git state) that forbid storing it.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `trace` | `Trace` | A passing step's trace. |
+| `roots` | `Roots` | Maps paths to repositories and their work copies. |
+| `hasher` | `Hasher` | Returns blob ids for files and `dir:` digests for directories. |
+| `started_ns` | int | `time.time_ns()` taken when the step started. |
+
+Returns `(manifest, problems)`. The manifest lists repository files by blob id, directories by listing, absent repository paths, files outside the repositories by (size, mtime) and the git state of each repository whose `.git` was read; paths the step wrote, `/proc`, `/sys`, `/dev` and scratch directories are left out. `problems` is non-empty, and the pass must not be stored, when an input was modified after `started_ns` or a git state cannot be read. `verify` later checks the manifest. No test cites this anchor directly; to-do: add one. Reads the files and runs git.
 
 ### `[@ANCHOR: lint_trace_cache:verify]` `verify(manifest, roots, hasher, git_memo=None)`
 None when every recorded input is unchanged, else the first difference.
 
+| Argument | Type | Meaning |
+|---|---|---|
+| `manifest` | dict | The stored manifest. |
+| `roots` | `Roots` | The current repositories. |
+| `hasher` | `Hasher` | Computes current blob ids. |
+| `git_memo` | dict or None | Per-run cache of git states. |
+
+Returns None when every recorded input is unchanged, otherwise a string naming the first difference: an outside file whose size or mtime changed, a path that now exists, a file or directory whose digest changed, a missing repository or a changed git state. Order of checks: external files, absent paths, directories and files, git. Called by `TraceCache.lookup`; a non-None result means the stored pass is not used. Reads files and runs git read-only. Test: `test_lint_trace_cache.py`.
+
 ### `[@ANCHOR: lint_trace_cache:step_key]` `TraceCache.step_key(step)`
 The step's identity, independent of where the checkout is.
 
+Argument `step`: a lint `Step` (`name`, `argv`, `cwd`, `env`). The key is the SHA-256 of a JSON list of `SCHEMA`, the step name, its command line, working directory, the environment (entries matching `ENV_IGNORED` dropped, sorted) and the tool versions. Checkout paths are replaced by repository names (`Roots.normalise`), so a worktree and the main checkout share an entry. It also remembers key to name for reports. A step with no `env` uses `os.environ`. Returns a hex string; reads no files. Method of `TraceCache`. Test: `test_lint_trace_cache.py`.
+
 ### `[@ANCHOR: lint_trace_cache:trace_argv]` `trace_argv(argv, trace_file, python=sys.executable)`
 The command line that runs a step traced.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `argv` | list of str | The step's real command. |
+| `trace_file` | str | Where the trace is written. |
+| `python` | str | Interpreter, default `sys.executable`. |
+
+Returns `[python, <this file>, "run", trace_file, "--", *argv]`, so the step goes through `run_traced` (not a bare `strace`), which stops waiting when the main process ends and aborts on privileged programs. Pure; runs nothing. No test cites this anchor directly; to-do: add one. Used as the `wrap` callable's body in `traced_work`.
 
 ### `[@ANCHOR: lint_trace_cache:run_traced]` `run_traced(trace_file, argv, poll=0.2)`
 Runs the command under strace and returns the main process's exit status when it ends (128 + signal when killed), without waiting for
 processes it left in the background.
 
+| Argument | Type | Meaning |
+|---|---|---|
+| `trace_file` | str | The strace output file. |
+| `argv` | list of str | The command. |
+| `poll` | float | Seconds between looks at the trace, default 0.2. |
+
+Runs `strace -f --kill-on-exit` (seccomp-bpf filtered to the file, execution, network and bind calls) and returns the main process's exit status as soon as its exit shows in the trace, then stops strace with SIGTERM so leftover background processes continue untraced. A signal death returns 128 plus the signal. If any traced process starts a privileged program or a tracer, the run is ended at once, the reason is written to `<trace_file>.abort` and 125 (`ABORTED_STATUS`) is returned; `aborted()` reads it. Test: `test_lint_trace_cache.py`.
+
 ### `[@ANCHOR: lint_exec:traced_work]` `traced_work(step, trace_cache, run)`
 A test step through the result cache: a hit, or a traced run whose pass is stored when nothing forbids it.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `step` | `Step` | A test step with `argv`. |
+| `trace_cache` | `TraceCache` | The result cache. |
+| `run` | callable | `run(wrap)` executes the step; `wrap` is None or a function turning `argv` into a traced command line. |
+
+Returns a `Result`. A stored pass with all inputs unchanged becomes a cache hit with the original output plus a note. Otherwise the step runs traced when strace works here and the step is not already marked untraceable; the pass is stored only with no veto and no input changed while it ran. A failure is never stored and never replaced by a stored pass. A traced run that executed a setuid or tracer program, or failed or timed out under the trace, is rerun untraced at once and that result counts. Writes a temporary trace file and the cache. Test: `test_lint_trace_cache.py`.
 
 ## Wall-clock limits and hang reports (`hang_guard.py`)
 
@@ -5065,26 +5165,85 @@ open files and sockets (`ss`) and a `py-spy dump` when py-spy is installed. Pyte
 ### `[@ANCHOR: hang_guard:step_env_name]` `step_env_name(step_name)`
 The environment variable that sets one step's limit: the name upper-cased, every run of other characters one `_`.
 
+Argument `step_name`: the lint step's name, such as `pytest hams_shared/tools`. Returns `HAMS_LINT_STEP_TIMEOUT_` plus the name upper-cased with each run of characters outside A-Z and 0-9 replaced by one `_` and the ends stripped. The result is the exact variable `step_limit` reads, in seconds, so one slow step can be given its own limit. Different names can map to the same variable. Pure. Test: `test_hang_guard.py`.
+
 ### `[@ANCHOR: hang_guard:step_limit]` `step_limit(step_name, recent_seconds, environ=None, scale=1.0)`
 Median of the step's last runs x factor, between floor and cap, stretched by the load `scale` (cap still applies); an exact variable wins.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `step_name` | str | The step. |
+| `recent_seconds` | iterable or None | Durations of its last runs; zeros and None are ignored. |
+| `environ` | mapping or None | Replaces `os.environ`. |
+| `scale` | float | Load factor from `lint_exec.timeout_scale`; values under 1 count as 1. |
+
+Returns seconds. An exact `HAMS_LINT_STEP_TIMEOUT_<NAME>` wins unchanged. Otherwise the median of the history times `HAMS_LINT_STEP_FACTOR` (4), at least `HAMS_LINT_STEP_FLOOR` (300 s); with no history `HAMS_LINT_STEP_DEFAULT` (default 1800 s); multiplied by `scale`; at most `HAMS_LINT_STEP_CAP` (3600 s). Numbers that are not finite and positive are ignored. Pure. Test: `test_hang_guard.py`.
 
 ### `[@ANCHOR: hang_guard:run_cap]` `run_cap(environ=None)`
 Seconds a whole lint run may take.
 
+Argument `environ`: replaces `os.environ`. Returns `HAMS_LINT_RUN_CAP` in seconds when it is a finite number above 0, else 7200 (two hours). `lint_exec.execute` adds it to the clock to get the deadline for the whole lint run, and `run_step` shortens each step's own limit so it ends by then (a timed-out failure with a hang report). Pure. Test: `test_hang_guard.py`.
+
 ### `[@ANCHOR: hang_guard:remember]` `remember(history, name, seconds, keep=7)`
 Keeps the last durations of a step (the lint cache stores them under `recent`).
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `history` | dict name -> list | Durations by step name (the lint cache stores it under `recent`). |
+| `name` | str | The step. |
+| `seconds` | float | The measured duration, stored rounded to 2 decimals. |
+| `keep` | int | How many runs to keep, default 7 (`RECENT_RUNS`). |
+
+Appends and trims the list in place, creating it when missing, and returns it. These are the medians `step_limit` uses, so a step that keeps getting slower raises its own limit gradually. Not locked; the caller serialises writes. Test: `test_hang_guard.py`.
 
 ### `[@ANCHOR: hang_guard:process_section]` `process_section(info)`
 The report text of one process.
 
+| Argument | Type | Meaning |
+|---|---|---|
+| `info` | `ProcInfo` | One process from an `agent_procs` snapshot. |
+| `run_tool` | callable | Runs a command and returns its text (tests inject). |
+| `which` | callable | Finds a program on `PATH`. |
+
+Returns the text for one process: identity line, `wchan`, `syscall`, kernel stack, open files, sockets from `ss` (at most 40 lines) and, for `python` or `pytest` processes, `py-spy dump` when installed (otherwise a note saying how to get Python stacks). Unreadable `/proc` files appear as `(unreadable: ...)`; nothing raises. Read-only. Test: `test_hang_guard.py`.
+
 ### `[@ANCHOR: hang_guard:write_hang_report]` `write_hang_report(root_pid, label, reason, directory=None)`
 Writes the report of a process tree; returns the path.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `root_pid` | int | The process whose tree is reported. |
+| `label` | str | A name for the file and heading. |
+| `reason` | str | Why the report was taken. |
+| `directory` | str or None | Default `HAMS_HANG_REPORT_DIR`, else `~/.cache/hams/hang_reports`. |
+| `snapshot`, `section`, `clock` | callables | Injectable for tests. |
+
+Writes `<YYYYmmdd-HHMMSS>_<label>.txt` with the process-tree list (`ps_line`) and a section per process. Returns the path. When the file cannot be written the report goes to standard error and None is returned. It only reads `/proc`. Test: `test_hang_guard.py`.
 
 ### `[@ANCHOR: hang_guard:stop_own_group]` `stop_own_group(pid, start_ticks, grace=10)`
 SIGTERM then SIGKILL to the group a child leads; refuses a reused pid, a pid that leads no group of its own, and the caller's own group.
 
+| Argument | Type | Meaning |
+|---|---|---|
+| `pid` | int | The child that leads its own process group and session. |
+| `start_ticks` | int | The child's `/proc` start time, proving the pid is not reused. |
+| `grace` | float | Seconds between SIGTERM and SIGKILL, default 10. |
+
+Returns True when the process is already gone or the group has no live member after the signals, False when it refuses (start time differs, the pid does not lead its own group and session, or the group is this process's own) or the group survives SIGKILL for 5 s. Sends SIGTERM, waits, then SIGKILL to the group through `os.killpg`, never by name or pattern. Test: `test_hang_guard.py`.
+
 ### `[@ANCHOR: hang_guard:run_limited]` `run_limited(argv, limit, label, directory=None, **popen_kwargs)`
 `subprocess.run` with a limit: on timeout the report first, then `stop_own_group`; returns (completed, report path, timed_out).
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `argv` | list of str | The command. |
+| `limit` | float | Wall-clock seconds. |
+| `label` | str | Name for the hang report. |
+| `directory` | str or None | Where the report goes. |
+| `**popen_kwargs` | | Passed to `Popen` (for example `cwd`, `env`). |
+
+The child runs in its own session with output captured as text. Returns `(CompletedProcess, report path or None, timed_out)`. In time: its own exit status and None. On timeout: the hang report is written first, the child's group is stopped with `stop_own_group`, the output read so far returns with status 124 and `timed_out` True. If a process outside the group keeps the pipes open the output is lost but the step still ends. Test: `test_hang_guard.py`.
+
 ## Boundary hazards (`check_boundary_hazards.py`)
 
 Five shapes of bug that the 2026-11-09 bug hunts kept finding by hand, checked in one lint step (`check_boundary_hazards`) over every `.py` and `.sh` file of hams_com and
@@ -5153,6 +5312,8 @@ Purpose: decides whether a parameter key or field name names a secret. Takes `na
 
 Purpose: test files are not judged (they set fake secrets on purpose). Takes `path` (str). True for a file under a `tests` directory, `test_*.py`, `*_test.py` or `conftest.py`. Pure.
 
+Argument `path` (str; backslashes are treated as slashes). True when a `tests` directory is among the parents or the file is named `test_*`, `*_test.py` or `conftest.py`. Used by `check_file` so tests may set fake secrets. Returns bool. Pure. Test: `test_check_secret_storage.py`.
+
 ### `[@ANCHOR: secret_storage:find_files]` `find_files(repo_root)`
 
 Purpose: the files one root contributes. Takes `repo_root` (str). Returns the sorted absolute paths of the tracked, unignored `.py` and `.xml` files, skipping `__pycache__`,
@@ -5170,6 +5331,8 @@ Calls `_call_findings(node)` `[@ANCHOR: secret_storage:call_findings]` on every 
 `_is_odoo_model(node)` `[@ANCHOR: secret_storage:is_odoo_model]` is true (its body assigns `_name` or `_inherit`), `_field_findings(node)` `[@ANCHOR: secret_storage:field_findings]`
 (a single-target assignment of `fields.Char`, `fields.Text` or `fields.Binary` whose name names a secret). A key built at run time is not seen: the rule is syntactic.
 
+Rules in `RULES`: `secret-config-parameter` (a literal `set_param` key or `config_parameter=` value that names a secret) and `secret-field` (a `fields.Char`, `Text` or `Binary` named like a secret on an Odoo model). A line can be excused with a comment `secret-storage-ignore: <rule>: <reason>`; the reason is required, and the comment must be on the finding's line. A source with a syntax error gives no findings, and a name containing a word in `NOT_SECRET_WORDS` is not a secret. Why: secrets belong in the secret store, never in the database. Test: `test_check_secret_storage.py`.
+
 ### `[@ANCHOR: secret_storage:check_xml]` `check_xml(source)`
 
 Purpose: `secret-config-parameter` on XML data. Takes the file text. Returns findings for each `<record model="ir.config_parameter">` whose `<field name="key">` names a secret, with the
@@ -5180,6 +5343,8 @@ line of the key. A regular-expression scan, not a parser. Pure.
 Purpose: findings for one file. Takes `path` (str). An empty list for a test file; otherwise `check_xml` for `.xml` and `check_python` for anything else. Reads the file (UTF-8,
 undecodable bytes replaced).
 
+Argument `path` (str). Returns `[]` for a test file (`is_test_path`) and otherwise reads the file as UTF-8 with undecodable bytes replaced and returns `check_xml(text)` for `.xml` (a `ir.config_parameter` record whose key names a secret) or `check_python(text)` for anything else. Each finding is `(rule, symbol, line, message)`. Raises `OSError` when the file cannot be opened. Read-only. Test: `test_check_secret_storage.py`.
+
 ### `[@ANCHOR: secret_storage:load_known]` `load_known(path=None)`
 
 Purpose: reads the known list. Takes `path` (str or None; default `secret_storage_known.json` beside the script). Returns `(entries, problems)`: well-formed entries (known rule, and
@@ -5188,6 +5353,8 @@ Purpose: reads the known list. Takes `path` (str or None; default `secret_storag
 ### `[@ANCHOR: secret_storage:scan]` `scan(roots)`
 
 Purpose: runs `check_file` over every file of every root. Takes a list of repository roots. Returns `{(rule, relative_path, symbol): [(line, message), ...]}`. Reads files only.
+
+Argument `roots`: a list of repository root paths. Calls `check_file` on every tracked, unignored `.py` and `.xml` file of each root (`find_files`, which skips vendored and build directories and hidden directories) and groups findings. Returns a dict keyed by `(rule, path relative to the root, symbol)` whose values are lists of `(line, message)`. Empty means clean; the command line (`report`) prints each finding and returns non-zero when there are any. Read-only. Test: `test_check_secret_storage.py`.
 
 ### `[@ANCHOR: secret_storage:report]` `report(found, entries, problems, roots)`
 
