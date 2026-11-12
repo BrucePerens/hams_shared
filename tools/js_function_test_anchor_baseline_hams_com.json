@@ -39,14 +39,5 @@
   "ics_forms/static/src/js/ics_editor.js::flushQueuedSaves",
   "ics_forms/static/src/js/ics_editor.js::init",
   "theme_hams/static/src/js/hams_cookie_bar_focus.js::interacted",
-  "theme_hams/static/src/js/hams_cookie_bar_focus.js::markInteraction",
-  "web_map/static/src/map_view/map_arch_parser.js::MapArchParser.parse",
-  "web_map/static/src/map_view/map_controller.js::MapController.setup",
-  "web_map/static/src/map_view/map_model.js::MapModel.load",
-  "web_map/static/src/map_view/map_model.js::MapModel.setup",
-  "web_map/static/src/map_view/map_renderer.js::MapRenderer.initMap",
-  "web_map/static/src/map_view/map_renderer.js::MapRenderer.pollDaemonData",
-  "web_map/static/src/map_view/map_renderer.js::MapRenderer.renderOdooMarkers",
-  "web_map/static/src/map_view/map_renderer.js::MapRenderer.setup",
-  "web_map/static/src/map_view/map_view.js::props"
+  "theme_hams/static/src/js/hams_cookie_bar_focus.js::markInteraction"
 ]
