@@ -383,6 +383,15 @@ class UnitTests(unittest.TestCase):
             self.assertTrue(blamed[mine][0].startswith("verify_anchors: "))
             self.assertEqual(unattributed, ["unrelated"])
 
+    def test_a_failure_while_building_the_stamp_text_leaves_no_stamp_file(self):
+        from unittest import mock
+        import run_linters
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}):
+            with mock.patch.object(run_linters.batch_queue, "with_field", side_effect=ValueError("boom")):
+                with self.assertRaises(ValueError):
+                    run_linters.write_batch_stamp("half", ["flake8"], 7, ["c" * 40])
+            self.assertFalse(os.path.exists(os.path.join(tmp, "hams-lint", "passed", "half")))
+
     def test_write_batch_stamp_format_is_accepted_by_the_stamp_gate(self):
         import lint_stamp_gate
         import run_linters
