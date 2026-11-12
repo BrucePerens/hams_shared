@@ -4080,6 +4080,8 @@ fields not found are left out and unexpected text gives `{}`. Never raises. Pure
 
 Reads the file and returns `parse_loadscreen` of it, `{}` if it cannot be read. One small file read.
 
+Argument `path`: the box-state file, default `/dev/shm/loadscreen/stats.txt` (written by the load display). Returns `parse_loadscreen(text)`, a flat dict that may hold `load1`, `cpu_busy_1min`, `cpu_busy_5min`, `io_wait_1min`, `postgres_1min`, `test_slots_busy`, `tests_waiting`, `mem_avail_gb` and `recommendation`; any `OSError` gives `{}`. Called before and after each measured run and at the start and end of a set (lines 1149 to 1296) so a result records how busy the machine already was. Test: `test_benchmark_template_db.py`.
+
 ### `[@ANCHOR: tools:template_db_log_milestones]` `LogMilestones`
 
 Dataclass returned by `parse_odoo_log`. Times are epoch seconds (Odoo logs UTC), `None` when the event did not occur.
@@ -4101,6 +4103,8 @@ Dataclass returned by `parse_odoo_log`. Times are epoch seconds (Odoo logs UTC),
 
 Purpose: reads the runner's output. `lines`: iterable of str. Lines that are not Odoo log lines (banners, traceback continuations) are ignored.
 Returns a `LogMilestones`. Pure; one pass.
+
+Argument `lines`: an iterable of text lines of Odoo's log (`YYYY-MM-DD HH:MM:SS,mmm pid LEVEL db logger: message`, UTC). It fills a `LogMilestones`: first and last line times, `Modules loaded.`, `Starting post tests`, each `Starting Class.test ...` (so the first test and the first post-install test), failed tests from `FAIL:`/`ERROR:` lines, the `odoo.tests.result` counts `(failed, errors, tests)` and the largest `N modules loaded in X s`. ERROR and CRITICAL lines are counted in `error_lines` unless they start with a `BENIGN_ERROR_PREFIXES` entry. No exceptions for odd lines; a log with no Odoo lines gives an all-None record. Test: `test_benchmark_template_db.py`.
 
 ### `[@ANCHOR: tools:template_db_compare_outcomes]` `compare_outcomes(reference, other, post_install_names=None)`
 
@@ -4150,9 +4154,18 @@ Calls the runner's `refuse_to_run_on_production_host` with the database names th
 
 The members of `names` that exist as databases on the server (one read-only `pg_database` query each, names checked by `check_identifier`), in the order given. `run_command` uses it to refuse a template another run owns.
 
+| Argument | Type | Meaning |
+|---|---|---|
+| `bench` | `Bench` | The benchmark object whose `sql()` runs one statement as the postgres user. |
+| `names` | iterable of str | Candidate database names. |
+
+Each name passes `check_identifier` (an unsafe name raises `ValueError` before any SQL) and is looked up with `SELECT 1 FROM pg_database WHERE datname = ...`. Returns the existing names in the order given. Read-only. `run_command` (line 1252) calls it and refuses to start when a template this run would build already exists (unless `--replace-template`), so one run never drops another run's template. Test: `test_benchmark_template_db.py`.
+
 ### `[@ANCHOR: tools:template_db_filestore_bytes]` `filestore_bytes(name)`
 
 Apparent size in bytes of database `name`'s directory under `FILESTORE_ROOT` (`sudo -n -u odoo du -sb`); 0 when absent or unreadable. `name` is checked by `check_identifier`.
+
+Argument `name`: a database name, validated by `check_identifier` (`ValueError` otherwise). Runs `du -sb --apparent-size` on `<odoo filestore root>/<name>` as the odoo user (`sudo -n`, so no password prompt: if sudo asks, the command fails and 0 is returned). Returns an int; 0 for a missing directory, a failed `du` or empty output. Read-only. Used at line 1182 to report how large a template's filestore is, which a clone has to copy. Test: `test_benchmark_template_db.py`.
 
 ### `[@ANCHOR: tools:template_db_remove_filestore]` `remove_filestore(name)`
 
@@ -4167,6 +4180,12 @@ Frozen dataclass: how an arm differs from today's run. `arm` (name), `clone` (re
 ### `[@ANCHOR: tools:template_db_arm_plan_for]` `arm_plan(arm)`
 
 Returns the `ArmPlan` for one of `ARMS` (`fresh_ssd`, `fresh_ram`, `build`, `clone_ssd`, `clone_ram`, `clone_update`, `clone_i`); raises `ValueError` for any other name.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `arm` | str | One of `ARMS`. |
+
+Returns a frozen `ArmPlan` whose flags describe how the `_stub` child differs from a normal `test.py` run: `fresh_ssd` (plain run), `fresh_ram` (database in the tmpfs tablespace), `build` (build the template, no tests), `clone_ssd` and `clone_ram` (clone the template and drop `-i`), `clone_update` (clone, use `-u`) and `clone_i` (clone, keep `-i`). Raises `ValueError` listing the valid names. Pure. Test: `test_benchmark_template_db.py`.
 
 ### `[@ANCHOR: tools:template_db_transform_command]` `transform_odoo_command(cmd, plan, database=None)`
 
@@ -4265,18 +4284,26 @@ and the tablespace, and unmounts. The clone micro-benchmark's scratch databases 
 
 `key`: prints the template database name, digest, hashing time, closure size and `tests_define_models` for `--modules`. Needs the runner and two version queries; changes nothing.
 
+Argument `args`: the parsed `key` namespace (`--repo-root`, `--modules`, `--out-dir`, `--key-includes-tests` or its negation, `--modules-file`). Builds a `Bench`, asks it for the template key and prints one JSON object: `database` (the template name), `digest`, `seconds` spent hashing, `modules` in the key, `closure` (modules in the dependency closure) and whether test-defined models count. It runs the version queries against the server and reads the module sources, but creates no database and drops nothing. Returns 0; errors from the bench propagate. Test: `test_benchmark_template_db.py`.
+
 ### `[@ANCHOR: tools:template_db_report_command]` `report_command(args)`
 
 `report`: prints `render_report` of the given results files and, per set, the build sizes and times, the CREATE DATABASE timings per combination, the filestore copy and re-key times. Returns 0.
+
+Argument `args`: the parsed `report` namespace; `files` is one or more JSON results files written by `run` (`records` and `meta`). For each record whose log exists under `logs/` next to the file the log is parsed again with the current `parse_odoo_log`, so improvements apply to old runs. Prints the Markdown tables from `render_report`, an outcomes block (`equality_lines`) and, per set, build time and size, `CREATE DATABASE` timings per combination, filestore copy, re-key, tmpfs copy and key-hash times. Writes nothing and returns 0; a missing or invalid file raises. Test: `test_benchmark_template_db.py`.
 
 ### `[@ANCHOR: tools:template_db_build_parser]` `build_parser()`
 
 The `argparse` parser: sub-commands `run` (`--repo-root`, `--set small|medium|large`, `--reps`, `--build-reps`, `--arms`, `--test-tags`, `--tmpfs-dir`, `--tmpfs-size`, `--out-dir`, `--strategy`, `--copy-method`,
 `--no-clone-micro`, `--keep-template`), `key` and `report`.
 
+No arguments. `run` takes `--repo-root` (required), `--set small|medium|large` (required), `--modules-file`, `--reps` (3), `--build-reps` (1), `--arms`, `--test-tags`, `--tmpfs-dir`, `--tmpfs-size` (8G), `--out-dir`, `--strategy wal_log|file_copy`, `--copy-method copy|clone`, `--no-clone-micro`, `--key-includes-tests` and its negation, `--keep-template` and `--replace-template`. `key` takes `--repo-root`, `--modules`, `--out-dir`, `--modules-file` and the tests switch; `report` takes files. A usage error exits 2 through argparse. Test: `test_benchmark_template_db.py`.
+
 ### `[@ANCHOR: tools:template_db_main]` `main(argv=None)`
 
 Entry point: `_stub ...` goes to `stub_main` (internal), anything else is parsed and dispatched to `run_command`, `key_command` or `report_command`. Returns the exit status.
+
+Argument `argv`: a list or None for `sys.argv[1:]`. A first word of `_stub` hands the rest to `stub_main`, the internal child that performs one measured run; otherwise the arguments are parsed and the matching command runs (`key` always uses the large set). Returns the command's exit status (0 on success). `run` creates and drops databases and a tmpfs mount through `sudo -n`, so it belongs on a test host only; `key` and `report` change nothing. Test: `test_benchmark_template_db.py`.
 
 ## Per-PR targeted test runs (`test_impact.py`)
 
@@ -4572,6 +4599,8 @@ Purpose: the command line. Returns a list: `cargo test --locked --features radio
 
 Purpose: the test paths of `cargo test -- --list` output (`path: test` lines). Argument `text`: str. Returns a list of str. Pure. Tests: `PureTests`.
 
+Argument `text`: the standard output of `cargo test -- --list`, whose test lines look like `module::name: test`. Returns the list of `module::name` strings for the lines ending in `: test`; summary lines, benchmark entries and blank lines are skipped. `main` (line 128) checks each filter in `STRUCTURAL_FILTERS` against this list, so a renamed or deleted test module makes the group shrink visibly instead of passing silently. Pure. Test: `PureTests` in `test_relay_structural.py`.
+
 ### `[@ANCHOR: relay_structural:unmatched_filters]` `unmatched_filters(tests, filters=STRUCTURAL_FILTERS)`
 
 Purpose: keep the group from shrinking silently. Returns the filters that no test path of `tests` contains. The step lists the tests first and FAILS (exit 1, naming them) when this is not empty, before running anything: a renamed or deleted
@@ -4637,17 +4666,41 @@ network write, scripts are idempotent, nothing starts when the load display says
 
 `$HAMS_REPORTS_DIR`, else `~/workspace/tmp/reports`. Holds `overnight.log`, `mutation/`, `fuzz/`, `findings/`. Pure.
 
+Argument `environ`: mapping replacing `os.environ`. `HAMS_REPORTS_DIR` if set and non-empty, else `~/workspace/tmp/reports` (`DEFAULT_REPORTS`). Nothing is created here; the callers create the subdirectories: `overnight.log`, `mutation/`, `fuzz/` and `findings/`. Shared by `mutation_run.py` and `fuzz_run.py`. Pure. Test: `test_overnight_common.py`.
+
 ### `[@ANCHOR: overnight_common:log_line]` `log_line(path, text, now=time.time)`
 
 Appends `YYYY-MM-DD HH:MM:SS text` (one line, newlines folded) to `path`, creating the directory. Never raises on a write error.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `path` | str | The log file to append to; its directory is created. |
+| `text` | any | Converted with `str()`, whitespace and newlines collapsed to single spaces. |
+| `now` | callable | Clock returning epoch seconds (tests). |
+
+Writes `YYYY-MM-DD HH:MM:SS <text>` in local time, in append mode. An `OSError` (disk full, permissions) is swallowed so logging can never stop an overnight run. Returns the line that was formatted whether or not it was written. Not locked: concurrent appends of short lines rely on the operating system. Test: `test_overnight_common.py`.
 
 ### `[@ANCHOR: overnight_common:write_json]` `write_json(path, data)`
 
 Writes `data` as JSON to `path` through a temporary file and `os.replace`, so a reader never sees half a file.
 
+| Argument | Type | Meaning |
+|---|---|---|
+| `path` | str | The destination file; its directory is created. |
+| `data` | any JSON value | Serialised with indent 1 and sorted keys, newline at the end. |
+
+The JSON is written to a `.tmp-*.json` file in the same directory and `os.replace`d, so a reader polling the result sees the old file or the new one, never a partial one. Raises `OSError` on an unwritable directory and `TypeError` for an unserialisable value (the temporary file is then left behind). Its partner `read_json(path, default)` returns the default for a missing or invalid file. Test: `test_overnight_common.py`.
+
 ### `[@ANCHOR: overnight_common:slug]` `slug(text, limit=48)`
 
 A file- and job-name-safe form of `text` (letters, digits, `.`, `_`, `-`), never empty, at most `limit` characters.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `text` | any | Converted with `str()`. |
+| `limit` | int | Maximum length, default 48. |
+
+Each run of characters outside letters, digits, `.`, `_` and `-` becomes one `-`; leading and trailing `-`, `.` and `_` are stripped; an empty result is `x`; the rest is cut to `limit`. No path separators can survive, which makes the result safe as a file name or job name. Different inputs can collide (`a b` and `a-b`). Pure. Test: `test_overnight_common.py`.
 
 ### `[@ANCHOR: overnight_common:load_targets]` `load_targets(path, required=('name',), home=None)`
 
@@ -4656,6 +4709,16 @@ The `[[target]]` tables of a TOML targets file, each a dict with `~` expanded in
 ### `[@ANCHOR: overnight_common:Load]` `Load()`
 
 What the load display says right now. `state` is OK or HOLD (dispatch_ok), `reasons` its text, `test_running`/`test_slots`/`lint_running` the queue figures, `mem_available_gb` from /proc/meminfo (None when unreadable).
+
+| Field | Type | Meaning |
+|---|---|---|
+| `state` | str | `OK` or `HOLD` from `dispatch_ok.evaluate`; a missing or stale display is `HOLD`. |
+| `reasons` | list of str | Why, in plain words. |
+| `test_running`, `test_slots` | int | Test slots in use and available (defaults 0 and 1). |
+| `lint_running`, `lint_slots` | int | Lint slots in use and available (defaults 0 and 1). |
+| `mem_available_gb` | float or None | `MemAvailable` from `/proc/meminfo`, None when unreadable. |
+
+Methods: `test_free()` and `lint_free()` (slots minus use, never below 0) and `critical()`, which returns a reason string when the state is not `OK` or memory is under `MIN_MEM_AVAILABLE_GB` (6), else None. Built by `read_load`; read by the idle-fill runners before every target so work stops when real work needs the machine. Immutable by convention, not thread-shared. Test: `test_overnight_common.py`.
 
 ### `[@ANCHOR: overnight_common:read_load]` `read_load(stats_path=dispatch_ok.DEFAULT_STATS, meminfo='/proc/meminfo', now=time.time, lint_slots=None)`
 
@@ -4669,21 +4732,47 @@ Runs `argv` as the named job `name` through `agent_procs.py run`, blocks in ONE 
 
 `<out_dir>/<slug(name)>.json`.
 
+Arguments: `out_dir` (the results directory) and `name` (the target name from the targets file). Returns `<out_dir>/<slug(name)>.json` through `overnight_common.slug`, so a name with spaces or slashes cannot leave the directory. Pure; nothing is created. The same path is where `run_target` reads an earlier result and the worker writes the new one. Test: `test_mutation_run.py`.
+
 ### `[@ANCHOR: mutation_run:fingerprint]` `fingerprint(target)`
 
 What decides that an earlier `done` result still holds: the target file's sha256 (None when it is missing), the test command and the funcs.
+
+Argument `target`: a target dict with `root`, `file`, optional `test` and `funcs`. Returns `{"source_sha256", "test", "funcs"}`: the SHA-256 of `<root>/<file>` (None when the file is missing), the test command, and the sorted function list. Stored in each result; `is_fresh` compares them so an edit to the file, the test command or the function list invalidates an earlier result. Reads the whole file. Test: `test_mutation_run.py`.
 
 ### `[@ANCHOR: mutation_run:is_fresh]` `is_fresh(previous, current, max_age_days, now=time.time)`
 
 True when `previous` (a result document or None) is `done`, has the same fingerprint as `current` and is younger than `max_age_days`.
 
+| Argument | Type | Meaning |
+|---|---|---|
+| `previous` | dict or None | The earlier result document. |
+| `current` | dict | The current `fingerprint`. |
+| `max_age_days` | float | Reuse window; a result is fresh while younger than this. |
+| `now` | callable | Clock (tests). |
+
+Returns True only when `previous` is a dict with `status == "done"` (not `partial`, `timeout` or `error`), every fingerprint key is equal, and `finished_epoch` is within `max_age_days * 86400` seconds. A missing `finished_epoch` counts as epoch 0, so it is stale. Pure. `--force` skips it. Test: `test_mutation_run.py`.
+
 ### `[@ANCHOR: mutation_run:parse_harness_log]` `parse_harness_log(text)`
 
 `{mutants, killed, run, partial, survivors}` from the harness's output: `N mutants`, `score K/R = P%`, `PARTIAL: ...` and one `SURVIVED line L: OPERATOR` per survivor. Missing pieces are 0 / []. Pure.
 
+Argument `text`: the harness output (`mutation_harness.py`). Reads `N mutants`, `score K/R = P%` (K killed of R run), a `PARTIAL:` line (the time budget stopped it early) and each `SURVIVED line L: OPERATOR`. Returns `{"mutants", "killed", "run", "partial", "survivors"}` with `survivors` a list of `{"line", "operator"}`; anything missing is 0, False or `[]`, so a harness that crashed early yields zeros rather than an exception. Pure. Test: `test_mutation_run.py`.
+
 ### `[@ANCHOR: mutation_run:build_result]` `build_result(target, parsed, status, seconds, log, unchanged, now=time.time)`
 
 The result document for one target (see the module text). `score` is killed / run in percent (None when nothing ran).
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `target` | dict | The target (`name`, `file`, optional `test`). |
+| `parsed` | dict | From `parse_harness_log`. |
+| `status` | str | `done`, `partial`, `baseline_fails`, `error`, `timeout` or `missing`. |
+| `seconds` | float | Elapsed time. |
+| `log` | str | Path of the harness log. |
+| `unchanged` | bool or None | Whether the harness confirmed the original file was untouched. |
+
+Returns the JSON document: counts (`mutants`, `run`, `killed`, `survived`, `not_run`), `score` (percent of run mutants killed, one decimal, None when none ran), each survivor with file, line and operator, timing, `finished_epoch` and `finished`, plus the fingerprint fields. Pure apart from the clock. Test: `test_mutation_run.py`.
 
 ### `[@ANCHOR: mutation_run:run_worker]` `run_worker(spec_path)`
 
@@ -4693,17 +4782,36 @@ Worker mode (started by `ram_dirs.py run` inside the job): copy the tree into `$
 
 Runs one target and returns `(status, result path)`: `skipped` (a fresh result exists), `dry-run`, `missing` (the file is not there) or the result's status.
 
+| Argument | Type | Meaning |
+|---|---|---|
+| `target` | dict | Needs `root`, `file` and `test`; optional `budget_minutes` (default 20) and `funcs`. |
+| `out_dir` | str | Results directory. |
+| `force` | bool | Ignore a fresh result. |
+| `max_age_days` | float | Freshness window (default 7). |
+| `dry_run` | bool | Decide only; run nothing. |
+
+Raises `ValueError` for a target lacking `root`, `file` or `test`. A missing source file writes an `error` result with a detail and returns `missing`. Otherwise it returns `skipped`, `dry-run`, or runs a worker under `ram_dirs.py run ... nice -n 10` through `run_job` (limit: budget x 90 s plus 20 min). The worker mutates a copy of the tree, never the live checkout. A timeout or a worker that wrote no result becomes a `timeout` or `error` result. The old result is deleted before the run. Test: `test_mutation_run.py`.
+
 ### `[@ANCHOR: mutation_run:summary_line]` `summary_line(results)`
 
 One line: `mutation: 3 target(s): 2 done, 1 skipped; survivors 4`, from `[(name, status, path)]` and the result files.
 
+Argument `results`: a list of `(name, status, result_path)` tuples. Returns `mutation: <N> target(s): <count> <status>, ...; survivors <S>` with statuses sorted by name (`none` when empty); survivors are summed from the result files of `done` and `partial` targets only, and an unreadable file counts as 0. Reads the result files. Written to `overnight.log` and printed by `main`. Test: `test_mutation_run.py`.
+
 ### `[@ANCHOR: mutation_run:main]` `main(argv=None, load=common.read_load)`
 
+| Argument | Type | Meaning |
+|---|---|---|
+| `argv` | list or None | `TARGETS_FILE` plus options; `sys.argv[1:]` when None. |
+| `load` | callable | Returns a `Load` (tests inject one); default `common.read_load`. |
 
+Options: `--out-dir`, `--only NAMES` (comma list), `--force`, `--max-age-days` (7), `--budget-total MINUTES` (start no new target after that long), `--dry-run`, and the internal `--worker SPEC`. Before every target `load().critical()` is checked; a reason stops the run and, when nothing ran yet, exits 4 (`EXIT_NOT_IDLE`). Exit 0 when no target ended `error`, `timeout`, `baseline_fails` or `missing`, 1 otherwise, 2 for an unreadable or invalid targets file. Logs to `overnight.log` and prints `summary_line`. Test: `test_mutation_run.py`.
 
 ### `[@ANCHOR: fuzz_run:cargo_fuzz_available]` `cargo_fuzz_available(target)`
 
 True when `cargo fuzz --version` works (a short bounded probe, nothing is started).
+
+Argument `target`: a target dict; `cargo_command(target)` supplies the command prefix `cargo [+toolchain] fuzz` (`HAMS_FUZZ_CARGO` replaces `cargo`, for tests). Runs `<cargo> fuzz --version` with a 60 s limit and no fuzzing. True when it exits 0; `OSError` (cargo missing) or a timeout returns False, so `run_cargo_fuzz` reports `unavailable` instead of failing. Test: `test_fuzz_run.py`.
 
 ### `[@ANCHOR: fuzz_run:is_live_checkout]` `is_live_checkout(path, workspace=None)`
 
@@ -4713,9 +4821,18 @@ True when `path` (symlinks resolved) is the main hams_com, hams_open or hams_sha
 
 The per-target directories under `<out_dir>/state/<slug(name)>`: corpus, artifacts, crashes, min, hypothesis-db, and the `seen.json` path.
 
+Arguments: `out_dir` and `name`. Returns a dict with `base` (`<out_dir>/state/<slug(name)>`), the directories `corpus`, `artifacts`, `crashes`, `min` and `hypothesis-db`, and `seen` (`seen.json`, the SHA-256 list of crashes already reported). Nothing is created here. The state survives between nights so the corpus keeps growing and a known crash is reported once. Pure. Test: `test_fuzz_run.py`.
+
 ### `[@ANCHOR: fuzz_run:new_crash_files]` `new_crash_files(artifact_dir, seen)`
 
 Sorted `(path, sha256)` of the crash files in `artifact_dir` (names starting crash-, oom-, timeout-, leak-, slow-unit-) whose hash is not in `seen`.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `artifact_dir` | str | Where libFuzzer wrote its artifacts. |
+| `seen` | set of str | SHA-256 digests already reported. |
+
+Considers regular files whose names start with `crash-`, `oom-`, `timeout-`, `leak-` or `slow-unit-`, hashes each and returns `(path, sha256)` for those not in `seen`, in file-name order. A missing directory gives `[]`. Reads the files. The caller records the new digests in `seen.json`. Test: `test_fuzz_run.py`.
 
 ### `[@ANCHOR: fuzz_run:extract_stack]` `extract_stack(text, limit=60)`
 
@@ -4725,6 +4842,8 @@ The part of a reproduction log that is the failure: from the first line that loo
 
 `hams_com`, `hams_open` or `hams_shared` when `path` lies in a directory of that name (a job directory holds `hams_shared_wt`), else "".
 
+Argument `path`: any path. Resolves symlinks and scans the components from the end: `hams_com`, `hams_open` or `hams_shared` is returned for the first such directory name, and `hams_shared_wt` (the shared worktree inside a job directory) also gives `hams_shared`; otherwise an empty string. Used to name the repository a finding stub belongs to. Pure apart from `realpath`. Test: `test_fuzz_run.py`.
+
 ### `[@ANCHOR: fuzz_run:stub_text]` `stub_text(target, sha, repro, minimized, stack, when=None)`
 
 The night_shift_todo stub for one new crash: front matter (status open, repo, category bug, created_at), the title, the repro command, the minimized input path and the stack. Pure apart from the date.
@@ -4732,6 +4851,15 @@ The night_shift_todo stub for one new crash: front matter (status open, repo, ca
 ### `[@ANCHOR: fuzz_run:run_cargo_fuzz]` `run_cargo_fuzz(target, out_dir, findings_dir, dry_run=False)`
 
 One cargo-fuzz target; returns the result document. Refuses a live main checkout (`error`), reports `unavailable` when cargo-fuzz is missing.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `target` | dict | `name`, `dir` (crate with `fuzz/`), `fuzz_target`; optional `budget_minutes` (10), `rss_mb` (2048), `max_len`. |
+| `out_dir` | str | State directory root. |
+| `findings_dir` | str | Where crash stubs go. |
+| `dry_run` | bool | Check preconditions only. |
+
+Returns a result document with status `error` (no `fuzz/` directory, or `dir` is a live main checkout), `unavailable` (no cargo-fuzz), `dry-run`, `crashes`, `clean`, `timeout`. It runs `cargo fuzz run` with `-max_total_time`, an RSS limit and the artifact prefix inside `ram_dirs.py` wrapping, with 30 extra minutes for a cold build, then stubs each new crash (minimised, reproduction command). Never writes into the live checkout. Test: `test_fuzz_run.py`.
 
 ### `[@ANCHOR: fuzz_run:run_libfuzzer_worker]` `run_libfuzzer_worker(spec_path)`
 
@@ -4741,6 +4869,8 @@ Worker mode, started inside `ram_dirs.py run` (so `CARGO_TARGET_DIR` is the job'
 
 One `libfuzzer` target (stable toolchain, no cargo-fuzz); returns the result document. Refuses a live main checkout.
 
+Arguments as for `run_cargo_fuzz`, but the target needs `dir` (with `Cargo.toml`) and `bin` instead of `fuzz_target`. For machines without cargo-fuzz: a worker process (`--libfuzzer-worker`) builds the binary on the stable toolchain with `libfuzzer_environment` (`RUSTC_BOOTSTRAP=1` plus coverage flags), fuzzes, minimises and returns crashes as JSON. Result statuses: `error` (bad target or live checkout), `unavailable` (no cargo on `PATH`), `dry-run`, `crashes`, the worker's own status, `timeout`. Limit: the budget plus three build allowances. Updates `seen.json`. Test: `test_fuzz_run.py`.
+
 ### `[@ANCHOR: fuzz_run:falsifying_signature]` `falsifying_signature(text)`
 
 `(sha256, block)` of the first `Falsifying example` (newer Hypothesis: `Failing test case`) block in a pytest log (the block runs to the first blank line), or None. Two runs that fail on the same shrunk example give the same sha, so a re-run does not write a second stub.
@@ -4749,13 +4879,27 @@ One `libfuzzer` target (stable toolchain, no cargo-fuzz); returns the result doc
 
 One Hypothesis target (pytest with `hypothesis_scale.py`); returns the result document.
 
+| Argument | Type | Meaning |
+|---|---|---|
+| `target` | dict | `name`, `root`, `test` (pytest arguments); optional `cwd`, `budget_minutes` (10), `examples` (20000). |
+| `out_dir`, `findings_dir`, `dry_run` | | As for `run_cargo_fuzz`. |
+
+Runs pytest at nice 10 with `-p hypothesis_scale` so the example count and example database come from `HAMS_HYPOTHESIS_EXAMPLES` and `HAMS_HYPOTHESIS_DB`. Statuses: `error` (bad directory, or a failure that is not a counterexample), `unavailable` (no `hypothesis`), `dry-run`, `clean`, `crashes` (a new falsifying example, kept and stubbed), `known` (already stubbed), `budget` (the time ran out with nothing failing). Test: `test_fuzz_run.py`.
+
 ### `[@ANCHOR: fuzz_run:summary_line]` `summary_line(documents)`
 
 `fuzz: 3 target(s): 2 clean, 1 crashes; new crashes 1` from the result documents.
 
+Argument `documents`: a list of result documents (`status`, `new_crashes`). Returns `fuzz: <N> target(s): <count> <status>, ...; new crashes <C>` with the statuses sorted by name, `none` for an empty list, and the crash count summed over all documents. Pure. Written to `overnight.log` and printed by `main`. Test: `test_fuzz_run.py`.
+
 ### `[@ANCHOR: fuzz_run:main]` `main(argv=None, load=common.read_load)`
 
+| Argument | Type | Meaning |
+|---|---|---|
+| `argv` | list or None | `TARGETS_FILE` plus options; `sys.argv[1:]` when None. |
+| `load` | callable | Returns a `Load`; default `common.read_load`. |
 
+Options: `--out-dir`, `--only NAMES`, `--budget-total MINUTES`, `--dry-run` and the internal `--libfuzzer-worker SPEC`. The TOML targets file needs `name` and `kind` (`cargo-fuzz`, `libfuzzer` or `hypothesis`) per target. The load is checked before each target as in `mutation_run.main`; exit 4 when the box is busy before anything ran. Exit 0 unless a target ended `crashes`, `error` or `timeout` (then 1); 2 for an invalid targets file. Writes results under the reports directory and `findings/`. Test: `test_fuzz_run.py`.
 
 ### `[@ANCHOR: hypothesis_scale:scale_item]` `scale_item(function, examples, database=None)`
 
