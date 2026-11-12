@@ -4,7 +4,7 @@
 Accepted
 
 ## Context
-`night_shift_todo.md` ("saving ANY Settings page can crash with an AccessError", hams_com,
+the night-shift to-do and history files (`night_shift_todo/`, `night_shift_history/`) ("saving ANY Settings page can crash with an AccessError", hams_com,
 2026-09-13) found that `user_websites/models/res_config_settings.py`'s own `set_values()` override
 unconditionally rewrote `group_user_websites_administrator.user_ids` on every single Settings save,
 company-wide, regardless of which page's fields actually changed. `res.config.settings` is one
@@ -79,7 +79,7 @@ safely with its own Users & Groups UI.
 ## Consequences
 `user_websites`'s `user_websites_administrators_ids` field and its `get_values()`/`set_values()`
 overrides were removed outright (not patched) as the first real application of this ADR --
-`night_shift_todo.md` records the specific commit. Settings now offers a direct link/button to the
+the night-shift to-do and history files (`night_shift_todo/`, `night_shift_history/`) records the specific commit. Settings now offers a direct link/button to the
 group's own record in the Groups screen instead of reimplementing membership management. The
 deleted `ir.model.access.csv` row is not replaced by a narrower one; `group_user_websites_
 administrator` now has no access to `res.config.settings` at all, matching every other

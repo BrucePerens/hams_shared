@@ -92,3 +92,16 @@ docs/stories/journeys or data/documentation.html for user-visible features) uses
 to `verify_anchors.py`'s own documentation-gap logic was needed once the routing was understood
 correctly. Rust and JS function-level test-anchor coverage, and all of Stages 2-4 of the plan
 itself, remain real, unstarted follow-on work.
+
+## Status check 2026-11-12
+
+Checked against the repository. The ratchet exists as written (`tools/check_function_test_anchors.py`, step 38 in `run_linters.py`), but several
+"not yet" statements above are now history:
+- The backlog is closed. The committed baselines `function_test_anchor_baseline_hams_com.json` and `..._hams_open.json` are empty lists (the 422 and
+  771 grandfathered functions of the original snapshot are gone), so every unanchored Python function is a new failure.
+- The JS and Rust sub-tracks exist: `check_js_function_test_anchors.py` (step 39) and `check_rust_function_test_anchors.py`, each with a per-repository
+  baseline (`js_function_test_anchor_baseline_*.json` empty for both repositories; `rust_function_test_anchor_baseline_hams_com.json` empty and the
+  hams_open one holds a single entry, a function inside a vendored reference crate). The statement that Rust functions "are not scanned by any anchor
+  mechanism" no longer holds.
+- Coverage instrumentation (Stage 2) exists as tools: `check_anchor_coverage.py`, `run_js_coverage.py`, `run_rust_coverage.py`. Stage 3 is `check_anchor_coverage.py`, whose own header says it implements the binary
+  gate of decision 4 (no percentage threshold).

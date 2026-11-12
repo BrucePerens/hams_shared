@@ -88,3 +88,17 @@ pattern to a currently-unaudited category (test-only hooks reachable via URL que
 via `window`-level globals rather than `postMessage`) is real, named, not-yet-done follow-on work;
 this ADR covers the `postMessage`/event-listener shape found and fixed in the SW review, not every
 conceivable test-hook mechanism.
+
+## Status check 2026-11-12
+
+Checked against the code. The mechanism is as described for `hams_open/caching/static/src/sw/sw.js`: `const TEST_HOOKS_ENABLED = __TEST_HOOKS_ENABLED__;`
+at the top, a `if (!TEST_HOOKS_ENABLED) return;` guard before the `TEST_*` branches (`TEST_FORCE_IDB_ERROR`, `TEST_RUN_CACHE_CLEANUP`,
+`TEST_CALL_OPEN_DB`, `TEST_CHECK_OFFLINE_FALLBACK`), and the `caching.enable_sw_test_hooks` parameter. Three statements in the text above no longer
+describe the code:
+- `ham_shack/static/src/sw/shack_sw.js` is no longer a full service worker. The Owl shack was replaced by the console (console step 1f), and the file is
+  now a 23-line stub that deletes the shack's caches, unregisters itself and sends open pages to `/console/`. It has no `TEST_*` branches, no
+  `TEST_HOOKS_ENABLED` constant and no `ACTIVE_RELAY_URL` message. The `/shack_sw.js` route in `ham_shack/controllers/offline.py` still serves it.
+  `TEST_RUN_PRECACHE` and `TEST_CALL_FLUSH_OFFLINE_LOGS` went with the old worker.
+- So the "exactly two known real instances" are now one (`sw.js`); decision 4's worked example (`ACTIVE_RELAY_URL`) is history.
+- The `/sw.js` route's substitutions are `__CACHE_NAME__`, `__MAX_FILE_SIZE_BYTES__` and `__MAX_STORAGE_BYTES__` plus `__TEST_HOOKS_ENABLED__`; the
+  linter and its scan (`check_js_test_hook_gating.py`, `js_test_hook_gating_scan.cjs`) exist.
