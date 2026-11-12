@@ -1305,3 +1305,5 @@ control_inventory_audit/README.md
 daemons/au_acma_sync/README.md
 daemons/hamcall_idx_sync/README.md
 daemons/noaa_swpc_sync/README.md
+docs/modules/ham_logbook.md
+docs/stories/ingest_gemini_attestation.md
