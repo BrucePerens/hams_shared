@@ -3,9 +3,5 @@
   "backup_management/static/src/components/board/board.js::BackupBoard.setup",
   "backup_management/static/src/components/board/board.js::BackupBoard.syncSnapshots",
   "backup_management/static/src/components/board/board.js::BackupBoard.triggerBackup",
-  "pager_duty/static/src/components/log_viewer/log_viewer.js::LogViewer.executeSearch",
-  "pager_duty/static/src/components/log_viewer/log_viewer.js::LogViewer.fetchFiles",
-  "pager_duty/static/src/components/log_viewer/log_viewer.js::LogViewer.onKeyup",
-  "pager_duty/static/src/components/log_viewer/log_viewer.js::LogViewer.setup",
   "user_websites/static/src/js/owner_delete_dialog.js::OwnerDeleteDialog.start"
 ]
