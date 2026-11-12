@@ -427,7 +427,9 @@ def rewrite_html(html, domains, attachment_map=None, blog_map=None, post_map=Non
         # Only inside an attribute value or a CSS url(): the visible text of a page may quote the address
         # (a licence citing https://postopen.org/zero-contract/) and must stay as written.
         pattern = re.compile(r"(?<=[\"'(])https?://(?:www\.)?" + re.escape(domain) + r"(?=[/\"'?#\s)]|$)", re.I)
-        html, number = pattern.subn("", html)
+        # A bare address ("https://old.example", then a quote, "?", "#" or end) becomes "/", the site root: an empty
+        # href would mean the current page, and "?x" or "#a" would stay on it.
+        html, number = pattern.subn(lambda m: "" if m.string[m.end():m.end() + 1] == "/" else "/", html)
         report["links_made_relative"] = report.get("links_made_relative", 0) + number
 
     def attachment(match):
