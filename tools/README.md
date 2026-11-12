@@ -3439,13 +3439,24 @@ Invariants: the wrapper writes `exit_code` only while the record's `pid` is its 
 
 Purpose: the outcome of `wait_pid`, `wait_job` and `wait_file`. Frozen dataclass: `code` (int: the process exit code to use) and `message` (str: one line for a person).
 
+| Field | Type | Meaning |
+|---|---|---|
+| `code` | int | The exit code the command should return: `EX_OK` 0 (done), `EX_FAILED` 1, `EX_REFUSED` 3 or `EX_TIMEOUT` 75. |
+| `message` | str | One line for a person, printed by `cmd_wait`. |
+
+Frozen, so a result cannot change after the wait that produced it. Built only by the wait functions; no serialised form. Test: `test_agent_procs.py`.
+
 ### `[@ANCHOR: agent_procs:user_name]` `user_name(uid)`
 
 Purpose: login name for a uid. Returns the name, or the number as text when the account is unknown. Never raises; reads the password database.
 
+Argument `uid` (int). Looks the uid up with `pwd.getpwuid`; an unknown uid (a deleted account, a container uid) returns `str(uid)` so process lists never fail. Used when snapshotting `/proc` (line 243), for the owner of a new job record (line 616) and to compare the caller with a process owner (line 397). Test: `test_agent_procs.py`.
+
 ### `[@ANCHOR: agent_procs:boot_time]` `boot_time()`
 
 Purpose: lets `format_start` turn clock ticks into a date. Returns the epoch seconds of boot (`btime` of `/proc/stat`) as float, `0.0` when unreadable. Reads one file.
+
+No arguments. Reads `/proc/stat` and returns the `btime` line as a float. A missing file, a malformed number, NaN or infinity returns 0.0, so times derived from it are wrong but never crash. Used by `format_start` (line 154), by the conversion of a `start=` timestamp to clock ticks (line 188) and by the start-time sanity check (line 204). Read-only. Test: `test_agent_procs.py`.
 
 ### `[@ANCHOR: agent_procs:format_start]` `format_start(start_ticks)`
 
@@ -3483,6 +3494,13 @@ Purpose: the pids that must never be signalled or waited for. Arguments: `table`
 
 Purpose: the other half of "watching the watcher". Returns the set of all children, grandchildren, ... of `pid` in `table`, not `pid` itself.
 
+| Argument | Type | Meaning |
+|---|---|---|
+| `table` | dict pid -> `ProcInfo` | A process snapshot; each entry's `ppid` links it to its parent. |
+| `pid` | int | The root. It is not in the result. |
+
+Builds a parent-to-children map and walks it iteratively (no recursion limit), so a cyclic or broken table cannot loop forever. Returns a set; an unknown pid gives an empty set. `self_family` (line 297) joins it with the ancestors, which keeps a search or wait from matching, or signalling, its own subtree. Pure. Test: `test_agent_procs.py`.
+
 ### `[@ANCHOR: agent_procs:self_family]` `self_family(table, me=None)`
 
 Purpose: the exclusion set of `find`: `ancestry(me) | descendants(me)`, `me` defaulting to this process. The `bash -c '...'` that holds a search pattern is an ancestor of the process that searches, so it is never listed. Returns a set of pids.
@@ -3498,6 +3516,8 @@ Purpose: what "the caller's own worktree" means for the `test.py` rule. Returns 
 ### `[@ANCHOR: agent_procs:chrome_data_dir]` `chrome_data_dir(argv)`
 
 Purpose: where a chrome keeps its profile, to tell a test run's chrome from anyone else's. Returns the value of the `--user-data-dir=` argument, or `None`.
+
+Argument `argv`: the command-line list of a process. Returns the text after the first `--user-data-dir=`, or None when no argument has it (the `--user-data-dir PATH` two-word form is not recognised). `protected_reason` (line 361) calls it so a chrome is protected unless its profile is under the caller's own `TMPDIR`; the person's browser is therefore never signalled. Pure. Test: `test_agent_procs.py`.
 
 ### `[@ANCHOR: agent_procs:protected_reason]` `protected_reason(info, caller_uid=None, worktree=None, tmpdir=None, family=())`
 
@@ -3517,6 +3537,8 @@ the `claude` application; a `test.py` run whose directory is not under `worktree
 ### `[@ANCHOR: agent_procs:ps_line]` `ps_line(info)`
 
 Purpose: the verification print before any signal, and the `find` output. Returns one line: `pid= user= start= ticks= pgid= cwd= args=` (full arguments).
+
+Argument `info`: a `ProcInfo` (fields `pid`, `user`, `start_ticks`, `pgid`, `cwd`, `argv`). The `ticks=` value is what `--start-time` accepts later, which proves the pid still is the same process; `start=` is the same moment as local time (`format_start`); an unreadable cwd prints `?`. Arguments are joined with spaces and not quoted. Printed by `find` and before every signal (lines 787 and 871) so the log shows what was targeted. Pure. Test: `test_agent_procs.py`.
 
 ### `[@ANCHOR: agent_procs:find_procs]` `find_procs(table, me=None, user=None, any_user=False, cwd_under=None, contains=None, regex=None, pids=None, caller_uid=None, worktree=None, tmpdir=None)`
 
@@ -3542,6 +3564,8 @@ Purpose: the `--pid-file` of `find`. Lines are `PID` or `PID:START_TICKS`; blank
 
 Purpose: where records, logs and locks live. Returns `HAMS_JOBS_DIR` or `~/.cache/hams-jobs`, created with mode 0700. Side effect: creates the directory.
 
+Argument `environ`: mapping replacing `os.environ` (tests). `HAMS_JOBS_DIR`, else `~/.cache/hams-jobs`. `os.makedirs(..., mode=0o700, exist_ok=True)` runs on every call, so records, logs and the hook's `guard.json` are private to the user; an existing directory keeps its mode. Raises `OSError` when it cannot be created. Test: `test_agent_procs.py`.
+
 ### `[@ANCHOR: agent_procs:check_job_name]` `check_job_name(name)`
 
 Purpose: a job name becomes a file name, so it is validated. Returns `name` when it is letters, digits, `.`, `_`, `-`, 1 to 64 characters, alphanumeric first; else raises `ProcError` (code 2). No `/`, no leading dot.
@@ -3549,6 +3573,13 @@ Purpose: a job name becomes a file name, so it is validated. Returns `name` when
 ### `[@ANCHOR: agent_procs:record_path]` `record_path(name, directory=None)`
 
 Purpose: `<jobs dir>/<name>.json`, validating `name` (raises as `check_job_name`).
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `name` | str | The job name; `check_job_name` allows letters, digits, `.`, `_`, `-`, 1 to 64 characters, alphanumeric first, and refuses `guard`. |
+| `directory` | str or None | The records directory; `jobs_dir()` when None (which creates it). |
+
+Raises `ProcError` for a bad name; because the name becomes a file name, no `/` or leading dot can reach the path. Returns the string `<directory>/<name>.json`; the file is not touched. Test: `test_agent_procs.py`.
 
 ### `[@ANCHOR: agent_procs:write_record]` `write_record(rec, directory=None)`
 
@@ -3558,9 +3589,13 @@ Purpose: persist a `JobRecord`. Writes a temporary file in the same directory, t
 
 Purpose: load a job. Returns the `JobRecord`, or `None` when the file is missing, not JSON or has unexpected fields.
 
+Arguments: `name` (validated; a bad name raises `ProcError`) and `directory` (default `jobs_dir()`). The file is parsed as JSON and passed to `JobRecord(**fields)`, so a missing file, invalid JSON, a missing field or an unknown field returns None (`OSError`, `ValueError`, `TypeError`). That includes a record from a future version with extra fields. Read-only. Used by `list_records`, `wait_job` and `stop_job`. Test: `test_agent_procs.py`.
+
 ### `[@ANCHOR: agent_procs:list_records]` `list_records(directory=None)`
 
 Purpose: every readable record (`jobs`, and the "recorded job" proof of `kill_pid`). Returns a list sorted by `started_at`. Ignores unreadable files and files whose name is not a valid job name.
+
+Argument `directory` (default `jobs_dir()`, created if missing). Only `*.json` files whose stem passes the name pattern are read; `guard.json` (the signal guard hook's file, not a job) and stray files are skipped, as is any unreadable record. Raises `OSError` if the directory cannot be listed. The sort key is `started_at`, the wall-clock time the job was started. Also used to prove a pid belongs to a recorded job before `kill-pid` will signal it. Test: `test_agent_procs.py`.
 
 ### `[@ANCHOR: agent_procs:pid_alive]` `pid_alive(pid, start_ticks)`
 
@@ -3635,13 +3670,24 @@ Purpose: the `wait` subcommand: exactly one of `--pid [--start-time]`, `--job`, 
 
 Purpose: the `run` subcommand: `run NAME [--tag AGENT] [--cwd DIR] -- COMMAND...`. Prints the job's pid, process group, log path and the wait and stop commands. Returns 0.
 
+| Argument | Type | Meaning |
+|---|---|---|
+| `args` | namespace | `name`, `command` (the words after `--`), `tag` (owning agent, optional) and `cwd` (optional). |
+| `out` | file | Where the lines are printed, default standard output. |
+
+Calls `start_job`, which refuses a name already running and launches the command through the `_wrap` wrapper in its own session, writing the record and a log file; a `ProcError` (bad name, empty command, name in use) propagates to `main`. Returns `EX_OK` after printing `pid=`, `pgid=`, `log=` and the follow-up commands. The command keeps running after this process ends. Test: `test_agent_procs.py`.
+
 ### `[@ANCHOR: agent_procs:cmd_jobs]` `cmd_jobs(args, out=sys.stdout)`
 
 Purpose: the `jobs` subcommand: one line per record (`name state [code=N] pid= started= tag= cwd= cmd=`), or JSON with `--json`. Returns 0.
 
+Arguments: `args` (with `json`, bool) and `out`. Each record's state comes from `job_state`: `running`, `exited` (the wrapper recorded an exit code, shown as `code=N`) or `lost` (the process vanished without one). The text line is `name state [code=N] pid= started= tag= cwd= cmd=`; `--json` dumps a list of the record fields plus `state`. Read-only and always `EX_OK`. Test: `test_agent_procs.py`.
+
 ### `[@ANCHOR: agent_procs:cmd_stop]` `cmd_stop(args, out=sys.stdout)`
 
 Purpose: the `stop` subcommand (`stop NAME [--grace S] [--force] [--i-am-the-owner-and-checked]`); returns `stop_job`'s code.
+
+Arguments: `args` (`name`, `grace` seconds default 10, `force`, `i_am_the_owner_and_checked`) and `out`. Delegates to `stop_job`, which verifies the record, start time and process group, refuses protected processes (exit 3), sends SIGTERM to the group and waits `grace`; SIGKILL follows only with `--force`, and `--i-am-the-owner-and-checked` overrides the protected-process refusal for your own job. Returns `stop_job`'s exit code. Test: `test_agent_procs.py`.
 
 ### `[@ANCHOR: agent_procs:cmd_kill_pid]` `cmd_kill_pid(args, out=sys.stdout)`
 
@@ -3651,6 +3697,8 @@ Purpose: the `kill-pid` subcommand (`kill-pid PID [--start-time T | --cwd-under 
 
 Purpose: the argparse parser: subcommands `find wait run jobs stop kill-pid` and the internal `_wrap`. It does not know the command after `--`; `parse_args` splits that off. Returns the `ArgumentParser`.
 
+No arguments. Subcommands and their main options: `find` (`--cwd-under`, `--cmd-contains`, `--cmd-regex`, `--user`, `--any-user`, `--pid-file`, `--json`, `--quiet`), `wait` (`--pid`, `--start-time`, `--job`, selectors, `--all`, `--allow-missing`, `--file` with `--contains`, `--fail-contains`, `--while-pid`, `--timeout` default 1800, `--interval` default 0.5), `run`, `jobs`, `stop`, `kill-pid` and the hidden `_wrap`. Builds only; a usage error exits 2 through argparse. Test: `test_agent_procs.py`.
+
 ### `[@ANCHOR: agent_procs:parse_args]` `parse_args(argv=None)`
 
 Purpose: parse the command line, giving `run` and `_wrap` everything after the first `--` as `args.command` (a list) so that a command's own options (`-c`, `--tag`) are never taken for ours. Exits with argparse status 2 on a usage error.
@@ -3658,6 +3706,8 @@ Purpose: parse the command line, giving `run` and `_wrap` everything after the f
 ### `[@ANCHOR: agent_procs:main]` `main(argv=None)`
 
 Purpose: the command-line entry. Returns the exit code (0 done, 1 failed or nothing found, 2 usage, 3 refused, 75 timeout); a `ProcError` prints `agent_procs: <message>` on standard error.
+
+Argument `argv`: list, or None for `sys.argv[1:]`. Dispatches by subcommand (`_wrap` goes to `wrapper_main`). Exit codes: `EX_OK` 0, `EX_FAILED` 1, `EX_USAGE` 2, `EX_REFUSED` 3 (protected process, reused pid, own ancestry) and `EX_TIMEOUT` 75. A `ProcError` prints `agent_procs: <message>` to standard error and returns its code. It never signals by pattern; signalling goes through the verified paths only. Test: `test_agent_procs.py`.
 
 ## Guard hook for signals (`claude_hooks/guard_signals.py`)
 
@@ -3677,9 +3727,24 @@ Purpose: one shell word after quote removal. Frozen dataclass: `text` (str, with
 
 Purpose: one simple command. Dataclass: `words` (list of `Word`, including leading assignments and wrappers) and `bodies` (list of str: heredoc bodies attached to it; only parsed when the command is a shell or an interpreter).
 
+| Field | Type | Meaning |
+|---|---|---|
+| `words` | list of `Word` | The words after quote removal (each `Word` has `text` and `expands`, True when a `$` expansion or backtick was seen), leading `NAME=value` assignments and wrappers such as `sudo` included. |
+| `bodies` | list of str | Raw text of heredocs attached to the command; parsed only when the command is a shell or interpreter. Default empty. |
+| `piped` | bool | True when the command's standard input comes from the command before it (`a | THIS`); default False. |
+
+Built by `tokenize` and consumed by `check_command`; never serialised. Mutable, one per simple command in the hook's input. Test: `test_guard_signals.py`.
+
 ### `[@ANCHOR: guard_signals:Verdict]` `Verdict`
 
 Purpose: what `analyze` found. Dataclass: `reasons` (list of str; empty means allowed) and `notes` (list of str: reminders for allowed constructs, such as a literal-pid kill).
+
+| Field | Type | Meaning |
+|---|---|---|
+| `reasons` | list of str | One sentence per forbidden construct found; an empty list means the command is allowed. They become the deny message. |
+| `notes` | list of str | Reminders for allowed constructs (a `kill` of a literal pid); sent as `additionalContext` without changing permissions. |
+
+Created empty by `analyze` (or passed in so nested analysis of `bash -c` text and piped shells adds to one verdict). Both lists start empty; nothing else holds state. Test: `test_guard_signals.py`.
 
 ### `[@ANCHOR: guard_signals:find_paren_end]` `find_paren_end(text, start)`
 
@@ -3688,6 +3753,13 @@ Purpose: find the end of `$( ... )`. Returns the index of the `)` that closes th
 ### `[@ANCHOR: guard_signals:find_backtick_end]` `find_backtick_end(text, start)`
 
 Purpose: find the end of a backtick substitution. Returns the index of the closing backtick (a backslash escapes the next character) or `len(text)`.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `text` | str | The whole shell text. |
+| `start` | int | Index just after the opening backtick. |
+
+Scans forward; a backslash skips the next character, so an escaped backtick does not close the substitution. Returns the index of the closing backtick, or `len(text)` when the text ends first (an unterminated substitution is treated as running to the end). Called by the tokenizer at lines 271 and 288 so the body can be analysed as its own shell text. Pure. Test: `test_guard_signals.py`.
 
 ### `[@ANCHOR: guard_signals:read_heredoc]` `read_heredoc(text, start, delimiter, strip_tabs)`
 
@@ -3709,9 +3781,13 @@ Purpose: find the real command behind assignments, reserved words (`until`, `do`
 
 Purpose: recognise SIGKILL. True for `9` (also `09`), `KILL` and `SIGKILL` in any case with or without a leading `-`.
 
+Argument `spec`: the text of a signal option or word. Leading dashes are removed, the rest is upper-cased and a `SIG` prefix dropped; the result is SIGKILL if it equals `KILL` or is the ASCII number 9 (`09` too). Names like `-s` combined with a value are split by the caller (lines 410 to 423). Returns bool; never raises. SIGKILL is the only signal the guard denies outright for pattern-found targets, because it gives the process no chance to clean up (a killed postgres crashed the gate once). Pure. Test: `test_guard_signals.py`.
+
 ### `[@ANCHOR: guard_signals:protected_words]` `protected_words()`
 
 Purpose: the lower-case program names that are never signalled: `agent_procs.PROTECTED_WORDS`, or a built-in copy of it when `agent_procs` cannot be imported.
+
+No arguments. Returns a tuple of lower-case words naming shared services whose processes must never be signalled (postgres, postmaster, redis-server, rabbitmq, beam.smp, epmd, systemd, sshd, gdm, gnome, claude-desktop). The authoritative list is `agent_procs.PROTECTED_WORDS`; the hook keeps a built-in copy so it still guards when `agent_procs` cannot be imported (the hook must not fail open). Used by `check_command` (line 447) to flag a command that names one. Pure. Test: `test_guard_signals.py`.
 
 ### `[@ANCHOR: guard_signals:literal_pid_reason]` `literal_pid_reason(pid, table=None)`
 
@@ -3729,6 +3805,8 @@ Purpose: deny `pgrep -f` (also in a cluster such as `-af` or `-lf`) and `pgrep -
 
 Purpose: the script text of `sh -c SCRIPT`, `bash -lc SCRIPT`, `su -c SCRIPT`; `None` when there is no `-c` word.
 
+Argument `words`: the `Word` list of one command. Looks for a word shaped like `-c` or a bundle of letters containing `c` (`-lc`, `-ec`) and returns the text of the next word, which is the script the shell would run; None when there is no such word or no word follows it. Used by `check_command` (line 499) and the shell test at line 559 so the script text is analysed like any other command, closing the `bash -c "kill ..."` bypass. Pure. Test: `test_guard_signals.py`.
+
 ### `[@ANCHOR: guard_signals:check_command]` `check_command(command, verdict, depth)`
 
 Purpose: judge one `Command`: names `pkill killall skill killall5`, `kill`, `pgrep`, `fuser -k`, `systemctl kill`; recurses (`depth` guards recursion) into `bash -c`, `su -c`, shell heredoc bodies, `eval`, `ssh` and `watch` (every suffix of the words, since options precede the command), every `find -exec`/`-execdir`/`-ok`/`-okdir` (each up to its `;` or `+`, re-quoted so a `sh -c '...'` argument stays one script), and interpreter (`python perl ruby node php`) `-c`/`-e` strings and heredoc bodies that use SIGKILL, `os.killpg` or call `pkill`, `killall` or `pgrep -f`. Adds reasons to `verdict`.
@@ -3745,9 +3823,19 @@ Purpose: read a script piped into a shell (`echo 'kill -9 1' | sh`, `printf ... 
 
 Purpose: parse and judge a whole command text. Returns the `Verdict` (the object passed in, or a new one). Raises `ValueError` for nesting deeper than 8.
 
+| Argument | Type | Meaning |
+|---|---|---|
+| `text` | str | Shell text of one Bash tool call. |
+| `depth` | int | Nesting level, 0 at the top; callers leave the default. |
+| `verdict` | `Verdict` or None | Accumulator; a new one when None. |
+
+Tokenises the text, tracks plain `NAME=value` assignments so `kill $VAR` can be resolved, checks every command and recursively analyses scripts handed to piped shells. Raises `ValueError` beyond `MAX_DEPTH` (8); `decide` catches it. Parses only; it executes nothing and reads no files. Test: `test_guard_signals.py`.
+
 ### `[@ANCHOR: guard_signals:log_path]` `log_path(environ=None)`
 
 Purpose: `<jobs dir>/guard.log` (`HAMS_JOBS_DIR` or `~/.cache/hams-jobs`).
+
+Argument `environ`: mapping replacing `os.environ`. Returns `<HAMS_JOBS_DIR or ~/.cache/hams-jobs>/guard.log` without creating anything; `log_event` makes the directory (mode 0700) and appends one JSON line per denial or internal error, and the file is private to the user. The same directory holds `agent_procs` job records, which is why that module ignores `guard.json` and refuses `guard` as a job name. Test: `test_guard_signals.py`.
 
 ### `[@ANCHOR: guard_signals:log_event]` `log_event(kind, command, detail, session_id="", environ=None)`
 
@@ -3773,9 +3861,13 @@ Purpose: the hook entry point. Reads the hook JSON (`tool_name`, `tool_input.com
 
 Purpose: parse `git diff -U0` text into `{path: [(added_lines, removed_lines), ...]}`, one tuple per hunk, the lines without their `+` or `-`.
 
+Argument `text`: output of `git diff -U0` (no context lines). The path comes from each `+++ b/<path>` line (a deleted file, `+++ /dev/null`, gives no path and is dropped). Every `@@` hunk gives one `(added_lines, removed_lines)` tuple with the `+`/`-` prefix removed, so later rules can look at what a hunk added or removed; the `--- ` header lines are not counted as removals. Returns a dict, `{}` for empty input. Pure. Test: `test_check_backup_encryption_changes.py`.
+
 ### `[@ANCHOR: check_backup_encryption_changes:relevant_path]` `relevant_path(path)`
 
 Purpose: True for provisioning and backup code that the check scans and False for tests, docs, data files and the guard hooks.
+
+Argument `path`: a repository-relative path with forward slashes. It must match `RELEVANT_RE` (provisioning scripts, `infrastructure.py`, `b2_backup.py`, any file with `backup` in its name, `pgbackrest*`, `hams1_*` units, the mirror script, `host_requirements.py`, and the `backup_management/` and `daemon_key_manager/` trees) and must not match `EXCLUDED_RE` (tests, docs, data and web files, the claude hooks and this checker itself). Returns bool. This is what keeps the check from firing on prose that merely mentions a cipher. Pure. Test: `test_check_backup_encryption_changes.py`.
 
 ### `[@ANCHOR: check_backup_encryption_changes:findings_for_hunks]` `findings_for_hunks(path, hunks)`
 
@@ -3789,13 +3881,36 @@ Purpose: the approvals in the marker file's added lines, `[(path glob, set of ru
 
 Purpose: True when an approval's path glob matches the path (or is a suffix of it) and its rules include the rule or `*`.
 
+| Argument | Type | Meaning |
+|---|---|---|
+| `path` | str | The file the finding is in. |
+| `rule` | str | The rule name (one of `RULES`). |
+| `approvals` | list of `(glob, rules, date)` | From `parse_approvals`. |
+
+An approval matches when its glob `fnmatch`es the path, equals it or is a path suffix after a `/`, and its rule set contains the rule or `*`. Returns bool. Approvals exist only as lines added to `docs/APPROVED_BACKUP_ENCRYPTION_CHANGES.md` (or the root marker) by the same change, carrying `approved by Bruce on YYYY-MM-DD`. Pure. Test: `test_check_backup_encryption_changes.py`.
+
 ### `[@ANCHOR: check_backup_encryption_changes:check_repo]` `check_repo(repo, base="origin/main", today=None)`
 
 Purpose: the problems of the change in `repo` against the merge-base with `base`, as a list of sentences (empty: clean); an unavailable git or base gives none.
 
+| Argument | Type | Meaning |
+|---|---|---|
+| `repo` | str | A git working tree. |
+| `base` | str | The ref to compare against, default `origin/main`. |
+| `today` | date or None | Overrides the date for approval validation. |
+
+It diffs the working tree and untracked files against `merge-base(base, HEAD)`, collects approvals added in the marker files, scans every relevant file's hunks for backup-key and encryption changes (`findings_for_hunks`, rules such as cipher settings and stanza create/upgrade/delete) and reports each one lacking an approval. Returns a list of sentences naming the file, rule and line; empty when clean. A failing git, no merge-base or an unreadable file gives no problems rather than an error. Runs git read-only. Test: `test_check_backup_encryption_changes.py`.
+
 ### `[@ANCHOR: check_backup_encryption_changes:main]` `main(argv=None, out=None)`
 
 Purpose: check the repository named in `argv` (default: this one) against `--base REF`, print the problems, return 1 or 0.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `argv` | list or None | `[REPO] [--base REF]`; the repository holding this script and `origin/main` by default. |
+| `out` | file or None | Where problems are printed, default standard output. |
+
+Exit codes: 0 clean, or "not checked" when there is no merge-base (a message goes to standard error, so a shallow clone does not fail), and 1 when problems were printed. Each problem line starts with a siren marker. Part of the lint run; it changes nothing. The policy: no agent may change, rotate or replace a backup key or passphrase, or the encryption settings; only a quoted approval from Bruce in the same change lets a finding pass. Test: `test_check_backup_encryption_changes.py`.
 
 ## Backup self-test (`backup_selftest.py`)
 
@@ -3813,29 +3928,58 @@ Keys are only hashed: `read_key_value` reads the file the config names at run ti
 
 Purpose: True when the hook command text runs `script` (a key of `HOOKS`, `claude_hooks/guard_signals.py`) by an anchored path (`$HOME`, `~`, `$CLAUDE_PROJECT_DIR` or absolute).
 
+| Argument | Type | Meaning |
+|---|---|---|
+| `command` | any | The `command` string of one hook entry; a non-string gives False. |
+| `script` | str | A key of `HOOKS`, relative to `hams_shared/tools`. |
+
+The script path must be preceded by an anchor (`$HOME`, `${HOME}`, `$CLAUDE_PROJECT_DIR`, `~` or a leading `/`) with no word character, dot, slash, tilde, dollar or hyphen directly before it, so a relative path that would break from a worktree or another directory does not count. Returns bool; matches text only, never runs the command. Used by `check_repo`. Test: `test_check_claude_hook_registration.py`.
+
 ### `[@ANCHOR: check_claude_hook_registration:matcher_covers]` `matcher_covers(matcher, tool)`
 
 Purpose: True when a PreToolUse matcher (a regex on the tool name; empty or `*` means every tool) applies to the tool named `tool`.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `matcher` | str or None | A PreToolUse matcher from `.claude/settings.json`. |
+| `tool` | str | A tool name such as `Bash`. |
+
+None, an empty string and `*` cover every tool; anything else must `re.fullmatch` the whole tool name (so `Bash|Edit` covers `Bash`, and `Bas` does not). An invalid regular expression returns False instead of raising, which makes `check_repo` report the registration as missing. Pure. Test: `test_check_claude_hook_registration.py`.
 
 ### `[@ANCHOR: check_claude_hook_registration:command_is_guard]` `command_is_guard(command)`
 
 Purpose: True when the hook command text runs `claude_hooks/guard_signals.py` by an anchored path.
 
+Argument `command`: a hook command string; non-strings give False. A thin check for the one guard script, `claude_hooks/guard_signals.py`, using the precompiled anchored-path pattern (the same rule as `command_runs`). Kept for callers and tests that only care about the signal guard. Returns bool, matches text only. Test: `test_check_claude_hook_registration.py`.
+
 ### `[@ANCHOR: check_claude_hook_registration:matcher_covers_bash]` `matcher_covers_bash(matcher)`
 
 Purpose: True when a PreToolUse `matcher` (a regex; empty, `*` or missing means every tool) applies to the Bash tool.
+
+Argument `matcher`: as for `matcher_covers` (None, empty or `*` covers every tool). It is `matcher_covers(matcher, "Bash")`: the signal guard inspects shell commands, so a matcher that skips the Bash tool leaves agents unguarded. Returns bool; never raises. Pure. Test: `test_check_claude_hook_registration.py`.
 
 ### `[@ANCHOR: check_claude_hook_registration:is_tracked]` `is_tracked(repo_dir)`
 
 Purpose: False only when `repo_dir` is in a git work tree and `.claude/settings.json` is not tracked; an uncommitted file does not protect a fresh checkout or a worktree.
 
+Argument `repo_dir`: a checkout directory. It runs `git rev-parse --is-inside-work-tree` and, inside a work tree, `git ls-files --error-unmatch -- .claude/settings.json`, each with a 60 s timeout. Returns False only when the repository exists and does not track the file. Outside git, with a failing or missing `git`, or on a timeout it returns True, so the check never fails because git is unavailable. An untracked file would leave a fresh clone or a worktree without the guard. Read-only. Test: `test_check_claude_hook_registration.py`.
+
 ### `[@ANCHOR: check_claude_hook_registration:check_repo]` `check_repo(repo_dir)`
 
 Purpose: the problems (a list of sentences) with the guard registration of one checkout: file missing, not JSON, no matching hook, not tracked. Empty means registered.
 
+Argument `repo_dir`: a checkout directory. Reads `<repo_dir>/.claude/settings.json` and returns sentences, each starting with the directory name: the file is absent, it is not JSON, no `PreToolUse` entry whose matcher covers the Bash tool runs `claude_hooks/guard_signals.py` by an anchored path in a `command` hook, or the file is not tracked by git. Empty list means registered. Malformed `hooks` shapes are tolerated and count as missing. Reads files and runs git read-only. Test: `test_check_claude_hook_registration.py`.
+
 ### `[@ANCHOR: check_claude_hook_registration:main]` `main(argv=None, out=None)`
 
 Purpose: check each directory of `argv` (default: the checkout the script is in), print the problems, return 1 when there is any and 0 otherwise.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `argv` | list or None | Directories to check; the checkout holding this script when empty. |
+| `out` | file or None | Where problem lines are printed, default standard output. |
+
+Every directory must exist: `check_target.require_directory` exits 2 with the cause for a missing path, so a mistyped argument is never a silent pass. Exit codes: 0 when every checkout registers the guard, 1 after printing the problems, 2 for a bad directory. Wired into the lint run for hams_com, hams_open and hams_shared. Changes nothing. Test: `test_check_claude_hook_registration.py`.
 
 ## Template-database benchmark (`benchmark_template_db.py`)
 
