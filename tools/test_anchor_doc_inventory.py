@@ -109,7 +109,7 @@ class DataStructureTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             rust = write(tmp, "src/a.rs", "\n".join([
                 "// %s" % tag("m:Anchored"), "#[derive(Debug)]", "pub struct Anchored { x: u8 }",
-                "pub(crate) enum Bare { A, B }", "type Alias = u8;", "fn not_a_type() {}",
+                "pub(crate) enum Bare { A, B }", "type Alias = u8;", "impl Add for X {", "    type Output = X;", "}", "fn not_a_type() {}",
                 "#[cfg(test)]", "mod tests { struct InTests; }"]))
             self.assertEqual(inv.find_data_structures(rust), [(4, "enum", "Bare"), (5, "type", "Alias")])
             py = write(tmp, "m/models.py", "class Bare:\n    pass\n\n# %s\nclass Fine:\n    pass\n" % tag("m:Fine"))
