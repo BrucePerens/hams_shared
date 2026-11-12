@@ -1,16 +1,4 @@
 [
-  "daemons/hams_data_relay/src/main.rs::main",
-  "daemons/hams_local_relay/src/audio.rs::apply_device_guard",
-  "daemons/hams_local_relay/src/audio.rs::enumerate_names",
-  "daemons/hams_local_relay/src/audio.rs::find_cpal_device",
-  "daemons/hams_local_relay/src/audio.rs::local_alsa_card_indexes",
-  "daemons/hams_local_relay/src/audio.rs::local_alsa_cards",
-  "daemons/hams_local_relay/src/audio.rs::local_alsa_cards_full",
-  "daemons/hams_local_relay/src/audio.rs::refresh_device_guard",
-  "daemons/hams_local_relay/src/audio.rs::server_route_names",
-  "daemons/hams_local_relay/src/audio_calibration.rs::run_paused",
-  "daemons/hams_local_relay/src/audio_device_guard.rs::linux_server_default_cards",
-  "daemons/hams_local_relay/src/audio_device_guard.rs::read_system_audio_inner",
   "daemons/hams_local_relay/src/audio_identify.rs::CpalIdentifyBackend::capture",
   "daemons/hams_local_relay/src/audio_identify.rs::CpalIdentifyBackend::play",
   "daemons/hams_local_relay/src/audio_identify_routes.rs::repair_interrupted_test",
@@ -18,11 +6,8 @@
   "daemons/hams_local_relay/src/audio_mixer.rs::AmixerBackend::set",
   "daemons/hams_local_relay/src/audio_mixer.rs::enforce_all",
   "daemons/hams_local_relay/src/audio_mixer.rs::run_keeper",
-  "daemons/hams_local_relay/src/audio_open_policy.rs::class_of_name",
   "daemons/hams_local_relay/src/audio_reservation.rs::ZbusBus::request_name",
   "daemons/hams_local_relay/src/audio_reservation.rs::ZbusBus::request_release",
-  "daemons/hams_local_relay/src/audio_select.rs::evaluate_blocking",
-  "daemons/hams_local_relay/src/audio_select.rs::read_machine",
   "daemons/hams_local_relay/src/audio_tx_levels_route.rs::install_from_config",
   "daemons/hams_local_relay/src/audio_tx_setup_routes.rs::LiveTxRig::tone_step",
   "daemons/hams_local_relay/src/audio_tx_setup_routes.rs::repair_pending_at_startup",
@@ -75,6 +60,5 @@
   "daemons/hams_local_relay/src/winkeyer_keying.rs::SerialLineSink::set",
   "daemons/hams_local_relay/src/winkeyer_keying.rs::install_fatal_signal_unkey_once",
   "daemons/hams_local_relay/tools/audio_enum_probe/src/main.rs::describe",
-  "daemons/hams_local_relay/tools/audio_enum_probe/src/main.rs::main",
-  "daemons/hams_simulated_band/src/main.rs::main"
+  "daemons/hams_local_relay/tools/audio_enum_probe/src/main.rs::main"
 ]
