@@ -557,3 +557,4 @@ tools/anchor_doc_inventory.py
 tools/check_anchor_docs_standard.py
 daemons/hams_local_relay/README.md
 daemons/shack_console/docs/stories/offline_helpers.md
+daemons/shack_console/docs/stories/screen_reader_layout.md
