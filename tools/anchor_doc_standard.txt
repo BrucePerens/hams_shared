@@ -882,3 +882,15 @@ daemons/club_crawl/README.md
 daemons/pdns_sync/README.md
 daemons/callbook_dns_export/README.md
 daemons/shack_console/docs/stories/rig_pins_ctl.md
+daemons/hams_simulated_bots/README.md
+daemons/hams_simulated_bots/docs/stories/hams_simulated_bots_function_anchors_01.md
+daemons/hams_simulated_bots/docs/stories/hams_simulated_bots_function_anchors_02.md
+daemons/hams_simulated_bots/docs/stories/hams_simulated_bots_function_anchors_03.md
+daemons/hams_simulated_bots/docs/stories/hams_simulated_bots_function_anchors_04.md
+daemons/hams_simulated_bots/docs/stories/hams_simulated_bots_function_anchors_05.md
+daemons/hams_simulated_bots/docs/stories/hams_simulated_bots_function_anchors_06.md
+daemons/hams_simulated_bots/docs/stories/hams_simulated_bots_function_anchors_07.md
+daemons/hams_simulated_bots/docs/stories/hams_simulated_bots_function_anchors_08.md
+daemons/hams_simulated_bots/docs/stories/hams_simulated_bots_function_anchors_09.md
+docs/stories/hams_simulated_band.md
+docs/stories/daemons_simulated_bots_qso_test_reference.md
