@@ -89,6 +89,9 @@ CODE_ISLANDS_UNDER_DOCS = [
     # radioctl's Python tools (hamlib_caps_matrix, wire_to_transcript, ...): the scan prunes every directory named
     # `tools`, so their anchors were invisible and the `radioctl:` entries in the story files reported missing.
     "daemons/radioctl/tools",
+    # shack_console's Python tools (stability_jobs, waterfall_fit_check, stt_accuracy/*.py, ...): same pruning. Its
+    # README files (tools/stt_accuracy/README.md carries the anchor entries) are read as docs too, see the doc walk.
+    "daemons/shack_console/tools",
 ]
 
 # Directories every os.walk below prunes before descending -- never real, first-party source or
@@ -556,7 +559,13 @@ def find_anchors_in_docs(root_dir, repo_root):
 
     for root, dirs, files in _walk_with_shared(root_dir):
         if "radae" in dirs: dirs.remove("radae")
-        dirs[:] = [d for d in dirs if not _is_excluded_dir(d, exclude_dirs)]
+        # Inside a code island the `tools` pruning is lifted, so the island's README files are read as docs.
+        in_island_tree = any(root == i or root.startswith(i + os.sep) for i in code_island_paths)
+        keep_pruned = {d for d in dirs if os.path.join(root, d) in code_island_paths}
+        dirs[:] = [
+            d for d in dirs
+            if d in keep_pruned or not _is_excluded_dir(d, (exclude_dirs - {"tools"}) if in_island_tree else exclude_dirs)
+        ]
         is_docs_dir = "docs" in root.split(os.sep)
         # A code island's own .py files are real code (scanned separately,
         # as code, by find_anchors_in_code) -- only its README.md (if any)
