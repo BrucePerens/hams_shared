@@ -26,7 +26,6 @@
   "daemons/hams_local_relay/src/audio_tx_levels_route.rs::install_from_config",
   "daemons/hams_local_relay/src/audio_tx_setup_routes.rs::LiveTxRig::tone_step",
   "daemons/hams_local_relay/src/audio_tx_setup_routes.rs::repair_pending_at_startup",
-  "daemons/hams_local_relay/src/authority_crl.rs::fetch_limited",
   "daemons/hams_local_relay/src/bridge_supervisor.rs::BridgeSupervisor::spawn_loop",
   "daemons/hams_local_relay/src/bridge_supervisor.rs::start",
   "daemons/hams_local_relay/src/callbook_dns.rs::SystemResolver::lookup_txt",
