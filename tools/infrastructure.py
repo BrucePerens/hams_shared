@@ -13198,11 +13198,13 @@ def _apply_postgresql_lockdown(conf_paths=None):
     any local OS account could then connect as any role, including the
     superuser, which defeats the per-service OS accounts the zero-sudo
     design relies on. Nothing needed it. Stock authentication already covers
-    every real connection path: Odoo and every daemon unit run as the `odoo`
-    OS user (peer over the socket), provisioning's own psql calls run as
-    `sudo -u postgres` (peer), and TCP clients -- test.py's
-    PGHOST=localhost, dx_firehose's asyncpg pool, pager_duty's pg_dump check
-    -- log in with the `odoo` role's password under the stock
+    every real connection path: Odoo runs as the `odoo` OS user (peer over
+    the socket), dx_firehose logs in over the socket as its own role
+    (`hamsd_dx_firehose`, no password), provisioning's own psql calls run as
+    `sudo -u postgres` (peer), and the TCP clients that remain -- test.py's
+    PGHOST=localhost on a test host, the cache manager, the pager monitor's
+    CONNECT-only login and a pager_duty `pg_dump` check that carries its own
+    password -- use a password under the stock
     `host ... 127.0.0.1/32 scram-sha-256` lines.
     """
     if conf_paths is None:
