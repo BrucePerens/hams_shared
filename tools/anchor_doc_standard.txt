@@ -924,3 +924,13 @@ ingest/docs/stories/ingest_daemon_utils.md
 ingest/docs/stories/ingest_draw_course_charts.md
 ingest/docs/stories/ingest_draw_course_diagrams.md
 ingest/docs/stories/ingest_extract_pdf_instructions.md
+daemons/README.md
+daemons/hams_auth_gateway/README.md
+daemons/shack_console/docs/stories/voice_controller.md
+daemons/shack_console/docs/stories/settings_audio_area.md
+daemons/shack_console/docs/stories/satellites_controller_and_mount.md
+daemons/shack_console/docs/stories/simband_session_and_report.md
+daemons/shack_console/docs/stories/allstar_bridge_call.md
+daemons/shack_console/docs/stories/controller_connection_and_rig.md
+daemons/loupedeck_ct/docs/stories/loupedeck_ct_model.md
+daemons/hams_simulated_band/README.md
