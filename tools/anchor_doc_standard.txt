@@ -238,6 +238,7 @@ daemons/shack_console/docs/stories/console_relay_identity_wire_and_asn1.md
 daemons/shack_console/docs/stories/console_rf_scope_m17_simband_anchors.md
 daemons/shack_console/docs/stories/console_rotator_control.md
 daemons/shack_console/docs/stories/console_rotator_panels_and_settings_draft.md
+daemons/shack_console/docs/stories/console_rotator_settings_and_connection.md
 daemons/shack_console/docs/stories/console_server_settings_updater_backup.md
 daemons/shack_console/docs/stories/console_shared_receiver_and_speech_dock.md
 daemons/shack_console/docs/stories/console_shared_receiver_client_anchors.md
