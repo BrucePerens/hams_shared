@@ -736,9 +736,18 @@ Purpose: marks `path` as owned by a process. Creates the directory (mode 0700) i
 
 Purpose: the program name of a process (`/proc/<pid>/comm`) for the owner marker and for `status`; None when the process is gone.
 
+| Argument | Type | Meaning |
+|---|---|---|
+| `pid` | int or str | The process to name. |
+| `proc_root` | str | The proc filesystem to read, default `/proc`; tests pass a fake tree. |
+
+Reads `<proc_root>/<pid>/comm` (decoded with replacement characters, whitespace stripped); an empty name, a missing or unreadable file (any `OSError`) returns None, so it never raises. Called by `claim` (stored in the marker's `name` field), `describe_owner` and the leak warning. Read-only; no locks. Test: `test_ram_dirs.py`.
+
 ### `[@ANCHOR: ram_dirs:owner_record]` `owner_record(path)`
 
 Purpose: the marker of a directory as a dict `pid, start, created, name, job, keep` (fields an older marker lacks are None, `keep` False); None without a readable marker. Reads one file; never raises.
+
+Argument: `path`, the directory whose `OWNER_FILE` marker is read. Return keys: `pid` (int), `start` (the owner's `/proc` start ticks recorded by `claim`, or None), `created` (epoch seconds or None), `name`, `job`, `keep` (bool). A file that is missing, not JSON, lacks `pid` or has a non-integer `pid` gives None (`OSError`, `ValueError`, `KeyError`, `TypeError` are caught). Unlike `owner_state` it does not check whether the process is alive. Used by `gc` to apply the idle and kept-job limits and by `describe_owner`. Test: `test_ram_dirs.py`.
 
 ### `[@ANCHOR: ram_dirs:newest_activity]` `newest_activity(path, depth=3, per_directory=2000)`
 
@@ -751,6 +760,8 @@ Purpose: which live processes refer to a directory, so `gc` never removes one in
 ### `[@ANCHOR: ram_dirs:gc_log_path]` `gc_log_path(pol=None, environ=None)`
 
 Purpose: the removal log, `hams-ram-gc.log` in the RAM root.
+
+Argument: `pol` (a policy from `policy()`; built from `environ` when omitted) and `environ` (a mapping standing in for `os.environ`). Returns the path `<pol.root>/hams-ram-gc.log` (`GC_LOG_NAME`) without touching the disk. `gc` appends one line there (time, name, size, idle time, owner, reason) for every directory it removes automatically, keeps the last `GC_LOG_MAX_LINES` lines, and prints the path in its message; the file lives in RAM, so it is gone after a reboot and holds no secrets. No locking beyond what the appender does. Test: `test_ram_dirs.py`.
 
 ### `[@ANCHOR: ram_dirs:log_removal]` `log_removal(pol, name, size_bytes, idle_seconds, reason, now=time.time, owner=None)`
 
@@ -777,6 +788,8 @@ Purpose: the age test for unmarked directories. Returns the latest modification 
 ### `[@ANCHOR: ram_dirs:leak_mode]` `leak_mode(environ=None)`
 
 Purpose: the leak check's setting. Returns `"warn"` (default), `"fail"` or `"off"` from `HAMS_LEAK_CHECK`; any other value is `"warn"`. Test: `test_a_clean_job_is_silent_and_a_job_that_leaves_a_file_is_named_loudly_then_cleaned`.
+
+Argument: `environ`, a mapping replacing `os.environ` (tests). The value is read from `HAMS_LEAK_CHECK` (constant `LEAK_CHECK_ENV`), stripped and lower-cased, so `FAIL` works. `"warn"` names a leaked file loudly and cleans it, `"fail"` also makes the job fail, `"off"` skips the check. Never raises. Read when a job starts (`ram_dirs.py` around line 888): `"off"` creates no per-job temporary directory, otherwise the leak check runs when the job ends. Test: `test_ram_dirs.py`.
 
 ### `[@ANCHOR: ram_dirs:make_job_tmp]` `make_job_tmp(job, environ=None)`
 
@@ -883,6 +896,8 @@ time, peak size, RAM or disk, block writes). Blocks until the command ends. Cost
 
 Purpose: the text of `ram_dirs.py status`. Returns a list of lines: the root's free space and the limits, then each `hams-cargo-target-*`, `hams-test-tmp` and `hams-lint-cargo` entry with its size and `owner_state`.
 
+Arguments: `pol` (a policy; built from `environ` when None) and `environ` (mapping replacing `os.environ`). The first line gives the root, its free GB and every limit of the policy (minimum free, per-job, hard floor, mode, idle hours, kept-job hours). An unreadable root returns just that line; otherwise one line per `hams-cargo-target-*` directory (size and `describe_owner`) and per `hams-test-tmp` / `hams-lint-cargo` directory (size and `owner_state`). Read-only: it walks the directories to size them, which can take a moment on large caches. Printed by `ram_dirs.py status` (line 1105). Test: `test_ram_dirs.py`.
+
 ### `[@ANCHOR: ram_dirs:main]` `main(argv=None)`
 
 Purpose: the command line. Subcommands `run JOB [--keep] [--ssd] -- COMMAND...` (exit status of the command, 75 if the job name is in use), `path JOB [--owner-pid PID]` (sweeps, creates and claims the directory for `PID`, default the parent
@@ -902,9 +917,13 @@ has no `ram_dirs` and always answers with the disk path. The budget, the prune a
 
 Purpose: every base that may hold Cargo caches, so `show`, `prune` and `clear` see both. Returns a list: the RAM base when it exists (and `XDG_CACHE_HOME` is unset), then `disk_cargo_base`.
 
+Argument: `environ`, a mapping replacing `os.environ`. The RAM base is `<ram root>/hams-lint-cargo` and counts only when `ram_dirs` imported, `XDG_CACHE_HOME` is unset and the directory exists; the disk base from `disk_cargo_base` is always last. Never raises and creates nothing. Callers: the `show`, `prune` and `clear` commands, `lint_trace_cache` (adds them to its scratch-directory list when it builds a cache key) and the result cache, which declines a target directory outside the RAM root and these bases. Test: `test_lint_cache.py`.
+
 ### `[@ANCHOR: lint_cache:in_ram]` `in_ram(path, environ=None)`
 
 Purpose: whether `path` is below the RAM root. Returns bool; False when `ram_dirs` cannot be imported.
+
+Arguments: `path` (any file path) and `environ` (mapping replacing `os.environ`, used to find the RAM root). Uses `ram_dirs.under_ram_root`; no filesystem access, so a path that does not exist is judged by its name alone. Callers pick the RAM rules with it: unused-days limit (`LINT_UNUSED_DAYS`, 2 days, instead of 14), the RAM free-space minimum and the RAM budget. Test: `test_lint_cache.py`.
 
 ### `[@ANCHOR: test:default_test_tmpdir]` `default_test_tmpdir(environ, directory=DEFAULT_TEST_TMPDIR, create=True)`
 
@@ -974,6 +993,8 @@ Purpose: the four numbers a burst slot needs. Returns `(busy percent, pressure p
 ### `[@ANCHOR: lint_lock:mem_available_gb]` `mem_available_gb(path="/proc/meminfo")`
 
 Purpose: the machine's `MemAvailable` in GiB. Returns a float, or None when the file cannot be read or has no such line. Reads one file. Tests: `BurstSlotTests`.
+
+Argument `path` is the meminfo file, default `/proc/meminfo` (tests pass a fixture). It finds the `MemAvailable:` line (kB), divides by 1024 x 1024 and returns GiB; an `OSError`, a `ValueError`, an empty line or no such line returns None, which `burst_headroom` treats as "not enough memory" so a burst slot is refused rather than guessed. Called by `lint_lock.py`, `lint_batch.py` and `lint_exec.py` when deciding whether an extra burst slot may start. No locks. Test: `test_lint_lock.py`.
 
 ### `[@ANCHOR: lint_lock:try_burst]` `RunLock._try_burst(headroom=None, now=time.time)`
 
@@ -1653,10 +1674,24 @@ Purpose: the one gate in front of every `DROP DATABASE` and `COMMENT ON DATABASE
 Purpose: returns `DROP DATABASE IF EXISTS "name" WITH (FORCE);` (FORCE ends the sessions a killed Odoo left open). Raises `ValueError` for a name
 `is_droppable_name` refuses. Pure.
 
+| Argument | Type | Meaning |
+|---|---|---|
+| `name` | str | The database to drop. |
+
+Returns the statement text only; nothing is executed here. `is_droppable_name` accepts a plain identifier that is not `hams_prod`, `postgres`, `template0` or `template1` (`PROTECTED_DATABASES`), so the name can sit inside double quotes without injection and a production database can never be named. Caller: `test.py` (around line 2459) runs the statement through `psql` while cleaning up databases a run left behind. Test: `test_runner_cleanup.py`.
+
 ### `[@ANCHOR: runner_cleanup:comment_database_sql]` `comment_database_sql(name, slot, kept)`
 
 Purpose: returns `COMMENT ON DATABASE "name" IS '<marker>';`, which `rebuild_db()` runs right after `CREATE DATABASE` in the same `psql` session.
 Raises `ValueError` for a name `is_droppable_name` refuses. Pure.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `name` | str | The new database; must pass `is_droppable_name`. |
+| `slot` | int | The test slot number (converted with `int()`). |
+| `kept` | bool | Whether the run was started with `--keep`. |
+
+The marker text comes from `database_marker`: `hams_test_runner:v1 slot=<n> kept=<0|1>`, which `parse_database_marker` reads later so cleanup can tell a runner's database from anyone else's and honour `--keep`. Returns the SQL string without executing it. Callers: `test.py` (line 2299) and `benchmark_template_db.py`. Test: `test_runner_cleanup.py`.
 
 ### `[@ANCHOR: runner_cleanup:owned_slot]` `owned_slot(name, comment)`
 
@@ -1906,6 +1941,8 @@ file. The caller prints the cause and keeps Odoo's exit status. Reads the files;
 Purpose: the count above which a flaky test is listed as "FIX ME". Returns `HAMS_FLAKE_FIX_ME_THRESHOLD` or 3. Raises `BaselineError` for a value that is not a whole number
 of at least 1.
 
+Argument: `environ`, a mapping replacing `os.environ`. The environment variable is `HAMS_FLAKE_FIX_ME_THRESHOLD` (`FLAKE_THRESHOLD_ENV`); unset or empty gives `DEFAULT_FLAKE_THRESHOLD` (3). A value with sign, decimals or text, or one below 1, raises `BaselineError` (a `ValueError`) naming the variable, so a typo cannot silently disable the report. Called by `test.py` (line 1617) after a rerun to decide which flaky tests are listed as "FIX ME". Reads no files. Test: `test_known_red.py`.
+
 ### `[@ANCHOR: known_red:load_flakes]` `load_flakes(path)`
 
 Purpose: the flake counters. Returns `{test_id: {"count": int, "first": str, "last": str, "last_commit": str}}`, `{}` when the file does not exist, and raises `BaselineError`
@@ -1938,6 +1975,8 @@ treated as new, never tolerated. A baselined id that did not run is neither fail
 ### `[@ANCHOR: known_red:rerun_tags]` `rerun_tags(test_ids)`
 
 Purpose: the `--test-tags` value for the single rerun: `/module:Class.method` for each id, sorted, comma separated. Pure.
+
+Argument `test_ids`: an iterable of `<module>:<Class>.<method>` strings, the form `parse_failure_line` produces. The ids are sorted so the command line is stable and each gets a leading `/` (Odoo's `--test-tags` syntax for a module test). Duplicates are not removed and no validation is done; an empty input returns an empty string. Returns a string, never raises. Used to rerun only the first run's failures once. Test: `test_known_red.py`.
 
 ### `[@ANCHOR: known_red:PolicyOutcome]` `PolicyOutcome`
 
@@ -1984,6 +2023,8 @@ Purpose: how long a baseline entry is tolerated. Returns `HAMS_KNOWN_RED_MAX_AGE
 
 Purpose: `3.1 days`, or `12 hours` below one day, for summaries. Pure.
 
+Argument `days`: a float of days (a baseline entry's age). At one day or more it prints one decimal and `days`; below one it prints whole hours (`days * 24`, rounded by `%.0f`). Negative input prints a negative number of hours and nothing is validated. Used when summaries list how long a failure has been known red. Pure, no I/O. Test: `test_known_red.py`.
+
 ### `[@ANCHOR: known_red:show_lines]` `show_lines(baseline, max_age=None, clock=time.time)`
 
 Purpose: `known_red.py show`: the baseline, oldest entry first, each with age, `(EXPIRED: fails the run)` when past the limit, owner, first-seen commit, renewal reason if any, and its reason; one line saying it is empty when it is. Returns a list of lines. Pure.
@@ -1999,6 +2040,8 @@ Purpose: the command line `python3 hams_shared/tools/known_red.py show|renew`; `
 ### `[@ANCHOR: known_red:raw_outcome]` `raw_outcome(first)`
 
 Purpose: the outcome for `--raw-failures`: every failure red, nothing tolerated, nothing rerun. Returns a `PolicyOutcome` with `run_green` False. Pure.
+
+Argument `first`: the observation of the first run (an object with `failures`, records carrying `test_id` and `setup`, and `counted()`, the number of tests the run reported). Setup failures go to the setup list and test failures to the id list, each once and in order of appearance. The `PolicyOutcome` has no known-red or flaky sets, `run_green` False and a passed count of `counted() - len(failures)` floored at 0. Caller: `test.py` (line 1613) for `--raw-failures`, which the module bisection passes. Never reads the baseline or reruns anything. Test: `test_known_red.py`.
 
 ### `[@ANCHOR: known_red:git_head]` `git_head(directory)`
 
@@ -2068,6 +2111,16 @@ the caller uses the exit status to tell). Raises `BisectError` for a file that c
 
 Purpose: the command line of one trial. Returns a list: the Python interpreter, `test_py`, `-u` with the modules joined by commas, `--test-tags`, `--raw-failures`, `--wait`, `--solo`, `-l` the directory, then `extra`. Pure.
 
+| Argument | Type | Meaning |
+|---|---|---|
+| `test_py` | str | Path to `test.py`. |
+| `modules` | list of str | Modules for `-u`, kept in the given order. |
+| `test_tags` | str | The `--test-tags` selector, usually from `failure_tags`. |
+| `log_directory` | str | Where this trial's logs go (`-l`). |
+| `extra` | sequence | Further arguments appended unchanged. |
+
+`--raw-failures` makes `test.py` skip the known-red policy, `--wait` queues for a test slot and `--solo` opts out of batching so the trial measures only these modules. Returns a list; runs nothing. The interpreter is the current `sys.executable`. Test: `test_bisect_modules.py`.
+
 ### `[@ANCHOR: bisect_modules:Bisector]` `Bisector(test_py, fixed, test_tags, work_directory, targets=None, runner=None, extra=())`
 
 Runs trials and decides what reproduces. `fixed`: modules in every trial; `work_directory`: where `trial_NNN` directories are made (mode 0777, because the nested run may be another account); `targets`: the ids that must all fail
@@ -2082,6 +2135,13 @@ when the full run exited non-zero and wrote no results (it died; there is no ver
 ### `[@ANCHOR: bisect_modules:write_report]` `write_report(path, report)`
 
 Purpose: stores the report as JSON (indent 1, sorted keys), through a temporary file and an atomic replace; creates the directory. Raises `OSError` when it cannot write.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `path` | str | Destination file of the JSON report. |
+| `report` | dict | JSON-serialisable result of the bisection. |
+
+The file is written to `<path>.tmp<pid>` and moved into place with `os.replace`, so a reader sees the old report or the new one, never half of one; the directory is created with `exist_ok`. Nothing is returned. Called once at the end of the bisection (`bisect_modules.py` line 270). Test: `test_bisect_modules.py`.
 
 ### `[@ANCHOR: bisect_modules:run]` `run(args, test_py, tag_modules, runner=None, out=print, slots=1)`
 
@@ -2136,9 +2196,18 @@ Purpose: the commit that is `origin/main` now. `fetch` runs `git fetch -q origin
 
 Purpose: which hams_shared commit hams_open's tree records. Returns the id of the `hams_shared` gitlink (`git ls-tree`). Raises `SnapshotError` when there is none.
 
+| Argument | Type | Meaning |
+|---|---|---|
+| `open_repo` | str | Path of a hams_open git repository. |
+| `open_commit` | str | The hams_open commit whose tree is read. |
+
+It runs `git ls-tree <commit> hams_shared` and accepts only a `160000 commit <40 hex>` line, so a directory or symlink named `hams_shared` is refused with `SnapshotError`. Needed because hams_open pins hams_shared, and the gate must test the shared commit hams_open names, not shared main. Callers: `gate_snapshot.py` lines 445 and 486. Reads git only. Test: `test_gate_snapshot.py`.
+
 ### `[@ANCHOR: gate_snapshot:gate_dir_name]` `gate_dir_name(com_commit, open_commit)`
 
 Purpose: the snapshot directory name `gate_<9 hex>_<9 hex>`; the same commits give the same name, so a rerun reuses the tree. Pure.
+
+Arguments: `com_commit` and `open_commit`, full commit ids (only the first nine characters are used). Returns `gate_<9 hex>_<9 hex>`. The same pair gives the same directory so a rerun finds the tree; two pairs sharing nine-character prefixes would collide, which is accepted for a local scratch name. `build_snapshot` joins it to the parent directory (line 124). Pure, no I/O. Test: `test_gate_snapshot.py`.
 
 ### `[@ANCHOR: gate_snapshot:create_trees]` `create_trees(workspace, parent, com_commit, open_commit, shared_commit)`
 
@@ -2168,6 +2237,8 @@ is missing afterwards. Slow (Go build; cargo build, minutes cold). Side effects:
 ### `[@ANCHOR: gate_snapshot:discover_modules]` `discover_modules(trees)`
 
 Purpose: the whole-system module list: directories at the root of the hams_com and hams_open trees that contain `__manifest__.py`, sorted, unique. Pass `--shards-file` to keep a curated list's placement; modules absent from it are added.
+
+Argument `trees`: a `Trees` record; only its `com` and `open` paths are listed. Returns a sorted list of directory names that hold a `__manifest__.py`, from both trees and de-duplicated; a module present in both appears once. Raises `OSError` when either root cannot be listed (the caller at line 468 checks `isdir` first). Read-only. Used for the shard split (line 513) and to drop modules the curated shards file lists but no longer exist. Test: `test_gate_snapshot.py`.
 
 ### `[@ANCHOR: gate_snapshot:make_shards]` `make_shards(modules, count, previous=None)`
 
@@ -2248,9 +2319,19 @@ Purpose: `<state-dir>/note.txt`, the canary note that lists every tolerated item
 
 Purpose: the `--test-tags` of a bisection. Returns `/module:Class` for each distinct class among `module:Class.method` ids, sorted and comma separated (a whole class keeps its `setUpClass`); other ids are ignored. Pure.
 
+Argument `test_ids`: an iterable of `module:Class.method` strings. An id without a colon or without a dot after it is skipped, so setup failures and odd lines never widen the selector. Whole classes are chosen because a method alone loses its `setUpClass` database state. Returns a string such as `/hams_base:TestA,/zero_sudo:TestB`, empty when nothing qualified. Used before the bisection (line 432). Pure. Test: `test_gate_canary.py`.
+
 ### `[@ANCHOR: gate_canary:bisect_command]` `bisect_command(shard_command, tags, report_path)`
 
 Purpose: the bisection command of a shard: its command line with `--bisect-modules --test-tags <tags> --bisect-max-runs 30 --bisect-report <report_path>` appended, so the tree, environment, account and `-u` list are the shard's own. Pure.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `shard_command` | str | The shard's shell command line as already built. |
+| `tags` | str | From `failure_tags`. |
+| `report_path` | str | Where `bisect_modules.py` writes its JSON report. |
+
+The three bisect flags and `BISECT_MAX_RUNS` (30) are appended to the string; no quoting is added, so paths must be shell-safe. Returns the string; the caller (line 438) hands it to the runner with a log path. Pure. Test: `test_gate_canary.py`.
 
 ### `[@ANCHOR: gate_canary:choose_jobs]` `choose_jobs(requested, idle_cap, slots, shard_count, load=None)`
 
@@ -2269,6 +2350,13 @@ Long: the shards take as long as the whole-system run (about 75 minutes of tests
 ### `[@ANCHOR: gate_canary:main]` `main(argv=None, out=print)`
 
 Purpose: the command line. `run` returns `run_canary`'s status (1 also for unreadable results); `status` prints `status.json` and returns 0, or 1 when there is none.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `argv` | list or None | Arguments; `sys.argv[1:]` when None. |
+| `out` | callable | Line sink, default `print`. |
+
+`run` options: `--workspace`, `--parent`, `--state-dir`, `--shards`, `--shards-file`, `--jobs` (1), `--max-jobs-when-idle` (2), `--only-if-new-commit`, `--no-bisect`, `--no-fetch`, `--no-relay`. Exit codes: 0 green, 1 red or `CanaryError`, 2 refused, 3 already running; `status` prints `status.json` from the state directory. `run` fetches origin, builds a snapshot, runs shards (and the relay `cargo test`), and writes status; it never changes the working checkouts. Test: `test_gate_canary.py`.
 
 ### `[@ANCHOR: test:legacy_load_gate_ratio]` `legacy_load_gate_ratio(environ, ratio, say=print)`
 
@@ -2300,6 +2388,8 @@ so this in-step retry covers that case. Cache files: `~/.cache/hams-lint/pip-aud
 ### `[@ANCHOR: check_pip_audit:cache_hours]` `cache_hours(environ=None)`
 
 Returns the reuse window in hours: `HAMS_PIP_AUDIT_CACHE_HOURS` as a float of at least 0 (0 means off), else 6.0 for an unset, non-numeric, infinite, NaN or negative value. Pure.
+
+Argument `environ`: mapping replacing `os.environ`. Variable `HAMS_PIP_AUDIT_CACHE_HOURS` (`CACHE_HOURS_ENV`); unset or empty gives `DEFAULT_CACHE_HOURS` (6). The cache holds the result of a passing `pip-audit`, keyed by the pinned requirements, so a lint run within the window skips the network call; 0 disables reuse (checked at line 197). Non-numeric, infinite, NaN and negative values give the default instead of raising. Pure. Test: `test_check_pip_audit.py`.
 
 ### `[@ANCHOR: check_pip_audit:included_requirement_files]` `included_requirement_files(req_file)`
 
@@ -2771,6 +2861,12 @@ Pure. Tests: `AptSelectionTests`.
 Whether `apt-cache policy <pkg>` shows a candidate (anything but `(none)`). Read-only. Returns bool. Tests:
 `PrivateHelperTests`.
 
+| Argument | Type | Meaning |
+|---|---|---|
+| `pkg` | str | The Debian package name to look up. |
+
+Runs `apt-cache policy <pkg>` (no root needed, no network) and looks for `Candidate: <version>`. False for `(none)` or when the line is absent (an unknown package prints nothing useful). It never raises for a missing package; a missing `apt-cache` binary would raise `FileNotFoundError`. Called at line 382 so the install step can report packages no configured repository offers instead of failing inside `apt-get`.
+
 ### `[@ANCHOR: provision_test_environment:_apt_update_if_stale]` `_apt_update_if_stale(run, report, plan, now=None)`
 
 Runs `apt-get update -q` (retried) unless `APT_UPDATE_STAMP` (`/var/lib/hams-test-environment.apt-updated`) is younger
@@ -2797,11 +2893,15 @@ of names that had no candidate (for `provision_pip_packages()`). Raises `Runtime
 Returns the members of `names` (iterable of str) for which `installed(name)` is False, in order. Pure. Tests:
 `PipTests`.
 
+Arguments: `names` (iterable of distribution names, for example the `RUNTIME_PIP_PACKAGES` and `TEST_PIP_PACKAGES` lists of `infrastructure`) and `installed` (a callable `name -> bool`, normally the probe from `_pip_installed`). Order is preserved and duplicates stay. An empty result means everything is present. Callers at lines 421, 425 and 430 decide whether a pip install is needed. Pure; the callable does all the I/O.
+
 ### `[@ANCHOR: provision_test_environment:_pip_installed]` `_pip_installed(python)`
 
 Returns a probe `name -> bool`: whether `importlib.metadata.version(name)` succeeds in the interpreter `python` (a
 path), run as a subprocess so the answer is the system interpreter's, not this process's. Read-only. Tests:
 `PrivateHelperTests`.
+
+Argument `python`: path to the interpreter whose packages count (the system interpreter the Odoo test processes use). The probe runs `python -c "import importlib.metadata as m, sys; m.version(sys.argv[1])"` per name, so the answer matches that interpreter's `sys.path`, including a distribution-name spelling the metadata normalises. The returned `probe(name)` is True on exit status 0 and False on any other, including an interpreter that cannot start. Read-only; one subprocess per call.
 
 ### `[@ANCHOR: provision_test_environment:provision_pip_packages]` `provision_pip_packages(run, no_apt_candidate, report, python="/usr/bin/python3")`
 
@@ -2909,6 +3009,8 @@ time. Raises `CalledProcessError`. Tests: `MlAssetsTests`.
 Returns `[(version, cluster)]` (str, str) of the lines of `pg_lsclusters -h` whose status column is not `online`.
 Pure. Tests: `ServiceAndDatabaseTests`.
 
+Argument `pg_lsclusters_output`: the text of `pg_lsclusters -h` (columns version, name, port, status, owner, data directory, log). Lines with fewer than four columns are skipped; a cluster whose fourth column is anything but `online` (`down`, `down,recovery`) is returned as `(version, name)`. The caller (line 740) then starts each with `pg_ctlcluster`, so a test box whose cluster stopped after a reboot repairs itself. Pure.
+
 ### `[@ANCHOR: provision_test_environment:wait_until]` `wait_until(probe, timeout, interval=2, sleep=time.sleep, clock=time.monotonic)`
 
 Calls `probe()` (no arguments, returns bool) until it returns True, sleeping `interval` seconds between calls, for at
@@ -2927,6 +3029,13 @@ reach Redis as `redis`). Raises `StopIteration` when there is no such template a
 
 Returns the names of `alias_line` (after its address) that no `127.0.0.1` line of `hosts_text` lists, in order.
 Comments after `#` are ignored. Pure. Tests: `ServiceAndDatabaseTests.test_host_aliases`.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `hosts_text` | str | The contents of `/etc/hosts`. |
+| `alias_line` | str | A hosts line whose first field is the address; the rest are the names wanted. |
+
+Only lines whose first field is exactly `127.0.0.1` count (an `::1` line or another address does not); text after `#` is dropped. The result keeps the order of `alias_line`. Used at line 689 to append the missing names (such as `redis`) to the hosts file. Pure.
 
 ### `[@ANCHOR: provision_test_environment:provision_host_aliases]` `provision_host_aliases(report, plan=False, path="/etc/hosts")`
 
@@ -2963,6 +3072,8 @@ not a plain lower-case identifier (`[a-z_][a-z0-9_-]*`): it is interpolated into
 Returns the argv that runs `sql` (str) with psql as the postgres OS user against the `postgres` database
 (`-v ON_ERROR_STOP=1 -At -c`). Pure. Tests: `PrivateHelperTests`.
 
+Argument `sql` (str): one SQL command. Returns a list, not a string, so the SQL travels as a single `-c` argument with no shell quoting: `runuser -u postgres -- psql -d postgres -v ON_ERROR_STOP=1 -At -c <sql>`. `-At` gives unaligned, tuples-only output that callers split by line; `ON_ERROR_STOP=1` makes a failing statement exit non-zero. The helper runs nothing itself; callers (lines 779 to 812) run it as root, which `runuser` requires. The SQL is never taken from untrusted input: role and database names come from the provisioning layout.
+
 ### `[@ANCHOR: provision_test_environment:provision_database]` `provision_database(run, runner_user, report)`
 
 Purpose: step 8's database. Lists the roles and databases (read-only psql as postgres); runs `role_sql()` when `odoo`
@@ -2990,6 +3101,8 @@ Idempotent. Tests: `TestHostRequirementsTests`.
 
 Returns `{name: value}` for each `export NAME=value` line of a profile written by `profile_text()` (the value is
 shell-unquoted with `shlex`). Other lines are ignored. Pure. Tests: `ProfileTests`.
+
+Argument `text`: the contents of the profile written by `profile_text()` (the test environment file under `/etc/profile.d`). Only lines matching `export NAME=value` with an upper-case name count; the value is split with `shlex`, so quoting round-trips and an empty value gives `""`. Comments, blank lines and other statements are ignored, and a malformed quote raises `ValueError` from `shlex`. Called at line 874 so a rerun keeps the values (such as a generated key) already in the file instead of regenerating them. Pure.
 
 ### `[@ANCHOR: provision_test_environment:profile_text]` `profile_text(values)`
 
@@ -4330,6 +4443,8 @@ passed` on success; 1 and the test output on failure, on a build failure, or on 
 ### `[@ANCHOR: gate_canary:parse_cargo_failures]` `parse_cargo_failures(text)`
 
 Purpose: read the nightly relay run. Returns `{"failed": [paths], "passed": N}`: each `test <path> ... FAILED` line (sorted, unique) and the sum of the `N passed` counts. Pure. Tests: `RelaySuiteTests` in `test_gate_canary.py`.
+
+Argument `text`: the combined output of `cargo test --no-fail-fast`. `failed` collects each `test <path> ... FAILED` line (sorted and unique) and `passed` sums the `<N> passed` figures of all `test result:` lines, one per crate. Ignored lines include panics, doc-test noise and `ignored` counts. Called by `run_relay_suite` (line 131) after reading the log file. Pure. Test: `RelaySuiteTests` in `test_gate_canary.py`.
 
 ### `[@ANCHOR: gate_canary:relay_command]` `relay_command(relay_dir, target_dir)`
 
