@@ -16,3 +16,9 @@ This section must explicitly list the `external_dependencies` defined in the mod
 ## Consequences
 * **AI Resilience:** AI agents will accurately mock required libraries during test generation without hallucinating standard libraries.
 * **Cross-Repository Integration:** Developers and AI agents will immediately understand the environmental prerequisites of a module without needing to inspect its raw Python source code.
+
+## Status check 2026-11-12
+
+Checked against the repositories. Not yet true everywhere: of 28 modules that declare `external_dependencies` in `__manifest__.py`, 13 have a `README.md` without an "External Dependencies" section (hams_open: `edge_routing`,
+`form_shield`, `hams_rabbitmq`, `pager_duty`, `ses_webhook`, `user_websites`; hams_com: `content_security_policy`, `ham_base`, `ham_classifieds`, `ham_member_certs`, `ham_rig_reports`, `ham_satellite`, `ham_training`), and 12 of the
+23 files in `hams_shared/docs/modules/` lack it. No linter checks the section. The gap is recorded in the night-shift to-do for this audit.

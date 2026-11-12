@@ -41,3 +41,12 @@ Maintaining architectural cohesion across a large platform relies on strict docu
 
 ### 7. Human Time vs. Machine Time (The Time Protection Mandate)
 As a solo-maintainer, all architectural decisions MUST aggressively protect the administrator's time by shifting the diagnostic and operational burden to the system through exhaustive automated testing, shift-left data validation, and idempotent background jobs.
+
+## Status check 2026-11-12
+
+Checked against the repositories. Anchors, the inline-placement rule (no `ANCHOR_MANIFEST.md` exists) and the `COMM_` prefix work as described (`verify_anchors.py` strips `COMM_` and `PRI_` when it compares names). Differences:
+- Documentation boundaries (decision 4): `hams_shared/docs/deploy/` does not exist. Tactical deployment documents live in hams_com (`docs/deploy/`, `docs/runbooks/`, for example `01_deployment_and_provisioning.md`), which is private;
+  hams_shared's own `docs/runbooks/` holds the lint, test-batching and merge-queue runbooks and a few of them (`LINT_CACHES.md`, `ANCHOR_DOC_INVENTORY.md`) do contain command snippets.
+- "The CI/CD pipeline scans for orphaned or missing anchors and fails the build": the anchor scan (`verify_anchors.py`) and the burn-list linter run from `run_linters.py` on the dev box and in the batch cycle; GitHub CI
+  does not run them (ADR 0102, addendum).
+- `PRI_` is "reserved for `hams_private_primary`", a repository name that no longer matches any of the three repositories (hams_com is the private one); both prefixes are optional (ADR 0090 adds no new prefix convention).

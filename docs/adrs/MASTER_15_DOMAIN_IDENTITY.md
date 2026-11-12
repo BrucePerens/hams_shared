@@ -24,3 +24,10 @@ The platform relies on background daemons to perform cross-user lookups. Queryin
 2. **Strict Group Gating:** The views use SQL `JOIN` constraints to exclusively expose users belonging to the required domain groups. Standard Odoo ERP users are natively excluded.
 3. **Daemon Rerouting:** All external daemons, webhooks, and APIs MUST execute their searches against these shadow indexes.
 4. **The User Manager Proxy:** When a daemon finds a match in the index and must alter the actual user (e.g., flipping `is_identity_verified` to True), it escalates exclusively to the `user_manager_service_internal` account. This acts as a secure, one-way drawbridge into the core ERP.
+
+## Status check 2026-11-12
+
+Checked against `ham_onboarding`. The shadow view `ham.operator.index` exists (`ham_onboarding/models/ham_index.py`, with `ham.swl.index` beside it) and daemons read it (`adif_ingress`, `dx_firehose`). The verification matrix of decision 1
+has changed since it was written. Today's `onboarding_method` values are Ham-CAPTCHA, SWL registration, LoTW certificate, HamCall address-knowledge check (`hamcall_challenge`), administrator-set, and other; the Morse challenge was removed
+(its label is kept for members it already verified) and the QRZ.com profile challenge was removed (2026-10-19, see ADR 0093). LoTW was removed on 2026-10-23 and restored on 2026-10-24 only as a licence-verification method for a signed-in member
+(ADR 0101). The "Official FCC Email OTP" and manual uploaded-licence review remain verification routes; Verified Ham is granted through the routes listed in ADR 0101.
