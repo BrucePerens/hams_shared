@@ -232,10 +232,19 @@ class FindAnchorsInCodeTests(unittest.TestCase):
         # after all" reversal.
         island = va.CODE_ISLANDS_UNDER_DOCS[0]
         _write(os.path.join(self.tmp, island, "build_spec.py"), "# [@ANCHOR: patent_pipeline:x]\n")
-        _write(os.path.join(self.tmp, "docs", "proposals", "unrelated.py"), "# [@ANCHOR: should_never_appear:y]\n")
+        _write(os.path.join(self.tmp, "docs", "other", "unrelated.py"), "# [@ANCHOR: should_never_appear:y]\n")
         code_anchors, *_rest = self._scan()
         self.assertIn("patent_pipeline:x", code_anchors)
         self.assertNotIn("should_never_appear:y", code_anchors)
+
+    def test_radioctls_python_tools_are_scanned_as_code_though_named_tools(self):
+        # The scan prunes every directory called `tools`, which hid daemons/radioctl/tools/*.py: the story files
+        # cite those anchors as `radioctl:<id>` and every one was reported missing from the source code.
+        _write(os.path.join(self.tmp, "daemons", "radioctl", "tools", "caps.py"), "# [@ANCHOR: radioctl_caps_x]\ndef x(): pass\n")
+        _write(os.path.join(self.tmp, "daemons", "other", "tools", "t.py"), "# [@ANCHOR: other_t]\n")
+        code_anchors, *_rest = self._scan()
+        self.assertIn("radioctl:radioctl_caps_x", code_anchors)
+        self.assertNotIn("other:other_t", code_anchors)
 
     def test_a_rust_test_file_included_by_path_is_scanned_for_tests_links(self):
         # A crate that keeps its unit tests in `foo.rs.test`, pulled in with
