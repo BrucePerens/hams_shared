@@ -682,7 +682,7 @@ class PdnsPublicConfigTests(_TmpDirTestCase):
             self.assertGreaterEqual(reply["answers"], 1, (name, qtype))
         # Types we hold no record of, but that resolvers and browsers ask for any name, are an empty
         # NOERROR (NODATA), not REFUSED: refusing them would make resolvers distrust this server.
-        for qtype in (43, 44, 35, 64, 65):
+        for qtype in (43, 44, 35, 48, 64, 65):  # 48 DNSKEY: asked by validators once hams.com is signed; a small NODATA while unsigned
             reply = self._udp(port, self._packet("alias.u.example.org", qtype, bufsize=1232))
             self.assertEqual((reply["rcode"], reply["answers"]), (0, 0), qtype)
             self.assertLessEqual(reply["size"], 150, qtype)
@@ -690,8 +690,8 @@ class PdnsPublicConfigTests(_TmpDirTestCase):
     def test_unusual_query_types_are_refused_with_a_reply_no_larger_than_the_query(self):
         self._skip_without_pdns()
         port = self._start_shipped_pdns()
-        # ANY, IXFR, AXFR, MAILB, MAILA, TKEY, TSIG, DNSKEY, RRSIG, NSEC, NSEC3, NULL, WKS, HINFO, ISDN, unassigned, 0.
-        for qtype in (255, 251, 252, 253, 254, 249, 250, 48, 46, 47, 50, 10, 11, 13, 20, 99, 0, 65280):
+        # ANY, IXFR, AXFR, MAILB, MAILA, TKEY, TSIG, RRSIG, NSEC, NSEC3, NULL, WKS, HINFO, ISDN, unassigned, 0.
+        for qtype in (255, 251, 252, 253, 254, 249, 250, 46, 47, 50, 10, 11, 13, 20, 99, 0, 65280):
             for name in ("alias.u.example.org", "k6bp.callbook.example.org", "u.example.org", "www.example.com"):
                 query = self._packet(name, qtype, bufsize=4096)
                 reply = self._udp(port, query)
@@ -820,8 +820,8 @@ class PdnsPublicConfigTests(_TmpDirTestCase):
         self.assertIn("pcall(", script, "a changed PowerDNS API must not SERVFAIL every query")
         self.assertEqual(sorted(set(re.findall(r"\bp:(\w+)\(", script))), ["getQuestion", "setRcode"])
         served = {int(n) for n in re.findall(r"\[(\d+)\] = true", script)}
-        self.assertEqual(served, {1, 2, 5, 6, 15, 16, 28, 29, 33, 35, 43, 44, 64, 65, 257})
-        for never in (255, 251, 252, 48, 46, 47):
+        self.assertEqual(served, {1, 2, 5, 6, 15, 16, 28, 29, 33, 35, 43, 44, 48, 64, 65, 257})
+        for never in (255, 251, 252, 46, 47):
             self.assertNotIn(never, served)
 
 
