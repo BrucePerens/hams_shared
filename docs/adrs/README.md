@@ -148,6 +148,19 @@ This directory contains the Architecture Decision Records (ADRs) that define the
 * [ADR 0111: Tests Run As the Personas of Production](0111_tests_run_as_the_personas_of_production.md)
   Bruce's 2026-10-26 decision after two incidents a green suite missed (an event cron whose service account could not write its action's model; a pager record rule that hid every website's incidents from admins, who have no website): `zero_sudo/tests/test_persona_support.py` holds a catalogue of production users, `@personas` runs a test once per persona chosen from the cron, route or model under test, two sweeps check every cron's gate and every record rule against an empty user attribute, and the pre-commit hook fails closed and refuses files over 5 MB and `target/` directories.
 
+* [ADR 0113: Anchors Explain Their Function or Data Structure Completely](0113_anchors_explain_their_function_or_data_structure_completely.md)
+  Every anchor, for functions and for data structures, gets a documentation entry complete enough to use without reading the code (purpose, call interface, special concerns, example, see-also).
+* [ADR 0114: The External Programs the Relay Uses Are Inventoried, Pinned and Watched](0114_external_programs_the_relay_uses_are_inventoried_pinned_and_watched.md)
+  Every program the relay launches or detects is in a table with its pin and licence, and a weekly dependency watch plus a checker fails when one is missing.
+* [ADR 0115: Lint and Test Runs Coalesce into Batches](0115_lint_and_test_runs_coalesce_into_batches.md)
+  Per machine, repository and kind there is one running and one forming batch; branches queued meanwhile are merged into one combined tree and run once, and each caller still gets its own verdict.
+* [ADR 0116: A Machine Can Opt In to Several Concurrent test.py Runs (Slots)](0116_concurrent_test_slots.md)
+  Opt-in test slots (1 to 15), each with its own lock, database, port, Redis database and file names; the default stays one.
+* [ADR 0117: A Known-Red Baseline for Lint, and a Merge Queue](0117_known_red_baseline_and_merge_queue.md)
+  Lint failures that already exist on main are recorded in a machine-local baseline and tolerated for a limited time, and a merge queue lints queued pull requests together.
+* [ADR 0118: Known-Red Baseline, One Flake Rerun, and an Automatic Whole-System Canary](0118_known_red_baseline_flake_rerun_and_the_whole_system_canary.md)
+  Known-red tests do not turn a whole-system run red, a failure is rerun once to separate flakes, a minimal-module bisect and a stale-input-refusing gate tree exist, and a nightly canary writes the baseline.
+
 ## Further Standard ADRs (listed by title only)
 
 These ADRs are in this directory and are cited by other documents; they have no summary above yet.

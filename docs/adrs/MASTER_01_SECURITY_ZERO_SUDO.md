@@ -49,3 +49,8 @@ To prevent Remote Code Execution (RCE) escalation from background tasks:
 * **Chrooted Privilege De-escalation:** Daemons without network needs (e.g., Log Analyzers) MUST start as `root` to access `/var/log`, immediately `chroot`, drop all Linux kernel bounding capabilities, and de-escalate to `nobody:adm`.
 * **Systemd Sandboxing:** Network daemons MUST be sandboxed via systemd (`ProtectSystem=strict`, `PrivateTmp=true`, `PrivateDevices=true`, `NoNewPrivileges=true`).
 * **Airgapped Hardware Spooling:** If a sandboxed daemon needs hardware telemetry (like SMART disk health, the self-monitoring data a disk reports), a separate, highly privileged sidecar script MUST execute via a systemd `.timer` and write a serialized JSON file into a read-only spool directory for the unprivileged daemon to read.
+
+## Status check 2026-11-12
+
+Checked against the code. The "Mechanical God-Mode Block" is enforced in the PostgreSQL function `zero_sudo_get_service_uid()` (hams_open `zero_sudo/data/postgres_procedures.xml`), which `_get_service_uid` calls: it refuses a missing, disabled or human
+account and an account that holds `base.group_system` or `base.group_erp_manager` directly or through Odoo's implied-group chain. Section 6's log-analyzer chroot and drop to `nobody:adm` is `pager_duty/daemon/pager_log_analyzer.py`.
