@@ -1,6 +1,4 @@
 [
-  "daemons/bench_mcp/src/vna.rs::status",
-  "daemons/bench_mcp/src/vna.rs::sweep",
   "daemons/ham_digital_modes/docs/references/codec2_fixedpoint_codegen_check/src/lib.rs::panic",
   "daemons/ham_digital_modes/tools/codec2_riscv32_bench/src/main.rs::Uart::write_str",
   "daemons/ham_digital_modes/tools/codec2_riscv32_bench/src/main.rs::exit",
