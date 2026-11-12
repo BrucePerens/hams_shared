@@ -22,4 +22,4 @@ Because `AbstractModels` do not possess backing database tables, standard Odoo L
 ## Status check 2026-11-12
 
 Checked against `ham_dx_cluster`. `ham.dx.spot` is an `AbstractModel` that pushes spots to a Redis sorted set and `bus.bus` and writes no spot row; the cache keeps 4 hours and a cron prunes it every 15 minutes (`_cron_prune_redis`).
-One table now exists beside it: `ham.dx.spot.daily` (`ham_dx_spot_daily.py`), a counts-only history per DXCC entity and UTC day that a cron drains from Redis. It holds no callsign, spotter or remark, so the mandate that individual spots are never written still holds.
+One table now exists beside it: `ham.dx.spot.daily` (`ham_dx_spot_daily.py`), a counts-only history per DXCC entity (a country or territory on the DX Century Club list, the ARRL award list used for DX contacts) and UTC day that a cron drains from Redis. It holds no callsign, spotter or remark, so the mandate that individual spots are never written still holds.
