@@ -5,8 +5,8 @@
 *Anchor tags: each bracketed anchor tag below is a Semantic Anchor, a marker that ties one function to its test and to its documentation; the `COMM_` prefix marks anchors owned by `hams_open`. See [MASTER 11](../adrs/MASTER_11_DEVELOPMENT_WORKFLOW_DOCS.md) and [ADR-0090](../adrs/0090_universal_function_test_anchor_ratchet.md).*
 
 ### 1. Public Email-Policy Pages
-Public, unauthenticated compliance page at `/email-policy` listing the kinds of email the platform sends (anti-spam and legal disclosure). While outgoing email is limited (for example an Amazon SES sandbox), `/email-policy` and `/unsubscribe` also show the plain-text notice from the `hams_base.email_delivery_notice` system parameter (empty by default) [@ANCHOR: hams_base:website_email_delivery_notice].
-* **Email Policy Disclosure Page:** [@ANCHOR: hams_base:COMM_email_policy_route]
+Public, unauthenticated compliance page at `/email-policy` listing the kinds of email the platform sends (anti-spam and legal disclosure). While outgoing email is limited (for example an Amazon SES sandbox), `/email-policy` and `/unsubscribe` also show the plain-text notice from the `hams_base.email_delivery_notice` system parameter (empty by default), read by `hams_base:website_email_delivery_notice`.
+* **Email Policy Disclosure Page:** the route `hams_base:COMM_email_policy_route`. Both anchors have their own entry under "Email-policy anchor reference" at the end of this file.
 
 ### 2. Self-Service Unsubscribe / Account Lockout
 Lets a member deactivate their own account: `/unsubscribe` offers a link to email preferences or, for a logged-in user, a total account lockout, and `POST /unsubscribe/lockout` (logged-in users only) deactivates the account, logs the session out and can be reversed only by an administrator (routed through a dedicated service account, since Odoo's own `res.users.write()` refuses to let a user deactivate their own live session).
@@ -193,3 +193,25 @@ None beyond the shared `res.partner`/`res.users`/`mail.thread` core models this 
 **Why.** Core upserts the visitor row and inserts a track on every tracked page response; concurrent requests on one session caused PostgreSQL serialization failures and retried requests, ending in 500s under load.
 
 **See also.** Test `tests/test_visitor_track_dedup.py`; the 30-minute window matches core's own `_add_tracking`.
+
+## Email-policy anchor reference
+
+### `hams_base:COMM_email_policy_route` [@ANCHOR: hams_base:COMM_email_policy_route]
+`EmailPolicyController.email_policy(self, **kw)` in `hams_base/controllers/email_policy.py` serves the public page `/email-policy` (`@http.route('/email-policy', type='http', auth='public', website=True)`). It renders the QWeb template `hams_base.email_policy_template`, which lists the kinds of email the platform sends (anti-spam and legal disclosure).
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `**kw` | dict | Any query-string or form parameters; all are ignored. |
+
+**Returns:** the rendered website page, HTTP 200. **Errors:** none of its own; the route accepts any HTTP method because no `methods=` is set. **Security:** `auth='public'` so anonymous visitors can read it, which is the point (it is a disclosure page); it reads no user input, writes nothing and takes no locks. The limited-delivery notice shown inside the template comes from `hams_base:website_email_delivery_notice`.
+
+**See also:** test `test_email_policy_page_reachable` in `hams_base/tests/test_unsubscribe.py` (anonymous GET returns 200 and contains "How We Use Email"), and the template anchor `hams_base:email_policy_template`.
+
+### `hams_base:website_email_delivery_notice` [@ANCHOR: hams_base:website_email_delivery_notice]
+`website.email_delivery_notice(self)` in `hams_base/models/website.py` (decorated `@api.private` and `@api.model`) returns the plain-text notice shown on `/email-policy` and `/unsubscribe` while outgoing email is limited, for example while an Amazon SES account is still in its sandbox. Templates call it as `website.email_delivery_notice()` and show an alert only when the result is non-empty.
+
+**Arguments:** none besides `self`. **Returns:** a `str`, the value of the system parameter `hams_base.email_delivery_notice`; the empty string by default, which is the open-source default and shows nothing. **Errors:** none of its own.
+
+**Security and design:** `/email-policy` is a website page, so no controller supplies context to it, and a public visitor cannot read `ir.config_parameter`. The read therefore goes through `zero_sudo.security.utils._get_system_param`, the whitelisted reader, rather than `sudo()`. The text is not a secret. It makes one parameter read, no writes, and holds no lock.
+
+**See also:** test `test_email_delivery_notice_shows_only_when_configured` in `hams_base/tests/test_unsubscribe.py`, the template in `hams_base/views/unsubscribe_templates.xml`, and `hams_base:COMM_email_policy_route`.

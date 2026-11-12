@@ -98,9 +98,9 @@ sudo pagerduty-maintenance end
 The module follows a **Command Query Responsibility Segregation (CQRS)** pattern. Odoo serves as the configuration and reporting plane, while standalone Python daemons handle the high-frequency execution loops.
 
 ### Key Components:
-*   **Control Plane:** Odoo records (`pager.check`) define what to monitor. [@ANCHOR: generalized_pager_config]
+*   **Control Plane:** Odoo records (`pager.check`) define what to monitor; `generalized_pager_config` exports them to the daemon.
 *   **Data Plane (Daemons):**
-    *   `generalized_monitor.py`: Executes standard checks (HTTP, TCP, SQL, etc.) via a micro-privilege service account. It is designed to "fail fast" if system dependencies are missing. [@ANCHOR: daemon_execute_check]
+    *   `generalized_monitor.py`: Executes standard checks (HTTP, TCP, SQL, etc.) via a micro-privilege service account. It is designed to "fail fast" if system dependencies are missing. Its dispatcher is `daemon_execute_check`.
         A missing binary is first requested from Odoo through `rpc_ensure_executable` (12 attempts, 10 seconds apart); if it still cannot be provisioned, the daemon reports a critical "Daemon Boot" incident and exits.
 
     *   `pager_log_analyzer.py`: Tails system logs for regex matches in real-time. It runs chrooted to `/var/log`, drops all kernel capabilities, and de-escalates to `nobody:adm`. [@ANCHOR: COMM_pd_log_api_i18n]
@@ -251,3 +251,30 @@ Daemon tests (for example `test_generalized_monitor.py`, `test_pager_log_analyze
 **Special concerns.** Read-only, one query. Not callable over RPC.
 
 **Tests.** `tests/test_schedule_edge_cases.py` (for example `test_02_overlapping_shifts_same_create_date_highest_id_wins`) and `tests/test_incident.py`.
+
+## Control-plane and daemon anchor reference
+
+### `generalized_pager_config` [@ANCHOR: generalized_pager_config]
+`pager.check.action_push_to_json(self)` in `pager_duty/models/pager_check.py` (decorated `@public_rpc`) exports the monitoring configuration from Odoo to the JSON file the daemons read. It searches up to 1000 active `pager.check` records and builds one dict per check, with `id`, `name`, `type`, `target` and `interval` always, and only the optional keys that are set: `port`, `send`, `send_hex`, `expect`, `dbname`, `user`, `password`, `query`, `script`, `rpc_method`, `rpc_params`, `regex`, `critical`, `warning`, SNMP keys, `partition`, `ignored_services`, `grace`, `max_age`, `threshold` (only when above 1), `parent_id` and `parent`, `maint_start` and `maint_end`, `remediate`, `comment`, `uuid` for heartbeats, `website_id` and the sandbox keys.
+
+It also writes `log_analyzer` (active `pager.log.file` paths and up to 1000 active `pager.log.pattern` rows) and `odoo_database`. The target path comes from `_get_config_path` (`generalized_pager_config_path`).
+
+**Arguments:** only `self`. **Returns:** an `ir.actions.client` `display_notification` dict: success ("Import Successful"-style, not sticky) or, if the file cannot be written, a sticky `danger` "Export Failed" notification naming the path and OS error, so an admin is never told a stale configuration was exported. **Errors:** an `OSError` is caught and reported that way.
+
+**Security:** the file embeds plaintext database and SMTP passwords, so it is created with `os.open(..., 0o600)` and tightened with `os.fchmod` before any credential is written, which also fixes an older, more permissive file. It writes a file on the Odoo host and holds no explicit lock; rerunning is safe.
+
+**See also:** tests `test_02_autodiscovery`, `test_06b_export_tightens_the_mode_of_an_already_existing_config_file` and `test_06c_export_names_a_childs_parent_by_id_as_well_as_by_name`, and `generalized_pager_config_path`.
+
+### `daemon_execute_check` [@ANCHOR: daemon_execute_check]
+`execute_check(check, client=None)` in `pager_duty/daemon/generalized_monitor.py` runs one configured check and reports the outcome. The polling thread (`one_pass`) calls it every interval, then records the status and reports or resolves an incident; the daemon also calls it from a one-off path.
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `check` | dict | One entry of the exported JSON; `type` selects the branch, `target` (after `parse_env` expansion) names the thing checked, and the optional keys of `generalized_pager_config` tune it (for example `port`, `critical`, `user`, `password`). |
+| `client` | RPC client or `None` | Needed only by checks that ask Odoo, such as `heartbeat`, which returns `(False, "Client not provided for heartbeat")` without it. |
+
+**Returns:** a tuple `(success: bool, message: str)`; the message is `"OK"` or a short reason. **Check types** include `system` (disk, memory, cpu, iowait, steal), `load`, `ftp`, `imap`, `pop3`, `mysql`, `ldap`, `ntp`, `snmp`, `dns`, `http`, `http3`, `tcp`, `udp`, `redis`, `rabbitmq`, `xmlrpc`, `jsonrpc`, `postgres`, `anomaly`, `ssl`, `synthetic`, `certbot`, `pg_dump`, `nginx`, `logrotate`, `cloudflared`, `smtp_dryrun`, `icmp`, `docker`, `memcached`, `ssh`, `heartbeat` and `smart`; an unknown type is not covered here (to-do: document the fall-through result).
+
+**Errors and side effects:** each branch catches its own failures, logs a warning and returns `(False, reason)` instead of raising. It is blocking, with socket timeouts of a few seconds, and runs on the check's own polling thread. Some branches run external programs found through `ensure_executable`, or read a spool file (`smart` reads `/var/log/pager_smart_spool.json`, stale after 30 minutes). Credentials come from the config file and are never logged.
+
+**See also:** test `test_04_dns_checks` in `pager_duty/tests/test_generalized_monitor.py`, and `generalized_pager_config`.
