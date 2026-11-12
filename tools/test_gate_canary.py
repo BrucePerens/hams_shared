@@ -296,6 +296,15 @@ class RunTests(unittest.TestCase):
         self.assertEqual(self.commands, [])
 
     # Tests [@ANCHOR: gate_canary:run_canary]
+    def test_origin_main_moving_during_a_long_run_does_not_stop_later_shards(self):
+        """The first real canary (2026-11-11): shards 2 to 4 refused to run because merges moved origin/main during shard 1."""
+        moved = ["com is behind origin/main: snapshot 0effe9ea133c, origin/main 584e40968bb9"]
+        with unittest.mock.patch.object(gate_snapshot, "verify_snapshot", return_value=moved):
+            code, status = self.run_canary({})
+        self.assertEqual(status["shard_errors"], [])
+        self.assertTrue(self.commands)
+
+    # Tests [@ANCHOR: gate_canary:run_canary]
     def test_only_if_new_commit_skips_an_unchanged_origin(self):
         self.run_canary({})
         self.commands.clear()

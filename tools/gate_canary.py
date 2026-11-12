@@ -343,6 +343,9 @@ def run_canary(workspace=gate_snapshot.DEFAULT_WORKSPACE, parent=None, state_dir
         directory = os.path.join(trees["parent"], "logs", "shard%d" % (index + 1))
         problems = gate_snapshot.verify_snapshot(trees["parent"], fetch=False, environ={gate_snapshot.OPEN_TREE_ENV: trees["open"]},
                                                  cargo_target_dir=manifest["cargo_target_dir"])
+        # origin/main moving while an earlier shard ran is normal (merges); the snapshot was current when it was made and the
+        # status names its commits, so only a damaged tree or artifact stops a later shard.
+        problems = [problem for problem in problems if "is behind origin/main" not in problem]
         if problems:
             return {"number": index + 1, "modules": shard_modules[index], "exit_status": 2, "results": None, "problems": problems}
         for stale in glob.glob(os.path.join(directory, "test_results*.json")):
