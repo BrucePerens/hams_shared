@@ -278,6 +278,7 @@ daemons/radioctl/docs/stories/radioctl_function_anchors_52.md
 daemons/radioctl/docs/stories/radioctl_function_anchors_53.md
 daemons/radioctl/docs/stories/radioctl_function_anchors_54.md
 daemons/radioctl/docs/stories/radioctl_function_anchors_55.md
+daemons/radioctl/docs/stories/radioctl_function_anchors_56.md
 daemons/radioctl/fuzz/fuzz_targets
 daemons/radiod_client/fuzz/fuzz_targets
 daemons/relay_broker/examples
