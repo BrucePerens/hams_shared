@@ -52,6 +52,7 @@ daemons/aprs_is_sync
 daemons/au_acma_sync
 daemons/au_pii_sync
 daemons/auth_cert_renew/README.md
+daemons/bench_mcp/docs/stories/sa_core.md
 daemons/bench_mcp/glasgow
 daemons/bench_mcp/src/manual
 daemons/bench_mcp/tests
