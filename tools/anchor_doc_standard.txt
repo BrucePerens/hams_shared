@@ -584,6 +584,7 @@ ham_profile/migrations/0.2
 ham_profile/tests
 ham_propagation/static/tests
 ham_propagation/tests
+ham_repeater_dir/README.md
 ham_relay_bridge/migrations/1.1
 ham_relay_bridge/migrations/1.2
 ham_relay_bridge/migrations/1.3
