@@ -896,3 +896,8 @@ daemons/hams_simulated_bots/docs/stories/hams_simulated_bots_function_anchors_08
 daemons/hams_simulated_bots/docs/stories/hams_simulated_bots_function_anchors_09.md
 docs/stories/hams_simulated_band.md
 docs/stories/daemons_simulated_bots_qso_test_reference.md
+ham_relay_bridge/docs/stories/relay_bridge_reference.md
+ham_relay_bridge/docs/stories/relay_bridge_integration.md
+ham_onboarding/README.md
+ham_onboarding/docs/stories/18_onboarding_helper_functions.md
+ham_events/README.md
