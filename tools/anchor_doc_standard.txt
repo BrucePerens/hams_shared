@@ -614,3 +614,4 @@ daemons/hams_local_relay/docs/stories/station_locations.md
 daemons/shack_console/docs/stories/allstar_mode.md
 daemons/shack_console/docs/stories/non_visual_spoken_status.md
 daemons/shack_console/docs/stories/console_panel_helpers.md
+daemons/loupedeck_ct/docs/stories/loupedeck_ct_driver.md
