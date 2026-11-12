@@ -1,11 +1,4 @@
 [
-  "ham_dns/static/src/js/dns_map.js::DnsRecordMap._initLeaflet",
-  "ham_dns/static/src/js/dns_map.js::DnsRecordMap._initMap",
-  "ham_dns/static/src/js/dns_map.js::DnsRecordMap._renderMarkers",
-  "ham_dns/static/src/js/dns_map.js::DnsRecordMap.destroy",
-  "ham_dns/static/src/js/dns_map.js::DnsRecordMap.setup",
-  "ham_dns/static/src/js/dns_portal.js::HamDnsPortal._onTypeChange",
-  "ham_dns/static/src/js/dns_portal.js::HamDnsPortal.setup",
   "ham_dx_cluster/static/src/js/dx_cluster_widget.js::DXClusterGrid.onCallsignFilterInput",
   "ham_dx_cluster/static/src/js/dx_cluster_widget.js::DXClusterGrid.setup",
   "ham_dx_cluster/static/src/js/dx_cluster_widget.js::t-component",
