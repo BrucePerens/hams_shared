@@ -608,6 +608,7 @@ ham_rig_reports/tests
 ham_rig_reports/tools
 ham_rpc_guard_config
 ham_rpc_guard_config/README.md
+hams_ai_safety_reporting/README.md
 hams_ai_safety_reporting/migrations/1.1
 hams_ai_safety_reporting/tests
 ham_satellite/README.md
@@ -876,6 +877,7 @@ daemons/radioctl/docs/stories/radioctl_function_anchors_41.md
 daemons/radioctl/docs/stories/radioctl_function_anchors_42.md
 daemons/radioctl/docs/stories/radioctl_function_anchors_43.md
 daemons/radioctl/README.md
+daemons/relay_broker/README.md
 daemons/hams_local_relay/docs/stories/relay_function_anchors_signature_callbook_dvk_spots_gain.md
 daemons/hams_local_relay/docs/stories/relay_function_anchors_rtc_webrtc_http_txsetup.md
 daemons/hams_local_relay/docs/stories/relay_function_anchors_civ_upnp_ml_txsetup_cloud.md
