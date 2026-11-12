@@ -2,8 +2,6 @@
   "daemons/hams_local_relay/src/audio_identify.rs::CpalIdentifyBackend::capture",
   "daemons/hams_local_relay/src/audio_identify.rs::CpalIdentifyBackend::play",
   "daemons/hams_local_relay/src/audio_identify_routes.rs::repair_interrupted_test",
-  "daemons/hams_local_relay/src/audio_reservation.rs::ZbusBus::request_name",
-  "daemons/hams_local_relay/src/audio_reservation.rs::ZbusBus::request_release",
   "daemons/hams_local_relay/src/audio_tx_levels_route.rs::install_from_config",
   "daemons/hams_local_relay/src/audio_tx_setup_routes.rs::LiveTxRig::tone_step",
   "daemons/hams_local_relay/src/audio_tx_setup_routes.rs::repair_pending_at_startup",
