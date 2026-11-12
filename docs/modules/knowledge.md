@@ -11,25 +11,25 @@ primary definition, not a wrapper around or accidental duplicate of the real one
 Roughly a dozen "Help" links across other modules were written assuming Odoo's real (proprietary)
 Knowledge module's own URL shape, `/knowledge/home?search=...`, rather than this module's own
 `/manual/*` routes.
-* **`/knowledge/home` Alias:** `[@ANCHOR: knowledge:COMM_knowledge_home_alias]` -- calls the exact-name lookup directly (not an HTTP redirect to it, so the caller's `#anchor` fragment survives), and renders the substring search-results page (`/manual/search`) when no article has that name, or when `search` is empty.
+* **`/knowledge/home` Alias:** [@ANCHOR: knowledge:COMM_knowledge_home_alias] -- calls the exact-name lookup directly (not an HTTP redirect to it, so the caller's `#anchor` fragment survives), and renders the substring search-results page (`/manual/search`) when no article has that name, or when `search` is empty.
 
-* **Exact-Match Article Lookup:** `[@ANCHOR: knowledge:COMM_manual_article_by_name]` -- `/manual/by_name/<name>` (a `+` in the name is read as a space), the lookup `knowledge_home_alias` delegates to rather than duplicating. The match is case-insensitive but otherwise exact: `%`, `_` and backslash in the name are escaped so they cannot act as wildcards. A match redirects to the article's `website_url`; no match answers 404. Staff in the internal-user group see any matching article; everyone else sees only published articles or those whose `member_ids` include them.
+* **Exact-Match Article Lookup:** [@ANCHOR: knowledge:COMM_manual_article_by_name] -- `/manual/by_name/<name>` (a `+` in the name is read as a space), the lookup `knowledge_home_alias` delegates to rather than duplicating. The match is case-insensitive but otherwise exact: `%`, `_` and backslash in the name are escaped so they cannot act as wildcards. A match redirects to the article's `website_url`; no match answers 404. Staff in the internal-user group see any matching article; everyone else sees only published articles or those whose `member_ids` include them.
 
 ### 2. Article Computed Fields
-* **Author Resolution:** `[@ANCHOR: knowledge:COMM_compute_author_id]` -- `write_uid` (the last writer), falling back to `create_uid`; stored, and recomputed when either changes.
+* **Author Resolution:** `knowledge:COMM_compute_author_id` -- `write_uid` (the last writer), falling back to `create_uid`; stored, and recomputed when either changes.
 
-* **Plain-Text Body Preview:** `[@ANCHOR: knowledge:COMM_compute_body_snippet]` -- a snippet of the article body, tag-stripped and whitespace-collapsed, cut to its first 300 characters (empty when the body is empty).
+* **Plain-Text Body Preview:** `knowledge:COMM_compute_body_snippet` -- a snippet of the article body, tag-stripped and whitespace-collapsed, cut to its first 300 characters (empty when the body is empty).
 
 ### 3. Article Duplication
-* **Copy Override:** `[@ANCHOR: knowledge:COMM_copy]` -- preserves the parent/child hierarchy while giving the duplicate a distinct "(copy)"-suffixed name.
+* **Copy Override:** `knowledge:COMM_copy` -- preserves the parent/child hierarchy while giving the duplicate a distinct "(copy)"-suffixed name.
 
 ### 4. Website Search Integration
 Found live 2026-08-29 across three separate usability-audit personas: the site's own search never
 covered knowledge articles at all, only products/blog/pages -- a genuinely public, published manual
 article was completely unfindable through search.
-* **Article Search Detail Provider:** `[@ANCHOR: knowledge:COMM_search_get_detail]` -- registers `knowledge.article` with website's search dispatch, matching the same pattern `website_blog` uses for `blog.post`; enforces the same internal-staff-sees-everything / everyone-else-published-or-member-only visibility rule the search controller (`/manual/search`) uses. Matching is on the article name, and also on the body when the search asks for descriptions.
+* **Article Search Detail Provider:** [@ANCHOR: knowledge:COMM_search_get_detail] -- registers `knowledge.article` with website's search dispatch, matching the same pattern `website_blog` uses for `blog.post`; enforces the same internal-staff-sees-everything / everyone-else-published-or-member-only visibility rule the search controller (`/manual/search`) uses. Matching is on the article name, and also on the body when the search asks for descriptions.
 
-* **Website Search Dispatch Hook:** `[@ANCHOR: knowledge:COMM_website_search_get_details]` -- `website._search_get_details()`'s own override that appends the knowledge-article search detail when the search type is `knowledge_articles` or `all`.
+* **Website Search Dispatch Hook:** `knowledge:COMM_website_search_get_details` -- `website._search_get_details()`'s own override that appends the knowledge-article search detail when the search type is `knowledge_articles` or `all`.
 
 ## External Dependencies
 
@@ -38,3 +38,53 @@ article was completely unfindable through search.
 ## Cross-Module Interfaces
 
 None beyond the shared `website`/`res.users` core models this module extends.
+
+## Anchor reference
+
+### `knowledge:COMM_compute_author_id` [@ANCHOR: knowledge:COMM_compute_author_id]
+
+**Purpose.** Gives each knowledge article a stored "author" for display and filtering: the last person to edit it, or its creator when no edit has been recorded.
+
+**Where.** `_compute_author_id` on `knowledge.article` (`knowledge/models/knowledge_article.py`), `@api.depends("create_uid", "write_uid")`; the field is `author_id`, a `Many2one` to `res.users`, `store=True`.
+
+**Behaviour.** For each record it sets `author_id = write_uid or create_uid`. It is recomputed whenever either user field changes, so editing an article changes its author to the editor. No database queries beyond the stored write.
+
+**Special concerns.** "Author" therefore means last writer, not original creator. The value is shown to anyone who can read the article.
+
+**See also.** Test `test_02_ui_enhancements_rendering` in `knowledge/tests/test_ui_enhancements.py` (the author equals the creating user).
+
+### `knowledge:COMM_compute_body_snippet` [@ANCHOR: knowledge:COMM_compute_body_snippet]
+
+**Purpose.** Builds the short plain-text preview that search results and article lists show for an article.
+
+**Where.** `_compute_body_snippet` on `knowledge.article`, `@api.depends("body")`, non-stored field `body_snippet` (Text).
+
+**Behaviour.** For a non-empty body it calls `_plain_text_preview(body)` (a helper that returns the words with no markup, no decoration such as `**` for headings and no HTML comments), collapses all whitespace runs to single spaces, and keeps the first 300 characters. An empty body gives an empty string.
+
+**Special concerns.** Core `html2plaintext` was not used directly because it renders headings as `**...**` and emphasis as `/.../`; that leaked decoration and maintainer-only HTML comments into public snippets. The snippet is cut at a character boundary, not at a word.
+
+**See also.** Tests in `knowledge/tests/test_ui_enhancements.py` (`test_01...`, no `**`, no leaked comment text); `knowledge:plain_text_preview`.
+
+### `knowledge:COMM_copy` [@ANCHOR: knowledge:COMM_copy]
+
+**Purpose.** Makes "Duplicate" on an article produce a distinguishable copy instead of two articles with the same name.
+
+**Signature.** `copy(self, default=None)` on `knowledge.article`; `default` is the usual dict of field overrides. Returns the new article record.
+
+**Behaviour.** When the caller gives no `name` in `default`, it sets the name to "<original name> (copy)" (translated), then calls `super().copy(default)`. Everything else, including `parent_id`, comes from the normal ORM copy, so a copy of a child stays under the same parent. A caller-supplied name is respected unchanged.
+
+**Special concerns.** The copy's `website_url` slug comes from the new name through the compute method.
+
+**See also.** Test `test_03_copy_article` in `knowledge/tests/test_ui_enhancements.py` (parent kept, name contains "(copy)").
+
+### `knowledge:COMM_website_search_get_details` [@ANCHOR: knowledge:COMM_website_search_get_details]
+
+**Purpose.** Plugs knowledge articles into the website's search, which by default covers only products, blog posts and pages, so a published manual article could not be found by search.
+
+**Signature.** `_search_get_details(self, search_type, order, options)` on `website` (`knowledge/models/website.py`). Arguments are those of core's `website._search_get_details`; it returns the list of search-detail dicts.
+
+**Behaviour.** It calls `super()` and, when `search_type` is `knowledge_articles` or `all`, appends the dict from `knowledge.article._search_get_detail(website, order, options)` (`knowledge:COMM_search_get_detail`), which matches on the article name (and body when descriptions are requested) and applies the visibility rule: staff see all, others see only published or member-shared articles.
+
+**Special concerns.** Read-only; adds one more model to each site search.
+
+**See also.** Test `test_01_search_finds_a_published_article_by_title` in `knowledge/tests/test_website_search.py` (through the real `/website/search` route).

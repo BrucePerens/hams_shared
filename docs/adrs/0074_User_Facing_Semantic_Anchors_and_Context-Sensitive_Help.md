@@ -14,9 +14,9 @@ A semantic anchor is an anchor tag (the bracketed `@ANCHOR` marker) that links a
 1. **Inline HTML Tracking Attributes:** User-facing text nodes or layout headings in documentation manuals must utilize an explicit tracking token identifier matching the designated features framework.
 2. **Explicit Module Prefixes:** To maintain modular boundaries, cross-module structural references inside global design docs must explicitly target their destination context namespace.
 
-* *Example Definition:* `[@ANCHOR: user_websites:UX_REPORT_VIOLATION]`
+* *Example Definition:* `[@ANCHOR: user_websites:UX_REPORT_VIOLATION]` This is a real anchor, not only an illustration. The `user_websites:` prefix names the module that owns it. In the code it marks the `report_violation()` controller of `user_websites` (`controllers/main.py`, route `POST /website/report_violation`), whose test is the browser tour `test_tour_violation_report` (`tests/test_ui_tours.py`), and in the documentation it marks the heading "Content Reporting & Safety" of the module's manual (`data/documentation.html`), so one id ties the form, the manual section and the test together.
 
-* *Example Implementation:* `<h3 id="UX_REPORT_VIOLATION" data-trace="[@ANCHOR: user_websites:UX_REPORT_VIOLATION]">Reporting Content</h3>`
+* *Example Implementation:* `<h3 id="UX_REPORT_VIOLATION" data-trace="[@ANCHOR: user_websites:UX_REPORT_VIOLATION]">Reporting Content</h3>` The element id (without the module prefix) is the URL fragment that help links target, and the `data-trace` attribute carries the full anchor, with the module prefix, so a verifier can find the heading. In the shipped manual the same pattern is used on an `h2`. The attribute is invisible to readers and adds no behaviour of its own.
 
 3. **Centralized Fragment Routing:** Frontend template view buttons or helper icons targeting deep documentation elements must map their source parameters to standardized target URL fragment hashes.
 * *Example Route Link:* These links must point directly to the manual's URL fragment: `href="/user-websites/documentation#UX_REPORT_VIOLATION"`.
