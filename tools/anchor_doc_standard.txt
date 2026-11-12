@@ -217,6 +217,7 @@ daemons/shack_console/console/tests
 daemons/shack_console/docs/stories/alerts_queue_and_sources.md
 daemons/shack_console/docs/stories/alerts_waterfall_status_and_panels.md
 daemons/shack_console/docs/stories/arrange_room.md
+daemons/shack_console/docs/stories/band_map_waterfall_layout.md
 daemons/shack_console/docs/stories/console_award_order_and_antenna_selector.md
 daemons/shack_console/docs/stories/console_gps_notice_indicator.md
 daemons/shack_console/docs/stories/console_relay_identity_wire_and_asn1.md
