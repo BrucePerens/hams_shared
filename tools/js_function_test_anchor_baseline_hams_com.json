@@ -21,7 +21,6 @@
   "ham_events/static/src/js/net_roster_widget.js::NetRosterGrid.loadNLPEngine",
   "ham_events/static/src/js/net_roster_widget.js::NetRosterGrid.setup",
   "ham_events/static/src/js/net_roster_widget.js::NetRosterGridInteraction.dynamicContent",
-  "ham_forum_extension/static/src/js/trust_badge.js::TrustBadgeInteraction.setup",
   "ham_logbook/static/src/js/awards_dashboard.js::dxccToGeoName",
   "ham_logbook/static/src/js/awards_dashboard.js::gridToBounds",
   "ham_logbook/static/src/js/awards_dashboard.js::onEachFeature",
