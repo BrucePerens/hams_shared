@@ -1,7 +1,7 @@
 # Database separation: peer authentication and a secret schema the web role cannot read
 
 The Odoo web process runs as one OS account (`odoo`) and logs in to PostgreSQL as one role. Whatever that role can
-read, a bug in any route, controller or RPC method can expose. Three settings keep the damage small, for every
+read, a bug in any route, controller or RPC (remote procedure call) method can expose. Three settings keep the damage small, for every
 installer:
 
 1. The `odoo` role is **not a superuser** (a superuser web role turns SQL injection into command execution as the
