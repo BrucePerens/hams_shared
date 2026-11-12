@@ -308,6 +308,7 @@ daemons/shack_console/docs/stories/s1_style_memory.md
 daemons/shack_console/docs/stories/s1_style_segments_split_plans.md
 daemons/shack_console/docs/stories/s2_audio_resources.md
 daemons/shack_console/docs/stories/s2_demo_lock.md
+daemons/shack_console/docs/stories/s2_digital.md
 daemons/shack_console/docs/stories/s2_graticule.md
 daemons/shack_console/docs/stories/s2_keyboard_settings_profiles_help.md
 daemons/shack_console/docs/stories/s2_m17_receive.md
@@ -316,6 +317,7 @@ daemons/shack_console/docs/stories/s2_repeater_call_recording.md
 daemons/shack_console/docs/stories/s2_rig_controls.md
 daemons/shack_console/docs/stories/s2_rig_controls_ctl.md
 daemons/shack_console/docs/stories/s2_saved_frequencies.md
+daemons/shack_console/docs/stories/s2_settings_backup.md
 daemons/shack_console/docs/stories/s2_simband_conversation_spectrogram.md
 daemons/shack_console/docs/stories/s2_tx_level.md
 daemons/shack_console/docs/stories/s2_voice_log_parser_dupe.md
