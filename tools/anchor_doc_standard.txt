@@ -255,6 +255,7 @@ daemons/shack_console/docs/stories/link_state_rotator_antenna.md
 daemons/shack_console/docs/stories/log_spot_anchor_reference.md
 daemons/shack_console/docs/stories/my_preferences_anchor_reference.md
 daemons/shack_console/docs/stories/no_scope_design.md
+daemons/shack_console/docs/stories/s1_keys.md
 daemons/shack_console/docs/stories/s1_links_chat.md
 daemons/shack_console/docs/stories/s1_psk_reporter_spots.md
 daemons/shack_console/docs/stories/s1_rig_pins_mode_sync.md
