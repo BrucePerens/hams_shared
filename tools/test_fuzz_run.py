@@ -113,6 +113,19 @@ class PureTests(unittest.TestCase):
             self.assertTrue(fuzz_run.is_live_checkout(os.path.join(tmp, "hams_com"), tmp))
             self.assertFalse(fuzz_run.is_live_checkout(os.path.join(tmp, "job", "hams_com"), tmp))
 
+    def test_a_directory_inside_a_live_main_checkout_is_detected_and_one_inside_a_worktree_is_not(self):
+        # `dir` of a cargo-fuzz target is the crate, a subdirectory of the checkout, not its root
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, "hams_com", "daemons", "relay"))
+            os.makedirs(os.path.join(tmp, "hams_open", "hams_shared", "tools"))
+            os.makedirs(os.path.join(tmp, "job", "hams_com", "daemons", "relay"))
+            os.makedirs(os.path.join(tmp, "hams_open", "tmp", "wt", "daemons"))
+            open(os.path.join(tmp, "hams_open", "tmp", "wt", ".git"), "w").close()  # a worktree nested in the main checkout
+            self.assertTrue(fuzz_run.is_live_checkout(os.path.join(tmp, "hams_com", "daemons", "relay"), tmp))
+            self.assertTrue(fuzz_run.is_live_checkout(os.path.join(tmp, "hams_open", "hams_shared", "tools"), tmp))
+            self.assertFalse(fuzz_run.is_live_checkout(os.path.join(tmp, "job", "hams_com", "daemons", "relay"), tmp))
+            self.assertFalse(fuzz_run.is_live_checkout(os.path.join(tmp, "hams_open", "tmp", "wt", "daemons"), tmp))
+
     def test_state_paths_and_signature(self):
         self.assertTrue(fuzz_run.state_paths("/o", "a b")["seen"].endswith("state/a-b/seen.json"))
         sha, block = fuzz_run.falsifying_signature("x\nFalsifying example: f(a=1,\n  b=2)\n\nnext")
