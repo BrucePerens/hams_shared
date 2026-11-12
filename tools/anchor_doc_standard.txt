@@ -611,3 +611,6 @@ daemons/hams_local_relay/docs/stories/relay_uplink_and_local_content.md
 daemons/hams_local_relay/docs/stories/relay_utc.md
 daemons/hams_local_relay/docs/stories/relay_winkeyer_engine.md
 daemons/hams_local_relay/docs/stories/station_locations.md
+daemons/shack_console/docs/stories/allstar_mode.md
+daemons/shack_console/docs/stories/non_visual_spoken_status.md
+daemons/shack_console/docs/stories/console_panel_helpers.md
