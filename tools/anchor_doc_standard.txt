@@ -1838,3 +1838,15 @@ daemons/hams_local_relay/src/audio_probe.rs
 daemons/hams_local_relay/src/audio_reservation.rs
 daemons/hams_local_relay/src/audio_routes.rs
 daemons/hams_local_relay/src/audio_select.rs
+daemons/hpsdr/src
+daemons/hpsdr/docs/stories/hpsdr_data_structures.md
+daemons/vnwa_open/src
+daemons/vnwa_open/docs/stories/vnwa_open_data_structures.md
+daemons/bench_mcp/src
+daemons/bench_mcp/docs/stories/bench_mcp_audio_data_structures.md
+daemons/bench_mcp/docs/stories/bench_mcp_data_structures.md
+daemons/bench_mcp/docs/stories/bench_mcp_gla_data_structures.md
+daemons/bench_mcp/docs/stories/bench_mcp_procedure_data_structures.md
+daemons/bench_mcp/docs/stories/bench_mcp_procedure_python_classes.md
+daemons/bench_mcp/docs/stories/bench_mcp_radioctl_data_structures.md
+daemons/bench_mcp/docs/stories/bench_mcp_usb_hub_data_structures.md
