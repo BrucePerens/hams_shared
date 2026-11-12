@@ -877,3 +877,8 @@ ham_communications_consent/docs/stories/11_helpers_behind_the_consent_pages_reco
 ham_member_certs/docs/stories/my_certificates_page_and_api.md
 ham_member_certs/docs/stories/member_certs_internals_reference.md
 ham_member_certs/README.md
+daemons/event_sync/README.md
+daemons/club_crawl/README.md
+daemons/pdns_sync/README.md
+daemons/callbook_dns_export/README.md
+daemons/shack_console/docs/stories/rig_pins_ctl.md
