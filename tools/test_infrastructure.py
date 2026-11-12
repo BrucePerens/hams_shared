@@ -7371,6 +7371,16 @@ class CallsignParkingProvisioningTests(_TmpDirTestCase):
         self.safe_patch_object(infra, "_provision_cache_manager_role", side_effect=RuntimeError("psql down"))
         infra._provision_parking_role(MagicMock(), "hams_test")
 
+    def test_the_narrow_family_path_makes_the_login_too_and_only_for_this_family(self):
+        for name in ("provision_system_accounts", "apply_production_directories", "provision_static_files"):
+            self.safe_patch_object(infra, name)
+        role = self.safe_patch_object(infra, "_provision_parking_role")
+        with infra.planning():
+            infra.provision_daemon_families(["hamsd_parking"], MagicMock(), {})
+            infra.provision_daemon_families(["hamsd_parking"], MagicMock(), {"DB_NAME": "other_db"})
+            infra.provision_daemon_families(["hamsd_ncvec_sync"], MagicMock(), {"DOMAIN": "example.test"})
+        self.assertEqual([c.args[1] for c in role.call_args_list], ["hams_prod", "other_db"])
+
     def test_provisioning_runs_it_after_the_cache_manager_role(self):
         text = open(infra.__file__, encoding="utf-8").read()
         self.assertLess(text.index("_provision_cache_manager_role(run_cmd_func, db_name)\n"), text.index("_provision_parking_role(run_cmd_func, db_name)\n"))
