@@ -236,6 +236,7 @@ daemons/shack_console/docs/stories/console_speech_repair_guards_language.md
 daemons/shack_console/docs/stories/console_style_adapter_region_tones_sources.md
 daemons/shack_console/docs/stories/console_style_model_ctl_and_row.md
 daemons/shack_console/docs/stories/console_update_prompt.md
+daemons/shack_console/docs/stories/console_waterfall_control_bar_and_view.md
 daemons/shack_console/docs/stories/console_waterfall_screen_and_host.md
 daemons/shack_console/docs/stories/console_waterfall_transmit_sync_rtt_settings.md
 daemons/shack_console/docs/stories/layout_height.md
