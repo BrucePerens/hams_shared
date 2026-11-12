@@ -136,6 +136,7 @@ daemons/hams_local_relay/docs/stories/relay_function_anchors_audio_tap_mixer.md
 daemons/hams_local_relay/docs/stories/relay_function_anchors_bridge_supervisor.md
 daemons/hams_local_relay/docs/stories/relay_function_anchors_claim_signature_peer.md
 daemons/hams_local_relay/docs/stories/relay_function_anchors_ice_link.md
+daemons/hams_local_relay/docs/stories/relay_function_anchors_ice_bundle_main.md
 daemons/hams_local_relay/docs/stories/relay_function_anchors_offline.md
 daemons/hams_local_relay/docs/stories/relay_function_anchors_rig_audio.md
 daemons/hams_local_relay/docs/stories/relay_function_anchors_sip_bridge.md
