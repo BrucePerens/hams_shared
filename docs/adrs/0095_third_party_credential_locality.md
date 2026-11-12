@@ -38,7 +38,7 @@ schedule independent of whether the user's own hardware is online).
 **2. Where central decryption is genuinely necessary, scope it to exactly one named consumer.** A
 credential compute-method guard must resolve a specific, real service account via
 `zero_sudo.security.utils._get_service_uid(xml_id)` (this codebase's own established pattern,
-already used elsewhere in `ham_logbook` itself for GDPR-export access) -- never a blanket
+already used elsewhere in `ham_logbook` itself for GDPR-export (the European Union data-protection law's data export) access) -- never a blanket
 `is_service_account` check that trusts any service account on the platform. The specific account
 must be the one, real, confirmed identity the actual consuming daemon authenticates as, verified
 against the live `daemon.key.registry` (or equivalent) rather than assumed from a plausible-sounding

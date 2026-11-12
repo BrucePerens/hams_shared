@@ -28,7 +28,7 @@ surfaced that the tool itself, not just this codebase's use of it, has aged out:
 - **Its rendering engine is an abandoned WebKit fork.** It predates the CSS3 features (flexbox,
   grid, modern font handling) that real-world form layouts increasingly assume, and gets no
   security patches.
-- **The thing it's duplicating is already built, and better, elsewhere.** Every ICS form template
+- **The thing it's duplicating is already built, and better, elsewhere.** Every ICS (Incident Command System, the emergency-response form set) form template
   in `ics_forms/data/*.html` already carries real `@media print` CSS -- hiding editor chrome,
   cleaning up margins and shadows for the printed page. That's exactly the styling a browser's own
   "Print -> Save as PDF" already uses, for free, through a modern, actively-maintained rendering

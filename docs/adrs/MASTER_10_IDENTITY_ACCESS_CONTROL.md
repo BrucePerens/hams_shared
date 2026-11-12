@@ -24,7 +24,7 @@ Balancing an open community platform with stringent anti-spam and anti-hijacking
 ### 4. Secure Admin Password Management (0006)
 * The master database password MUST NEVER be stored in plaintext. It must be pre-hashed (PBKDF2-SHA512) via the `tools/hash_admin_password.py` utility. The core initialization module uses raw SQL to inject it, bypassing Odoo's double-hashing ORM.
 
-### 5. Domain Sandbox Mandate (No ERP Group Escalation)
+### 5. Domain Sandbox Mandate (No ERP, enterprise resource planning, Group Escalation)
 * Standard community users MUST NOT be assigned native Odoo ERP backend groups. Specifically, you MUST NEVER grant `base.group_user` (Internal User) to a community member, as this exposes the `/web` backend, employee directories, and internal chatter.
 * * All community users must be restricted to `base.group_portal` combined with domain-specific groups (e.g., `custom_module.group_custom_operator`; "domain" here means a feature area of the platform, not a DNS domain).
 * * Record Rules and ACLs across all custom modules must evaluate against `base.group_portal` or the specific domain groups, NOT `base.group_user`.

@@ -8,7 +8,7 @@
 `hams_local_relay` terminates TLS itself, because a browser on an `https://` page will not open a
 plain `ws://` connection (mixed content). It already obtains a per-user certificate for
 `u<id>.local.hams.com` for itself (`local_cert_acme.rs`, DNS-01 through `ham_dns`; the key never
-leaves the operator's machine). That certificate serves LAN devices well. It does not serve a
+leaves the operator's machine). That certificate serves LAN (local area network) devices well. It does not serve a
 browser on the same machine as the relay well: such a browser has no per-user hostname to use, and
 Safari and other browsers that do not treat plain `localhost` as a secure context will not connect
 to the loopback address at all without a publicly trusted certificate for a name.
@@ -38,7 +38,7 @@ gets what the relay served before (its per-user certificate when it has one, oth
 distributed wildcard, otherwise self-signed).
 
 **2. One central renewal daemon owns the shared certificate** (`daemons/localhost_cert_renewal`). It
-uses `certbot` with DNS-01 on the Cloudflare zone that hosts hams.com, the same ACME client
+uses `certbot` with DNS-01 on the Cloudflare zone that hosts hams.com, the same ACME (Automatic Certificate Management Environment, the protocol Let's Encrypt uses) client
 `relay_cert_renew` already uses; there is no second ACME client. It renews at 30 days or fewer
 remaining, keeps serving the old pair until the new one is verified (parses, names exactly
 `localhost.hams.com`, key matches, valid now, chain present and signed link by link, newer than what is

@@ -4,7 +4,7 @@
 Accepted (Consolidates ADRs 0037, 0038, 0040, 0041, 0042)
 
 ## Context & Philosophy
-To protect the synchronous Odoo WSGI web workers from CPU/Memory exhaustion and DDoS attacks, malicious traffic and heavy read loads must be stopped at the network edge (Cloudflare and Nginx) before they ever reach the Python application layer.
+To protect the synchronous Odoo WSGI (the Python web-server interface) web workers from CPU/Memory exhaustion and DDoS attacks, malicious traffic and heavy read loads must be stopped at the network edge (Cloudflare and Nginx) before they ever reach the Python application layer.
 
 ## Decisions & Mandates
 
@@ -19,7 +19,7 @@ Application-level rate limiting inside Python is forbidden. All API endpoint thr
 ### 3. Silent Honeypots & Dynamic Tarpitting
 Unauthenticated public forms MUST implement visually hidden honeypot `<input>` fields.
 * If a bot fills the field, the Python controller immediately returns a fake 200 OK success.
-* The controller extracts the bot's IP and pushes it to Redis with a 1-hour TTL.
+* The controller extracts the bot's IP and pushes it to Redis with a 1-hour TTL (time to live, after which the entry expires).
 * An Nginx sidecar daemon pulls these IPs and dynamically generates a `geo` block, applying extreme bandwidth limits (`limit_rate`) to effectively tarpit the malicious actors at the C-level edge.
 
 ## Implementation status note (2026-10-03)

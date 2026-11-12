@@ -15,5 +15,5 @@ The platform must remain accessible to visually impaired operators while renderi
 
 ### 2. Always-On Dashboard Burn-In Protection
 * Network Operations Center (NOC) dashboards (e.g., Pager Duty, Backup Management) are frequently displayed on dedicated, always-on physical monitors.
-* To prevent OLED/Plasma pixel burn-in or image retention, these OWL components MUST render in strict Dark Mode.
+* To prevent OLED/Plasma pixel burn-in (permanent ghosting of a static image on those screen types) or image retention, these OWL components MUST render in strict Dark Mode.
 * Furthermore, they MUST implement a continuous, pseudo-random CSS `transform: translate(x, y)` spatial drift on a slow (e.g., 20-second) linear transition, keeping the UI visually stable while constantly shifting the physical pixels illuminated by text edges.

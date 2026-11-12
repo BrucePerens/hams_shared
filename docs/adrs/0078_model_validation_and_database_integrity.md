@@ -42,7 +42,7 @@ class HamExample(models.Model):
 When adding application-layer validation, developers must respect the core performance and security mandates:
 
 * **O(1) Memory Mapping (The N+1 Ban):** You MUST NOT execute `.search()`, `.search_count()`, or `.read_group()` inside a `for record in self:` loop during validation. If you need to validate uniqueness against existing records or check related states across a recordset, you MUST pre-fetch the data into a memory-mapped dictionary *before* entering the iteration loop.
-* **Zero-Sudo Confinement:** If your validation logic requires evaluating records outside the current user's standard Access Control List (ACL), you MUST NOT use `.sudo()` to bypass the read restriction. You must query a Shadow Profile Index View (`_auto = False`) or utilize a specifically mapped micro-service account (via `.with_user()`) to verify the required state.
+* **Zero-Sudo Confinement:** If your validation logic requires evaluating records outside the current user's standard Access Control List (ACL, the rules for who may read or write a record), you MUST NOT use `.sudo()` to bypass the read restriction. You must query a Shadow Profile Index View (`_auto = False`) or utilize a specifically mapped micro-service account (via `.with_user()`) to verify the required state.
 * **Fail-Fast Execution:** Validate preconditions at the absolute top of your method. Utilize early returns or raise `odoo.exceptions.ValidationError` immediately to avoid deep architectural nesting and wasted CPU cycles.
 
 ## Consequences

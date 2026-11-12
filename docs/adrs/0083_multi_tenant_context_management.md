@@ -48,6 +48,6 @@ There IS a primary company assigned to the central ham radio portal. The root Ha
 Therefore, global shared services (e.g., Space Weather telemetry, FCC syncing) MUST map their default un-scoped data to the root company to ensure global propagation.
 
 ## Consequences
-* **Enhanced Data Isolation:** Prevents SSRF or cache-poisoning attacks where one user website could potentially render data intended for another.
+* **Enhanced Data Isolation:** Prevents SSRF (server-side request forgery) or cache-poisoning attacks where one user website could potentially render data intended for another.
 * **Stable Daemon Execution:** Background tasks will no longer fail intermittently due to record rule restrictions when operating on global directories (like `ham.callbook`).
 * **Slight Overhead:** Developers and AI agents must proactively fetch the `company_id` from the current user or record and the `website_id` from the `request` object (via an explicit `try...except AttributeError` block accessing `request.website`) during API construction.

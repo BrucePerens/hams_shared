@@ -1,5 +1,7 @@
 # ADR 0075: LLM Dependency Contract Visibility
 
+LLM here means large language model, the kind of AI coding assistant that reads a project's code.
+
 ## Status
 Accepted
 
