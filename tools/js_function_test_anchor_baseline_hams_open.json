@@ -6,8 +6,6 @@
   "caching/static/src/js/toast.js::SWToast.close",
   "caching/static/src/js/toast.js::SWToast.reload",
   "caching/static/src/js/toast.js::SWToast.setup",
-  "form_shield/static/src/js/recaptcha_patch.js::getToken",
-  "form_shield/static/src/js/recaptcha_patch.js::loadLibs",
   "pager_duty/static/src/components/log_viewer/log_viewer.js::LogViewer.executeSearch",
   "pager_duty/static/src/components/log_viewer/log_viewer.js::LogViewer.fetchFiles",
   "pager_duty/static/src/components/log_viewer/log_viewer.js::LogViewer.onKeyup",
