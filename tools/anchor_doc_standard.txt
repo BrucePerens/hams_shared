@@ -388,6 +388,7 @@ daemons/shack_console/docs/stories/settings_page_alerts.md
 daemons/shack_console/docs/stories/s1_tabs_operate_mode.md
 daemons/shack_console/docs/stories/sim_roster.md
 daemons/shack_console/docs/stories/sim_spectrum.md
+daemons/shack_console/docs/stories/spot_strip_age_out_awards.md
 daemons/shack_console/docs/stories/stability_jobs_scope_clock_m17_ptt_anchors.md
 daemons/shack_console/docs/stories/stt_translate_panel.md
 daemons/shack_console/docs/stories/tap_to_log_and_drag_maths.md
