@@ -67,7 +67,7 @@ We used a few neat tricks to make this secure and fast:
 The `user_websites` module enables decentralized content creation. It employs the **Proxy Ownership Pattern**: standard Odoo users cannot create `ir.ui.view` or `website.page` records due to core security. The module securely circumvents this by assigning an `owner_user_id`, evaluating custom Record Rules against it, and escalating privileges via a dedicated Service Account (`.with_user(svc_uid)`) strictly for the database write.
 * **Ownership Validation:** Safely asserted by mixin create `mixin_proxy_ownership_create` and write `mixin_proxy_ownership_write` methods. Explicitly verified by `test_mixin_ownership_validation`.
 
-* **Tenant Isolation:** Enforced via strict record rules verified by `[@ANCHOR: test_tenant_view_isolation]` and ACL overhead elimination to prevent log spam `[@ANCHOR: test_acl_overhead_loop_elimination]`.
+* **Tenant Isolation:** Enforced via strict record rules verified by ``test_tenant_view_isolation`` and ACL overhead elimination to prevent log spam ``test_acl_overhead_loop_elimination``.
 * **Lazy JIT Provisioning:** Websites and Blogs do not exist upon user creation. They are provisioned Just-In-Time when the owner visits their slug root and triggers a POST request to `create_site`. This ensures explicit user consent to publish.
 </core_patterns>
 
@@ -89,10 +89,10 @@ The `user_websites` module enables decentralized content creation. It employs th
 * **`view_count`**: Privacy-friendly server-side view tracker (the server counts non-admin page views in Redis and a cron flushes them to this column every 15 minutes). Only `website.page` counts are incremented today; this module declares `blog.post.view_count` but never increments it.
 
 ### Moderation Models
-* **`content.violation.report`** (model itself now in `content_moderation`, this module's own extension in `models/content_violation_report_moderation.py`): Stores abuse reports. Originator is masked from the target owner. The system automatically generates a report and issues a strike if a user attempts to inject malicious SSTI/XSS payloads into their site architecture `[@ANCHOR: content_moderation:action_take_action_and_strike]` (via this module's own enforcement-hook override `[@ANCHOR: user_websites:COMM_apply_enforcement_action]`), tested by `[@ANCHOR: test_moderation_suspension]`. Admin spam is prevented via a daily digest cron (`ir_cron_notify_pending_reports` `[@ANCHOR: ir_cron_notify_pending_reports]`, `[@ANCHOR: cron_notify_pending_reports]`, verified by `[@ANCHOR: test_cron_pending_reports]`) and a UI toast that is sticky but remembered in localStorage for 12 h per (count, newest id), with Review/Dismiss buttons, (`[@ANCHOR: toast_notifications_logic]`, `[@ANCHOR: admin_toast_logic]`, tested by `[@ANCHOR: test_tour_toast_notifications]`).
+* **`content.violation.report`** (model itself now in `content_moderation`, this module's own extension in `models/content_violation_report_moderation.py`): Stores abuse reports. Originator is masked from the target owner. The system automatically generates a report and issues a strike if a user attempts to inject malicious SSTI/XSS payloads into their site architecture ``content_moderation:action_take_action_and_strike`` (via this module's own enforcement-hook override ``user_websites:COMM_apply_enforcement_action``), tested by ``test_moderation_suspension``. Admin spam is prevented via a daily digest cron (`ir_cron_notify_pending_reports` ``ir_cron_notify_pending_reports``, ``cron_notify_pending_reports``, verified by ``test_cron_pending_reports``) and a UI toast that is sticky but remembered in localStorage for 12 h per (count, newest id), with Review/Dismiss buttons, (``toast_notifications_logic``, ``admin_toast_logic``, tested by ``test_tour_toast_notifications``).
 
-* **Security Auto-Moderation**: The `website.page` model includes `_sanitize_user_arch` `[@ANCHOR: website_page_sanitize_arch]`, verified by `[@ANCHOR: test_website_page_sanitize_arch]`, which forcefully strips dangerous QWeb directives (`t-*`) and JS event handlers.
-* **Member CSS**: `<link>` is removed; `<style>` is rebuilt rule by rule and every `style="..."` attribute declaration by declaration with zero_sudo's `css_sanitizer` `[@ANCHOR: user_websites:page_arch_style_attribute_filter]`, verified by `[@ANCHOR: test_user_arch_style_attribute_filter]`: no `url()` except `#fragment`, no `image-set()`, `data:`, `expression`, escapes, and `position` only static, relative or absolute. A refused declaration is dropped (no strike); malformed CSS drops the whole attribute. Blog post content goes through `html_sanitize` instead and is not covered by this filter.
+* **Security Auto-Moderation**: The `website.page` model includes `_sanitize_user_arch` ``website_page_sanitize_arch``, verified by ``test_website_page_sanitize_arch``, which forcefully strips dangerous QWeb directives (`t-*`) and JS event handlers.
+* **Member CSS**: `<link>` is removed; `<style>` is rebuilt rule by rule and every `style="..."` attribute declaration by declaration with zero_sudo's `css_sanitizer` ``user_websites:page_arch_style_attribute_filter``, verified by ``test_user_arch_style_attribute_filter``: no `url()` except `#fragment`, no `image-set()`, `data:`, `expression`, escapes, and `position` only static, relative or absolute. A refused declaration is dropped (no strike); malformed CSS drops the whole attribute. Blog post content goes through `html_sanitize` instead and is not covered by this filter.
 * **`content.violation.appeal`**: Used by suspended users to petition for account restoration.
 </data_model>
 
@@ -131,7 +131,7 @@ DO NOT USE user_websites_settings_dropzone. All settings views must now inherit 
 ### Endpoints & Webhooks
 * **Community Directory:** Renders public pages `/community` `UX_COMMUNITY_DIRECTORY`.
 
-* **Violation Reporting:** Form endpoint `/website/report_violation` `[@ANCHOR: user_websites:UX_REPORT_VIOLATION]`, `[@ANCHOR: violation_report_logic]`, verified by `[@ANCHOR: test_tour_violation_report]`. Protected by the `form_shield` module (proof of work or question, honeypots, minimum time-to-submit, per-network, per-page and per-site limits `[@ANCHOR: user_websites:report_limits]`, `[@ANCHOR: user_websites:report_violation_shield]`, the form's fields `[@ANCHOR: user_websites:report_violation_shield_fields]`); the reported URL must be a page of this site (this host, the base URL or a website domain, http and https alike, www ignored `[@ANCHOR: user_websites:report_own_site_hosts]`) `[@ANCHOR: user_websites:normalize_report_target]` and a guest's report is refused when it is short, one random-looking string, link-heavy or lacks a valid address `[@ANCHOR: user_websites:report_problem]`. `GET /website/report_violation` is the question variant for browsers without scripts `[@ANCHOR: user_websites:report_violation_page]`. Helpers: the redirect path is forced to a single leading slash `[@ANCHOR: user_websites:reported_path]`, hosts compare without `www.` `[@ANCHOR: user_websites:bare_host]`, a guest's address may not start or end its local part with a dot `[@ANCHOR: user_websites:local_part_ok]`, the question page is rendered by `[@ANCHOR: user_websites:render_report_page]` and a refusal is answered by `[@ANCHOR: user_websites:report_refusal]`; the old per-address redirect-path anchor `[@ANCHOR: user_websites:report_violation_redirect_target]` stays.
+* **Violation Reporting:** Form endpoint `/website/report_violation` ``user_websites:UX_REPORT_VIOLATION``, ``violation_report_logic``, verified by ``test_tour_violation_report``. Protected by the `form_shield` module (proof of work or question, honeypots, minimum time-to-submit, per-network, per-page and per-site limits ``user_websites:report_limits``, ``user_websites:report_violation_shield``, the form's fields ``user_websites:report_violation_shield_fields``); the reported URL must be a page of this site (this host, the base URL or a website domain, http and https alike, www ignored ``user_websites:report_own_site_hosts``) ``user_websites:normalize_report_target`` and a guest's report is refused when it is short, one random-looking string, link-heavy or lacks a valid address ``user_websites:report_problem``. `GET /website/report_violation` is the question variant for browsers without scripts ``user_websites:report_violation_page``. Helpers: the redirect path is forced to a single leading slash ``user_websites:reported_path``, hosts compare without `www.` ``user_websites:bare_host``, a guest's address may not start or end its local part with a dot ``user_websites:local_part_ok``, the question page is rendered by ``user_websites:render_report_page`` and a refusal is answered by ``user_websites:report_refusal``; the old per-address redirect-path anchor ``user_websites:report_violation_redirect_target`` stays.
 
 * **Home Routing:** Target view `/<slug>` (the old `/<slug>/home` answers a permanent 301 to it, `user_websites:COMM_user_home_legacy_redirect`) `controller_user_websites_home`.
 
@@ -149,9 +149,9 @@ DO NOT USE user_websites_settings_dropzone. All settings views must now inherit 
 
 * **Subscriptions:** `/<slug>/subscribe` `UX_SUBSCRIBE`. Unsubscribe verification with HMAC-SHA256 token validation over the model, record, partner and timestamp `controller_unsubscribe_digest`. The timestamp is signed but its age is not checked, so a valid link does not expire.
 
-* **`GET /api/v1/user_websites/pending_reports`**: Returns a JSON object `{'count': int, 'latest_id': int, 'url': str}` of unhandled violation reports (`url` is the back-office pending queue, `/odoo/action-user_websites.action_content_violation_report_pending`). Restricted to administrators `[@ANCHOR: api_pending_reports]`; any other caller gets `{'count': 0, 'error': 'Forbidden'}` with HTTP 200, not an error status. Verified by `[@ANCHOR: test_admin_violation_toast_rpc]`.
+* **`GET /api/v1/user_websites/pending_reports`**: Returns a JSON object `{'count': int, 'latest_id': int, 'url': str}` of unhandled violation reports (`url` is the back-office pending queue, `/odoo/action-user_websites.action_content_violation_report_pending`). Restricted to administrators ``api_pending_reports``; any other caller gets `{'count': 0, 'error': 'Forbidden'}` with HTTP 200, not an error status. Verified by ``test_admin_violation_toast_rpc``.
 
-* **GDPR Actions:** Privacy dashboard `/my/privacy` `[@ANCHOR: controller_my_privacy_dashboard]`. Data exports `/my/privacy/export` `[@ANCHOR: UX_GDPR_EXPORT]`. Data erasure via batched unlinks (5000 records per batch, run within the request under the `zero_sudo.gdpr_service_internal` service account) `/my/privacy/delete_content` `[@ANCHOR: UX_GDPR_ERASURE]`, then redirects to the public confirmation `/privacy/erased` `[@ANCHOR: user_websites:COMM_privacy_erased]`.
+* **GDPR Actions:** Privacy dashboard `/my/privacy` ``controller_my_privacy_dashboard``. Data exports `/my/privacy/export` ``UX_GDPR_EXPORT``. Data erasure via batched unlinks (5000 records per batch, run within the request under the `zero_sudo.gdpr_service_internal` service account) `/my/privacy/delete_content` ``UX_GDPR_ERASURE``, then redirects to the public confirmation `/privacy/erased` ``user_websites:COMM_privacy_erased``.
 
 ### 🚨 Privilege Deprecation & Cross-Module Execution (CRITICAL)
 In adherence to the Micro-Service Account Pattern (ADR-0062), the `user_websites` internal service account (`user_websites.user_websites_service_account`) has been stripped of omnipotent ERP privileges. It **can no longer create or delete** core identity records (`res.users`, `res.partner`). Furthermore, it retains only microscopic access to framework tables (for example, read-only `1,0,0,0` on `res.company` and `res.partner.bank`, and read/write without create/delete `1,1,0,0` on `discuss.channel`; see `security/ir.model.access.csv` for the full list) strictly to satisfy Odoo's internal ORM cascade requirements (The Framework ACL Tax - ADR-0064). ADR-0062 and ADR-0064 are consolidated in `hams_shared/docs/adrs/MASTER_01_SECURITY_ZERO_SUDO.md`.
@@ -175,7 +175,7 @@ If your dependent module (e.g., `cloudflare`, `custom_dns`) needs to programmati
 
 * **Limits:** Individual page quota enforcement `website_page_quota_check`.
 
-* **GDPR Hooks**: The module extends `_get_gdpr_export_data()` `[@ANCHOR: res_users_gdpr_export]`, tested by `[@ANCHOR: test_gdpr_export_hook]`, and `_execute_gdpr_erasure()` `[@ANCHOR: gdpr_sudo_erasure]`, tested by `[@ANCHOR: test_gdpr_erasure_pages]` and `[@ANCHOR: test_gdpr_erasure_posts]`. Dependent modules storing PII MUST override these to append their data to the export payload and hard-delete it during erasure.
+* **GDPR Hooks**: The module extends `_get_gdpr_export_data()` ``res_users_gdpr_export``, tested by ``test_gdpr_export_hook``, and `_execute_gdpr_erasure()` ``gdpr_sudo_erasure``, tested by ``test_gdpr_erasure_pages`` and ``test_gdpr_erasure_posts``. Dependent modules storing PII MUST override these to append their data to the export payload and hard-delete it during erasure.
 
 * **Documentation Injection**: `knowledge` is a hard dependency of this module. Its `data/documentation.html` is declared in the manifest's `knowledge_docs` entry (with `"public": True`, so portal and public users can open it) and installed as a published `knowledge.article` by `zero_sudo`'s `ir.module.module._bootstrap_knowledge_docs()` when the registry loads; `/user-websites/documentation` redirects to that article `[@ANCHOR: documentation_bootstrap]`.
 </public_api>
@@ -776,3 +776,198 @@ Test `test_01_res_config_settings` in `tests/test_xpath_rendering.py`. It reques
 ### `user_websites:COMM_website_page_unlink` [@ANCHOR: user_websites:COMM_website_page_unlink]
 
 `website.page.unlink()`. It checks `check_access("unlink")`, enqueues the Cloudflare purge, deletes as the module service account with tracking off (falling back to the caller when the account is missing), re-raises serialization and deadlock errors (`40001`, `40P01`) so the transaction can retry, and finally sends one cache invalidation for the removed page URLs. Test: `test_07_page_write_and_unlink_signal_cache_invalidation_once` proves one signal per call, not three.
+
+## 9. Anchor reference: isolation, moderation, sanitizer, reports and privacy
+
+One entry per anchor. The sections above name each of these ids in plain backticks; the tag lives on the heading here. Code is read from `user_websites` in `hams_open` unless another module is named.
+
+### `test_tenant_view_isolation` [@ANCHOR: test_tenant_view_isolation]
+
+Test `test_03_tenant_view_isolation` in `tests/test_performance_regressions.py`. It gives two members each a home `website.page` created through the module service account, then has member A write an edited `arch` (a marker `<div>` added to the page's `oe_structure`) with `with_user(user_a)`. A guest then opens both `/<slug>` addresses: the marker must be in A's response and must not appear in B's. It proves that record rules and the proxy-ownership write path keep one member's page edit out of another member's site. It also covers `user_websites:website_page_write`. It needs a database and HTTP, so it runs only inside the Odoo test run.
+
+### `test_acl_overhead_loop_elimination` [@ANCHOR: test_acl_overhead_loop_elimination]
+
+Test `test_02_acl_overhead_loop_elimination` in `tests/test_performance_regressions.py`. It creates 15 members with published home pages, authenticates as the public guest, captures the `odoo.addons.base.models.ir_model` logger at WARNING while the guest opens `/` and `/community`, and fails if any "Access Denied by ACLs" message mentions `ir.ui.view` or `website`. The guarantee is that rendering the routing map and QWeb does not make Odoo probe each member page in a linear loop of denied reads (log spam and wasted queries). It also covers `user_websites:website_page_check_access`.
+
+### `content_moderation:action_take_action_and_strike` [@ANCHOR: content_moderation:action_take_action_and_strike]
+
+`content.violation.report.action_take_action_and_strike(self)` in `content_moderation/models/content_violation_report.py` (published with `@public_rpc`, so moderators can call it from the back office). It loops over the records: one already in `action_taken` or `dismissed` is skipped, so saving the same page twice cannot strike the owner twice; any other record gets `state = "action_taken"` and then `_apply_enforcement_action()`, the hook this module overrides. **Returns:** nothing. **Errors:** whatever the hook raises, including `AccessError`. **Cost:** one write per report and the hook's own work. Test: `test_moderation_suspension`. See also `user_websites:COMM_apply_enforcement_action`.
+
+### `user_websites:COMM_apply_enforcement_action` [@ANCHOR: user_websites:COMM_apply_enforcement_action]
+
+`content.violation.report._apply_enforcement_action(self)` in `models/content_violation_report_moderation.py`, this module's override of the `content_moderation` hook. It runs once per upheld report. With a `content_owner_id` it calls the stored procedure through `_increment_strike_count("res_users", id)` (an atomic lock and increment), notifies cache invalidation, reloads `violation_strike_count`, and at 3 or more strikes calls `action_suspend_user_websites()` unless the owner is already suspended. With a `content_group_id` it does the same for `user.websites.group` and `action_suspend_group_websites()`. In both cases it posts a note as the mail service account. With neither it falls back to the base hook (a chatter note, no consequence). **Returns:** nothing. Test: `test_moderation_suspension`.
+
+### `test_moderation_suspension` [@ANCHOR: test_moderation_suspension]
+
+Test `test_01_three_strikes_suspension` in `tests/test_moderation.py`. It starts with a user holding zero strikes, a published page and a published blog post, creates three `content.violation.report` rows naming that user as `content_owner_id`, and calls `action_take_action_and_strike()` on each. It asserts that the strike count is 3, that `is_suspended_from_websites` is set, and (after polling up to ten seconds, because the unpublish runs in a background thread) that both the page and the post are unpublished. It also carries the test links for the strike counter, the asynchronous unpublish, the registry hook and the SQL function setup.
+
+### `ir_cron_notify_pending_reports` [@ANCHOR: ir_cron_notify_pending_reports]
+
+The `ir.cron` record in `data/user_websites_data.xml` named "User Websites: Notify Admins of Pending Reports". It runs `model._cron_notify_pending_reports()` on `content.violation.report` once a day (`interval_number` 1, `days`), active by default, as the user `user_websites.user_websites_service_account`. Its purpose is to replace a flood of one email per report with a daily digest to the abuse mailbox. It writes no data of its own; the work is in `cron_notify_pending_reports`. Tests: `test_cron_pending_reports`.
+
+### `cron_notify_pending_reports` [@ANCHOR: cron_notify_pending_reports]
+
+`content.violation.report._cron_notify_pending_reports(self)` (`@api.model`, `models/content_violation_report_moderation.py`; the code carries the id as `user_websites:cron_notify_pending_reports`). No arguments, no return value. For each company the service account is granted (not every company in the database, so an out-of-scope company can never raise `AccessError` and abort the run) it counts reports in state `new` with `with_company(company)`. If the count is above zero it sends the mail template `user_websites.email_template_pending_violations_summary` as the mail service account to the company's `user_websites.company_abuse_email` parameter, then the company email, then `admin@example.com`, with `force_send=False` (queued, not sent inline). **Locking:** none. Test: `test_09_cron_pending_reports_ignores_out_of_scope_company`.
+
+### `test_cron_pending_reports` [@ANCHOR: test_cron_pending_reports]
+
+Test anchor for the daily digest: `test_08_cron_pending_reports` in `tests/test_audit_edge_cases.py` (its code id is `COMM_test_cron_pending_reports`), plus `test_09_...` for the company scope; the cron record and the mail send cite it as the audited test. The tests create a `new` report and call `_cron_notify_pending_reports()` directly. One case adds a second, unrelated company the service account is not scoped to and asserts that the cron does not raise and that the main company's notification is still queued. The cron is never waited on; the tests call the method rather than the scheduler.
+
+### `toast_notifications_logic` [@ANCHOR: toast_notifications_logic]
+
+`UrlToastNotification._checkUrlForNotifications()` in `static/src/js/toast_notifications.js`, started from `start()` on `#wrapwrap` (a public interaction). It reads the page URL's query string and maps one parameter to a toast: `report_error=<reason>` (danger, text from `REPORT_ERRORS`, `default` when the reason is unknown), `report_submitted`, `appeal_submitted`, `subscribed` or `erased` (success). When a message was chosen it calls the Odoo notification service (not sticky) and then strips the query with `history.replaceState`, so a refresh does not show it again. No server call and no storage. Test: `test_tour_toast_notifications`.
+
+### `admin_toast_logic` [@ANCHOR: admin_toast_logic]
+
+`AdminViolationToast._checkPendingReports()` in `static/src/js/toast_notifications.js`, called once from `start()`. It `fetch`es `/api/v1/user_websites/pending_reports`; a network error or a non-OK answer is swallowed silently. It shows a sticky "Pending Moderation" warning toast only when `shouldShowToast(readSeen(), data, now)` is true, with a "Review reports" button (only if the returned `url` starts with `/`) and a "Dismiss" button, and then records what was shown through `writeSeen`. The "seen" record lives in `localStorage` under `admin_violation_toast_seen` and suppresses the toast for 12 hours unless the count or the newest report id grew. Non-administrators get `count: 0` from the API, so nothing shows. Tests: `test_tour_toast_notifications`, `test_admin_violation_toast_rpc`.
+
+### `test_tour_toast_notifications` [@ANCHOR: test_tour_toast_notifications]
+
+The tour `toast_notifications_tour` in `static/tests/tours/toast_notifications_tour.js`. It opens `/?report_submitted=1`, dismisses the cookie bar and waits for `.o_notification_manager .o_notification` to appear in the DOM, which shows that the URL-parameter toast fires on a public page. It covers `toast_notifications_logic`; the administrator toast is exercised by the JSON test `test_admin_violation_toast_rpc` instead. It runs in a headless browser, started from a Python tour test.
+
+### `website_page_sanitize_arch` [@ANCHOR: website_page_sanitize_arch]
+
+`website.page._sanitize_user_arch(self, arch_content)` (`@api.model`, `models/website_page.py`). It cleans the QWeb `arch` of a member-owned page.
+
+| Argument | Type | Meaning |
+| --- | --- | --- |
+| `arch_content` | str | Markup of the page body. An empty string comes back unchanged with `False`. |
+
+**Returns:** the tuple `(cleaned_markup, was_modified)`. `was_modified` is true when something hostile was removed, and the caller (`_trigger_malicious_arch_violation`) then files a strike report; removal of `<link>`, `<style>` rules and `style` declarations is logged but does not set it. **Steps, in order:** SVG blocks rebuilt from the zero_sudo allow-list; names with an undeclared namespace prefix removed; `script`, `iframe`, `object`, `embed` and `base` removed (case-insensitive); `<link>` removed and `<style>` text re-filtered; `style="..."` attributes filtered; `<meta http-equiv="refresh">` neutralised; attributes with `javascript:`, `data:` or `vbscript:` URLs (control characters stripped first) renamed to `data-blocked-*`; `on*` and `t-*` attributes renamed the same way except `t-name` and a `t-call` naming one of four allowed templates; every `<` in text turned into `&lt;`. **Errors:** a `KeyError` or `ValueError` returns `<div>Sanitization Error</div>` with true. Pure function, no database access. Tests: `test_website_page_sanitize_arch`, `test_user_arch_svg_allowlist`.
+
+### `test_website_page_sanitize_arch` [@ANCHOR: test_website_page_sanitize_arch]
+
+Test `test_07_qweb_arch_sanitization` in `tests/test_orm_security.py`. A non-administrator member creates a `website.page` whose arch has a `<script>`, an `<iframe>`, and a `<div>` carrying `t-eval` and `onmouseover`. The test asserts that neither tag survives in the stored arch, that the attributes were renamed to `data-blocked-t-eval` and `data-blocked-onmouseover`, and that an automatic `content.violation.report` exists against the member (the effect of `_trigger_malicious_arch_violation`); a second write with a script tag is stripped too. It covers `website_page_sanitize_arch`; `test_website_page_sanitize_arch_bare_env_bypass` covers the same function with a bare environment.
+
+### `user_websites:page_arch_style_attribute_filter` [@ANCHOR: user_websites:page_arch_style_attribute_filter]
+
+The `style="..."` pass inside `_sanitize_user_arch` (`models/website_page.py`). For every element, any attribute whose name is `style` in any letter case is passed to zero_sudo's `sanitize_style_attribute`, which returns `(cleaned, dropped)`: declarations are rewritten one by one, a `url()` is allowed only as a `#fragment`, `image-set()`, `data:`, `expression` and escapes are refused, and `position` may only be `static`, `relative` or `absolute`. Malformed CSS drops the whole attribute, and an attribute left empty is removed. A removal is logged at info level only and is not a strike. Elements inside `<svg>` were already rebuilt by the SVG allow-list. Tests: `test_user_arch_style_attribute_filter`.
+
+### `test_user_arch_style_attribute_filter` [@ANCHOR: test_user_arch_style_attribute_filter]
+
+Class `TestUserArchStyleAttribute` in `tests/test_user_arch_style_link.py` (an `HttpCase`, tagged `post_install`). Five tests feed arch strings to `_sanitize_user_arch`: every entry of the hostile list is removed without a strike (`modified` false); a harmless `color:red;margin:0 auto` survives while the hostile part of a second declaration list goes, including an upper-case `STYLE`; a malformed or empty attribute is removed whole; nesting and every element type are covered; and an SVG's own style still goes through the SVG filter.
+
+### `user_websites:UX_REPORT_VIOLATION` [@ANCHOR: user_websites:UX_REPORT_VIOLATION]
+
+`UserWebsitesController.report_violation(self, url="", reason="", description="", email="", website_honeypot="", **post)`, route `POST /website/report_violation`, `auth="public"`, `csrf=True`, `website=True`.
+
+| Argument | Type | Meaning |
+| --- | --- | --- |
+| `url` | str | The reported page; the `Referer` header is used if it is empty. |
+| `description` | str | The complaint, cut to 5000 characters. |
+| `email` | str | A guest's address (a member's account is recorded instead). |
+| `website_honeypot` | str | Hidden field; any value means a bot. |
+| `post` | dict | The form_shield fields (proof of work or answer, second honeypot, issue time). |
+
+**Flow:** a filled honeypot is counted and answered with the success redirect. Missing `url` or `description` redirects with `report_error=missing_fields`. Then the shield check (`report_violation_shield`), then the structural check (`report_problem`). The report row is created as the module service account with `target_url`, `description`, state `new`, the email, `reported_by_user_id` for a signed-in member (taken from the session, never the form), and `content_owner_id` or `content_group_id` found from the first path segment. **Returns:** always a redirect to the reported path plus `report_submitted=1` or `report_error=<reason>`; a refused shield may return a rendered page (see `report_refusal`). Tests: `test_tour_violation_report`, `test_report_violation_honeypot_rejected`, `test_report_violation_records_logged_in_reporter`.
+
+### `violation_report_logic` [@ANCHOR: violation_report_logic]
+
+`ViolationReportModal._onModalShow(ev)` in `static/src/js/violation_report.js`, bound to the Bootstrap `show.bs.modal` event of `#reportViolationModal` by `start()`. The event's `relatedTarget` is the button that opened the modal: its `data-url` is copied into the form's `url` input, and the description and email fields are cleared so a previous report's text does not carry over. With no related button it does nothing. It never submits and holds no state. Test: `test_tour_violation_report`.
+
+### `test_tour_violation_report` [@ANCHOR: test_tour_violation_report]
+
+The Python test in `tests/test_ui_tours.py` that starts the tour `test_tour_violation_report` (`static/tests/tours/violation_report_tour.js`) on a member's page. The tour opens the report modal, fills the description and a guest email, waits until the form_shield status line says it is verifying (the proof of work runs in a Web Worker), clicks Submit and waits for the redirect. The Python side then checks that a `content.violation.report` row exists with the guest email as `reported_by_email`. An edge-cached variant checks the CSRF refresh.
+
+### `user_websites:report_limits` [@ANCHOR: user_websites:report_limits]
+
+The constants `REPORT_LIMITS` and `REPORT_MEMBER_LIMITS` (tuples of `(scope, count, seconds)`) in `controllers/main.py`, passed to `form.shield.check_form(limits=...)`. A guest is allowed 5 reports per hour per network, a member 30 per hour per user; both get 10 per day per reported page (`target`) and 100 per hour for the whole site (`global`). Counters live in Redis; when Redis is down the shield answers "unavailable" and the page says so with HTTP 503. Over the limit gives HTTP 429. Tests: `test_report_violation_limits_and_unavailable_store`, `test_report_violation_is_rate_limited`.
+
+### `user_websites:report_violation_shield` [@ANCHOR: user_websites:report_violation_shield]
+
+The block inside `report_violation` that runs after the honeypot and before any structural check. It normalises the target (`normalize_report_target(url, _own_site_hosts())`), decides `member = not env.user._is_public()` and calls `request.env["form.shield"].check_form("report_violation", post, target=target, limits=...)`. A verdict that is not `ok` is answered by `_report_refusal`. Programs that cannot solve the proof of work never reach the later checks, and each refusal is counted by reason without keeping any text. Tests: `test_report_violation_shield_outcomes` (no answer, forged answer, either honeypot, another form's answer, expired, too fast, moved networks, solved once, replay).
+
+### `user_websites:report_violation_shield_fields` [@ANCHOR: user_websites:report_violation_shield_fields]
+
+The `<t t-call="form_shield.fields">` call in the `report_violation_modal` template (`views/user_websites_templates.xml`). It adds the shield's hidden fields and status line to the form, with `issued` set to false (so the question is not shown at once; the page around the modal may use that name for something else) and `fallback_url` set to `/website/report_violation`, the page that shows the plain-text question for visitors without scripts. The proof of work runs in the browser's Web Worker. Tested by the report tour and by `form_shield:test_report_form_happy_path_tour`.
+
+### `user_websites:report_own_site_hosts` [@ANCHOR: user_websites:report_own_site_hosts]
+
+`_own_site_hosts()` in `controllers/main.py`; needs the current request. **Returns:** a set of host names (lower case, `www.` and port dropped, empty values removed) that a report may be about: this request's host, the host of the `web.base.url` parameter and the domain of up to 500 `website` records. It reads the database once. The result feeds `normalize_report_target`. Test: `test_normalize_report_target`.
+
+### `user_websites:normalize_report_target` [@ANCHOR: user_websites:normalize_report_target]
+
+`normalize_report_target(raw, hosts)` in `controllers/main.py`.
+
+| Argument | Type | Meaning |
+| --- | --- | --- |
+| `raw` | str or None | The posted URL or path. |
+| `hosts` | set of str | Result of `_own_site_hosts()`. |
+
+**Returns:** the URL in one canonical form (`scheme://host/path?query`, fragment dropped), or `None` when it is not a page of this site. Refused: empty, over 2048 characters, control characters, credentials in the URL, a scheme other than http or https, a host not in `hosts` (comparison ignores `www.`), and a path that is protocol-relative (`//x`) or not rooted. A bare path takes this request's origin. http and https are treated as the same page. No exceptions escape (a `ValueError` from parsing gives `None`). Tests: `test_normalize_report_target`, `test_report_violation_refuses_another_sites_url`.
+
+### `user_websites:report_problem` [@ANCHOR: user_websites:report_problem]
+
+`report_problem(target, description, email, member)` in `controllers/main.py`. **Returns:** a reason string or `None`. Reasons, in order: `foreign_target` (target is `None`), `short_description` (under 10 characters after stripping), `gibberish` (one unbroken random-looking token of 16 or more characters with a lower-case letter, an upper-case letter and a digit). A member stops there. A guest may also get `too_many_urls` (more than two `http(s)://` or `www.` occurrences) or `bad_email` (no strictly valid address, or a local part failing `_local_part_ok`). Only structure is judged; rude or wrong reports are left to moderators. Pure function. Test: `test_report_problem_reasons`.
+
+### `user_websites:report_violation_page` [@ANCHOR: user_websites:report_violation_page]
+
+`UserWebsitesController.report_violation_form(self, url="", **_ignored)`, route `GET /website/report_violation`, public, `sitemap=False`. It shows the report form as a page of its own, with the plain-text question in place of the proof of work, for browsers without scripts and for visitors the modal links to. The reported address is `url`, or the `Referer` header when empty. It delegates to `_render_report_page`, which marks the response `no-store`, because a question is issued per request and must not be cached. Test: `form_shield:test_question_form_page_renders_accessible_question`.
+
+### `user_websites:reported_path` [@ANCHOR: user_websites:reported_path]
+
+`_reported_path(reported_url)` in `controllers/main.py`. **Returns:** the path (with its query) of the URL, or `/` for an empty or unparsable one, never the scheme or host. Leading slashes and backslashes are collapsed to exactly one slash, so `http://site//evil.example` cannot turn into a protocol-relative redirect to another site. Used by `_report_violation_redirect_target` and `_report_refusal`. Pure. Test: `test_normalize_report_target`.
+
+### `user_websites:bare_host` [@ANCHOR: user_websites:bare_host]
+
+`_bare_host(host)` in `controllers/main.py`. **Returns:** the host lower-cased, with trailing dots removed and one leading `www.` dropped; `None` or an empty value gives an empty string. It is the single comparison rule used by `_own_site_hosts` and `normalize_report_target`, so `WWW.Example.com.` and `example.com` are the same host. Pure. Test: `test_normalize_report_target`.
+
+### `user_websites:local_part_ok` [@ANCHOR: user_websites:local_part_ok]
+
+`_local_part_ok(address)` in `controllers/main.py`. **Returns:** true unless the part of `address` before the first `@` starts or ends with a dot or contains `..`. It runs after `email_normalize(strict=True)` in `report_problem` and refuses addresses that mail providers fold into someone else's mailbox (such as `me.g.astop.l.ay.@gmail.com`). Pure. Test: `test_report_problem_reasons`.
+
+### `user_websites:render_report_page` [@ANCHOR: user_websites:render_report_page]
+
+`UserWebsitesController._render_report_page(self, url, description="", email="", notice="", status=200)`. It issues a new question with `form.shield.issue("q")` and renders `user_websites.report_violation_page` with `url`, `description`, `email`, `notice` and `issued`, so what the visitor typed is kept. It sets the HTTP status (200, 429 or 503) and the header `Cache-Control: no-store`. **Returns:** the response. Used by the GET page and by `_report_refusal`. Test: `test_report_violation_shield_outcomes`.
+
+### `user_websites:report_refusal` [@ANCHOR: user_websites:report_refusal]
+
+`UserWebsitesController._report_refusal(self, verdict, url, description, email)`. It answers a submission the shield refused. For the outcome `QUESTION` it re-renders the page with "Please answer this short question"; `LIMITED` renders "Too many reports from your network" with HTTP 429; `UNAVAILABLE` renders "Reporting is temporarily unavailable" with HTTP 503. Any other outcome (forged answers, honeypots, replays, bad signatures) goes to form_shield's `refusal_response`, which redirects to the success address (`report_submitted=1`) for a program and gives a person the reason, so a program learns nothing. **Returns:** a response. Test: `test_report_violation_shield_outcomes`.
+
+### `user_websites:report_violation_redirect_target` [@ANCHOR: user_websites:report_violation_redirect_target]
+
+`_report_violation_redirect_target(reported_url, query_param)` in `controllers/main.py`. **Returns:** the path from `_reported_path(reported_url)` followed by `?` or `&` and `query_param` (for example `report_submitted=1`). Using only the path stops the posted URL or `Referer` from being echoed as an open redirect; a bare path is same-origin. Pure. Test: `test_report_violation_redirects_back_to_reported_page`.
+
+### `api_pending_reports` [@ANCHOR: api_pending_reports]
+
+`UserWebsitesController.pending_reports(self, **kwargs)` (the code carries the id as `user_websites:COMM_pending_reports`), route `GET /api/v1/user_websites/pending_reports`, `auth="public"`, `sitemap=False`. **Returns:** JSON `{"count": int, "latest_id": int, "url": str}` for a user in `group_user_websites_administrator` or `base.group_system`; `count` is capped at 1000 and counts reports in state `new`, `latest_id` is the newest such id or 0. Every other caller (guests included) gets `{"count": 0, "error": "Forbidden"}` with HTTP 200, on purpose, so the page's fetch does not raise errors in headless tours. The counting runs as the module service account. Tests: `test_01_api_pending_reports_admin_access`, `test_02_api_pending_reports_unauthorized_access`.
+
+### `test_admin_violation_toast_rpc` [@ANCHOR: test_admin_violation_toast_rpc]
+
+Test `test_01_api_pending_reports_admin_access` in `tests/test_controllers.py`. It logs in as an administrator, calls `/api/v1/user_websites/pending_reports` and asserts HTTP 200 and a JSON body carrying the count. Its sibling `test_02` asserts that an unauthorised caller gets the `Forbidden` body with HTTP 200. Together they cover `api_pending_reports` and the data source of `admin_toast_logic`.
+
+### `controller_my_privacy_dashboard` [@ANCHOR: controller_my_privacy_dashboard]
+
+`UserWebsitesController.privacy_dashboard(self, **kwargs)` (code id `user_websites:COMM_privacy_dashboard`), route `GET /my/privacy`, `auth="user"`, `website=True`. Renders the template `user_websites.portal_my_privacy`: a "Download My Data" card (a POST form to `/my/privacy/export`), a "Right to Erasure" card that warns about the permanent ban and posts to `/my/privacy/delete_content`. **Returns:** the rendered page; a guest is sent to login. No side effects. Test: tour `test_tour_gdpr_privacy` (`gdpr_privacy_tour`).
+
+### `UX_GDPR_EXPORT` [@ANCHOR: UX_GDPR_EXPORT]
+
+The data export as a user sees it: the form on the privacy dashboard posting to `/my/privacy/export` (`privacy_export`, code id `user_websites:COMM_privacy_export`, `auth="user"`). The response is streamed JSON with `Content-Disposition: attachment; filename="gdpr_export.json"` and `Cache-Control: private, no-store`. The body holds the plain keys from `_get_gdpr_export_data()` (such as `user`) followed by the streamed keys from `_get_gdpr_streamed_keys()` (`pages`, `blog_posts`, `submitted_reports`, `appeals`), each written item by item, so a large export never sits in memory. `/my/privacy/export.zip` redirects to the CSV daemon with a single-use token cookie. Tests: `test_gdpr_export_api`, `test_tour_gdpr_privacy`.
+
+### `UX_GDPR_ERASURE` [@ANCHOR: UX_GDPR_ERASURE]
+
+The erasure action as a user sees it: a POST form on the privacy dashboard, with a confirmation prompt and a warning that erasure permanently bans the account. It posts to `/my/privacy/delete_content` (`privacy_delete_content`, `csrf=True`, `auth="user"`), which calls `_execute_gdpr_erasure()` (`gdpr_sudo_erasure`) and redirects to the public page `/privacy/erased`, because the deactivated account can no longer see logged-in pages. **Irreversible.** Tests: `test_02_right_to_erasure` (pages and posts gone, account inactive, removed from the directory), the tour `test_tour_gdpr_privacy`.
+
+### `user_websites:COMM_privacy_erased` [@ANCHOR: user_websites:COMM_privacy_erased]
+
+`UserWebsitesController.privacy_erased(self, **kwargs)`, route `GET /privacy/erased`, `auth="public"`. Renders the static template `user_websites.privacy_erased` (element `user_websites_erasure_confirmed`). It is public because the erased account's session is gone; it ignores the query string, reflects nothing and takes no redirect target, so it cannot be used to find out whether an account ever existed. **Returns:** the page. Tests: `test_02b_privacy_erased_public_page`, the tour `test_tour_gdpr_privacy`.
+
+### `res_users_gdpr_export` [@ANCHOR: res_users_gdpr_export]
+
+`res.users._get_gdpr_export_data(self)` in `models/res_users.py`, an override of the compliance hook. It calls `ensure_one()`, takes the parent's dictionary, makes sure it has a `user` key, and adds `name`, `email` and `website_slug` (or false). **Returns:** the dict that `privacy_export` writes. The large collections are not here; they are provided as generators by `_get_gdpr_streamed_keys()`. A module storing personal data must extend this method the same way. Reads only the user's own record; no side effects. Test: `test_gdpr_export_hook`.
+
+### `test_gdpr_export_hook` [@ANCHOR: test_gdpr_export_hook]
+
+Test `test_01_gdpr_export_hook` in `tests/test_sdk_extensibility.py`. It creates a page for a user named "SDK Tester", calls `_get_gdpr_export_data()` and `_get_gdpr_streamed_keys()`, and asserts that the data has a `user` key with the right name, that `pages` and `blog_posts` are streamed keys (so a large account is not loaded into memory at once), and that running the `pages` generator yields the created page. It covers `res_users_gdpr_export`.
+
+### `gdpr_sudo_erasure` [@ANCHOR: gdpr_sudo_erasure]
+
+`res.users._execute_gdpr_erasure(self)` in `models/res_users.py`. It calls `ensure_one()` and takes the service environment `zero_sudo.gdpr_service_internal`. Using that environment for the search as well as the delete, it removes, in batches of 5000 inside savepoints: the user's `website.page` rows, then `blog.post`, then `blog.blog`; on a concurrent-update, serialization or deadlock error it waits 0.5 s and retries, any other error is raised. Outside test mode it commits after each batch. Then it deletes the user's site images (`ir.attachment` with description `user_websites site image`, up to 500), sets `privacy_show_in_directory` false and calls the parent erasure. **Returns:** nothing. **Irreversible.** The search must not use the caller's rights: a caller outside the owner's group would otherwise find nothing. Tests: `test_gdpr_erasure_pages`, `test_gdpr_erasure_posts`.
+
+### `test_gdpr_erasure_pages` [@ANCHOR: test_gdpr_erasure_pages]
+
+Part of `test_02_right_to_erasure` in `tests/test_privacy_gdpr.py`. A signed-in user with one page and one post posts the CSRF-protected form to `/my/privacy/delete_content`; the test asserts the redirect lands on `/privacy/erased` and shows "Your data has been erased", the account is inactive, the page no longer `exists()`, and the user was removed from the directory. It covers the page deletion of `gdpr_sudo_erasure`.
+
+### `test_gdpr_erasure_posts` [@ANCHOR: test_gdpr_erasure_posts]
+
+Same test as `test_gdpr_erasure_pages` (`test_02_right_to_erasure`): after the erasure request it asserts that the user's blog post no longer exists. It covers the `blog.post` and `blog.blog` loops of `gdpr_sudo_erasure`, which run as the GDPR service account, not as the user.
