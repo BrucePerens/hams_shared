@@ -1,6 +1,2 @@
 [
-  "backup_management/static/src/components/board/board.js::BackupBoard.fetchData",
-  "backup_management/static/src/components/board/board.js::BackupBoard.setup",
-  "backup_management/static/src/components/board/board.js::BackupBoard.syncSnapshots",
-  "backup_management/static/src/components/board/board.js::BackupBoard.triggerBackup"
 ]
