@@ -169,11 +169,11 @@ If your dependent module (e.g., `cloudflare`, `custom_dns`) needs to programmati
 * **`user_websites.owned.mixin`**: Inherit this in your custom models (e.g., `custom.portfolio`) to get the `owner_user_id`/`user_websites_group_id` ownership fields and the Proxy Ownership checks. The mixin does not override `create()`/`write()` itself: your model must call `self._check_proxy_ownership_create(vals_list)` from its `create()` and `self._check_proxy_ownership_write(vals)` from its `write()`, and must declare its own record rules (this module's `ir.rule` records are declared per model, not on the mixin).
   * **Mandatory Assignment:** Every record created by a non-administrator must be owned by a user or a group. If a non-public caller supplies neither `owner_user_id` nor `user_websites_group_id`, `owner_user_id` defaults to the caller; a public (not logged-in) caller who supplies neither gets an `AccessError`.
   * **Mutual Exclusivity:** A record CANNOT be owned by both a user and a group simultaneously. Attempting to assign both will raise a strict `ValidationError`.
-* **Cache Invalidation Hooks:** Distributed slug caches are safely invalidated upon user mutation via `[@ANCHOR: slug_cache_invalidation]`, `[@ANCHOR: slug_cache_invalidation_unlink]`, `[@ANCHOR: group_slug_cache_invalidation]`, and `[@ANCHOR: group_slug_cache_invalidation_unlink]`.
+* **Cache Invalidation Hooks:** Distributed slug caches are safely invalidated upon user mutation via `slug_cache_invalidation`, `slug_cache_invalidation_unlink`, `group_slug_cache_invalidation`, and `group_slug_cache_invalidation_unlink`.
 
-* **String Utilities:** Safe slugification generation logic (`slugify()` in `edge_routing.utils`) `[@ANCHOR: utils_slugify]`.
+* **String Utilities:** Safe slugification generation logic (`slugify()` in `edge_routing.utils`) `utils_slugify`.
 
-* **Limits:** Individual page quota enforcement `[@ANCHOR: website_page_quota_check]`.
+* **Limits:** Individual page quota enforcement `website_page_quota_check`.
 
 * **GDPR Hooks**: The module extends `_get_gdpr_export_data()` `[@ANCHOR: res_users_gdpr_export]`, tested by `[@ANCHOR: test_gdpr_export_hook]`, and `_execute_gdpr_erasure()` `[@ANCHOR: gdpr_sudo_erasure]`, tested by `[@ANCHOR: test_gdpr_erasure_pages]` and `[@ANCHOR: test_gdpr_erasure_posts]`. Dependent modules storing PII MUST override these to append their data to the export payload and hard-delete it during erasure.
 
@@ -205,13 +205,13 @@ For detailed narratives and end-to-end workflows, refer to the following:
 
 <crons_and_subscriptions>
 ## 5. 📧 Weekly Digests & Subscriptions
-* Features an automated `ir.cron` job (`send_weekly_digest` `[@ANCHOR: ir_cron_send_weekly_digest]`, `[@ANCHOR: send_weekly_digest]`) that iterates through `blog.post` objects and dispatches emails to followers. Re-entrant batching algorithm resumption is tested by `[@ANCHOR: test_cron_batching_resumption]`. QWeb Mail templates are verified by `[@ANCHOR: test_weekly_digest_mail_template]`.
+* Features an automated `ir.cron` job (`send_weekly_digest` `ir_cron_send_weekly_digest`, `send_weekly_digest`) that iterates through `blog.post` objects and dispatches emails to followers. Re-entrant batching algorithm resumption is tested by `test_cron_batching_resumption`. QWeb Mail templates are verified by `test_weekly_digest_mail_template`.
 
-* Utilizes HMAC-SHA256 tokens to generate secure, one-click `List-Unsubscribe` header links for GDPR/CAN-SPAM compliance `[@ANCHOR: test_weekly_digest_secret]`.
+* Utilizes HMAC-SHA256 tokens to generate secure, one-click `List-Unsubscribe` header links for GDPR/CAN-SPAM compliance `test_weekly_digest_secret`.
 
-* **Background View Counter Sync:** High-throughput Redis view counters are safely flushed to Postgres via cron `[@ANCHOR: ir_cron_flush_view_counters]`, tested extensively by `[@ANCHOR: test_cron_redis_flush]`. Round-trips are optimized via a PostgreSQL procedure `[@ANCHOR: procedure_flush_view_counters]`.
+* **Background View Counter Sync:** High-throughput Redis view counters are safely flushed to Postgres via cron `ir_cron_flush_view_counters`, tested extensively by `test_cron_redis_flush`. Round-trips are optimized via a PostgreSQL procedure `procedure_flush_view_counters`.
 
-* **High-Speed Simulation Tests:** The full operational load of the module is end-to-end verified via the High-Speed Simulation Environment `[@ANCHOR: simulation_environment]`.
+* **High-Speed Simulation Tests:** The full operational load of the module is end-to-end verified via the High-Speed Simulation Environment `simulation_environment`.
 </crons_and_subscriptions>
 
 ---
@@ -306,7 +306,7 @@ This section ensures all module functions and their developer usage are thorough
 ## 7. Function-Level Anchors
 
 ### Moderation
-* **Strike action:** `[@ANCHOR: action_take_action_and_strike]` -- defined in the `content_moderation` module (see Moderation Models above); this module's enforcement hook turns it into a strike and, past 3 strikes, a suspension.
+* **Strike action:** `action_take_action_and_strike` -- defined in the `content_moderation` module (see Moderation Models above); this module's enforcement hook turns it into a strike and, past 3 strikes, a suspension.
 
 ### Controllers
 * **User Blog Index Route:** `user_websites:COMM_user_blog_index` -- `/<slug>/blog`.
@@ -322,37 +322,37 @@ This section ensures all module functions and their developer usage are thorough
 * **Pending Reports API Route:** `user_websites:COMM_pending_reports`.
 
 ### Blog Ownership, Quota, and Access
-* **Blog Create/Check-Access/Write/Unlink:** `[@ANCHOR: user_websites:COMM_blog_blog_create]`, `[@ANCHOR: user_websites:COMM_blog_blog_check_access]`, `[@ANCHOR: user_websites:COMM_blog_blog_write]`, `[@ANCHOR: user_websites:COMM_blog_blog_unlink]`.
+* **Blog Create/Check-Access/Write/Unlink:** `user_websites:COMM_blog_blog_create`, `user_websites:COMM_blog_blog_check_access`, `user_websites:COMM_blog_blog_write`, `user_websites:COMM_blog_blog_unlink`.
 
-* **Blog Post URL Helper:** `[@ANCHOR: user_websites:COMM_get_blog_urls]` -- constructs the blog-index URLs invalidated on any post mutation.
+* **Blog Post URL Helper:** `user_websites:COMM_get_blog_urls` -- constructs the blog-index URLs invalidated on any post mutation.
 
-* **Blog Post Check-Access/Write/Unlink:** `[@ANCHOR: user_websites:COMM_blog_post_check_access]`, `[@ANCHOR: user_websites:COMM_blog_post_write]`, `[@ANCHOR: user_websites:COMM_blog_post_unlink]`.
+* **Blog Post Check-Access/Write/Unlink:** `user_websites:COMM_blog_post_check_access`, `user_websites:COMM_blog_post_write`, `user_websites:COMM_blog_post_unlink`.
 
 ### Content Moderation and Appeals
-* **Appeal Target Constraint:** `[@ANCHOR: user_websites:COMM_check_appeal_target]` -- an appeal must be tied to exactly one of a user or a group.
+* **Appeal Target Constraint:** `user_websites:COMM_check_appeal_target` -- an appeal must be tied to exactly one of a user or a group.
 
-* **Approve Appeal:** `[@ANCHOR: user_websites:COMM_appeal_action_approve]` -- pardons the appeal's user or group and moves the appeal to `approved`; it raises a `UserError` if the appeal is no longer in the `new` state, so a repeated call cannot pardon twice.
+* **Approve Appeal:** `user_websites:COMM_appeal_action_approve` -- pardons the appeal's user or group and moves the appeal to `approved`; it raises a `UserError` if the appeal is no longer in the `new` state, so a repeated call cannot pardon twice.
 
-* **Reject Appeal:** `[@ANCHOR: user_websites:COMM_appeal_action_reject]`.
+* **Reject Appeal:** `user_websites:COMM_appeal_action_reject`.
 
-* **Strike Count Increment:** `[@ANCHOR: user_websites:COMM_increment_strike_count]` -- the atomic stored-procedure call backing the 3-strike rule.
+* **Strike Count Increment:** `user_websites:COMM_increment_strike_count` -- the atomic stored-procedure call backing the 3-strike rule.
 
-* **Mark Report Under Review:** `[@ANCHOR: user_websites:COMM_action_mark_under_review]`.
+* **Mark Report Under Review:** `user_websites:COMM_action_mark_under_review`.
 
-* **Dismiss Report:** `[@ANCHOR: user_websites:COMM_report_action_dismiss]`.
+* **Dismiss Report:** `user_websites:COMM_report_action_dismiss`.
 
-* **Suspend/Pardon a Group:** `[@ANCHOR: user_websites:COMM_action_suspend_group_websites]`, `[@ANCHOR: user_websites:COMM_action_pardon_group_websites]`.
+* **Suspend/Pardon a Group:** `user_websites:COMM_action_suspend_group_websites`, `user_websites:COMM_action_pardon_group_websites`.
 
-* **Suspend/Pardon a User:** `[@ANCHOR: user_websites:COMM_action_suspend_user_websites]`, `[@ANCHOR: user_websites:COMM_action_pardon_user_websites]`.
+* **Suspend/Pardon a User:** `user_websites:COMM_action_suspend_user_websites`, `user_websites:COMM_action_pardon_user_websites`.
 
-* **Suspended-Group Membership Compute:** `[@ANCHOR: user_websites:COMM_compute_suspended_group_ids]` -- which of a user's groups are currently suspended.
+* **Suspended-Group Membership Compute:** `user_websites:COMM_compute_suspended_group_ids` -- which of a user's groups are currently suspended.
 
 ### GDPR Export
-* **Export Token Name Compute:** `[@ANCHOR: user_websites:COMM_gdpr_token_compute_name]`.
+* **Export Token Name Compute:** `user_websites:COMM_gdpr_token_compute_name`.
 
-* **Mint Export Token For Current User:** `[@ANCHOR: user_websites:COMM_create_for_current_user]`.
+* **Mint Export Token For Current User:** `user_websites:COMM_create_for_current_user`.
 
-* **Streamed GDPR Export Keys:** `[@ANCHOR: user_websites:COMM_get_gdpr_streamed_keys]` -- generator-based streaming to avoid OOM on large exports.
+* **Streamed GDPR Export Keys:** `user_websites:COMM_get_gdpr_streamed_keys` -- generator-based streaming to avoid OOM on large exports.
 
 ### Settings
 * **Settings fields:** `global_website_page_limit`, `company_abuse_email` -- plain scalar
@@ -365,7 +365,7 @@ This section ensures all module functions and their developer usage are thorough
   what let an unrelated field's write cascade into a crash, and because that access-csv row also
   granted this role model-level access to every OTHER module's Settings fields. Managing this
   group's membership now goes through Odoo's own "Groups" screen (button on the Settings page),
-  verified by `[@ANCHOR: test_dropzone_settings]`.
+  verified by `test_dropzone_settings`.
 
 ### SQL Views and Functions (`_auto=False`, proven live by any test that successfully queries the resulting view -- a broken `init()` would fail module installation before any such test could run)
 * **Public Directory View:** `[@ANCHOR: user_websites:COMM_public_directory_view_init]`.
@@ -544,3 +544,159 @@ The documentation route `GET /user-websites/documentation`, login required, hand
 ### `user_websites:COMM_pending_reports` [@ANCHOR: user_websites:COMM_pending_reports]
 
 `pending_reports()`, route `GET /api/v1/user_websites/pending_reports`, `auth="public"`, excluded from the sitemap. For administrators (module administrator or `base.group_system`) it returns JSON `{"count", "latest_id", "url"}` for new violation reports (count capped at 1000). Anyone else, including the public user, gets `{"count": 0, "error": "Forbidden"}` with HTTP 200, so the toast script does not raise. Tested in `tests/test_controllers.py`.
+
+### `slug_cache_invalidation` [@ANCHOR: slug_cache_invalidation]
+
+Behaviour: after a user's slug changes, the cached slug lookup `get_record_by_slug()` (a `@distributed_cache()` method from `edge.routing.mixin`) must stop returning the old answer. `edge.routing.mixin.write()` collects the old and new slugs and calls `zero_sudo.security.utils._notify_cache_invalidation(model, slugs)`; a failure to notify is logged as a warning and never fails the write. `res.users.write()` also calls `notify_model_invalidation("res.users")` when `website_slug`, `active`, `is_suspended_from_websites`, `is_service_account` or `website_ineligible` is written, and only after the real write succeeded. Tested by `test_04_bdd_ormcache_query_counting_slugs`.
+
+### `slug_cache_invalidation_unlink` [@ANCHOR: slug_cache_invalidation_unlink]
+
+Behaviour: deleting a user must evict that user's slug from the slug cache. `edge.routing.mixin.unlink()` reads the slugs of the records first, performs the real unlink, then calls `_notify_cache_invalidation(model, slugs)`; a notification failure is only logged. Without it a deleted user's slug would keep resolving to a missing id until the cache entry expired. The test `test_04_bdd_ormcache_query_counting_slugs` ends by unlinking its user after proving that a cache hit runs no `res_users` query and a rename runs one.
+
+### `group_slug_cache_invalidation` [@ANCHOR: group_slug_cache_invalidation]
+
+The group counterpart of `slug_cache_invalidation`: writing `website_slug` (or `name`, which can derive one) on a `user.websites.group` record goes through the same `edge.routing.mixin.write()`, which evicts the old and new slugs. `user.websites.group.write()` additionally evicts the cached page lookup when `is_suspended_from_websites` is written. Tested by `test_05_bdd_ormcache_query_counting_group_slugs`: a repeated lookup runs no `user_websites_group` query, and after a rename the new slug resolves to the group.
+
+### `group_slug_cache_invalidation_unlink` [@ANCHOR: group_slug_cache_invalidation_unlink]
+
+Deleting a `user.websites.group` evicts its slug from the slug cache through `edge.routing.mixin.unlink()`, as for users (see `slug_cache_invalidation_unlink`). The slugs are read before the delete and the invalidation is sent after it, and a failed notification is logged, not raised. Tested by `test_05_bdd_ormcache_query_counting_group_slugs` in `tests/test_audit_edge_cases.py`.
+
+### `utils_slugify` [@ANCHOR: utils_slugify]
+
+`slugify(s, max_length=None)` in `edge_routing/utils.py` (code anchor `edge_routing:utils_slugify`, test `test_utils_slugify`). It lower-cases and strips the text, folds accents to ASCII (NFKD, dropping what cannot be folded), replaces every run of characters outside `a-z0-9` with a single hyphen and trims hyphens at both ends. A falsy input gives `""`. With `max_length` the result is cut to that length and trailing hyphens are trimmed, and `max_length=0` really gives the empty string. Pure and side-effect free; it does not check reserved words or uniqueness.
+
+### `website_page_quota_check` [@ANCHOR: website_page_quota_check]
+
+The quota block in `website.page.create()` (`models/website_page.py`). For each distinct `owner_user_id` in `vals_list` it asks the owner for `_get_page_limit()` as the service account, counts existing pages with one `_read_group`, adds the pages in this batch, and raises `ValidationError` ("You have reached your limit of N website pages.") when a user's total would exceed the limit. Groups are checked the same way against the global limit, `user_websites.global_website_page_limit` (default 100). If the service account cannot be resolved, it uses the `sys_provisioner` login read by SQL. The blog and post create paths cite it. Tests: `test_page_quota_limit`, `test_page_limits`.
+
+### `ir_cron_send_weekly_digest` [@ANCHOR: ir_cron_send_weekly_digest]
+
+The `ir.cron` record in `data/user_websites_data.xml`. It runs `model.send_weekly_digest()` on `blog.post` once a week, as the module service account, and is active by default. The method re-triggers this same cron while a backlog remains, so one weekly tick can span several runs. See `send_weekly_digest` for the batching and mail details. Test: `test_02_cron_batching_resumption` triggers the cron and checks that an interrupted batch resumes and finishes.
+
+### `send_weekly_digest` [@ANCHOR: send_weekly_digest]
+
+`blog.post.send_weekly_digest()`, an `@api.private @api.model` cron method (`models/blog_post.py`) with no arguments and no return value. It reads up to 50 rows after `user_websites.last_digest_id` from the weekly digest view, one row per follower and author with the last seven days of published posts. For each row with an email it builds an unsubscribe URL signed with HMAC-SHA256 over `model-record-partner-timestamp`, sets `List-Unsubscribe` and `List-Unsubscribe-Post`, and sends the `email_template_weekly_digest` mail under the mail service account (queued, not forced). A full batch stores the last id and re-triggers the cron; a short batch resets the id to 0. With no crypto secret it logs an error and sends nothing. Tests: `test_weekly_digest_secret`, `test_cron_batching_resumption`.
+
+### `test_cron_batching_resumption` [@ANCHOR: test_cron_batching_resumption]
+
+Test `test_02_cron_batching_resumption` in `tests/test_audit_edge_cases.py`. It triggers `ir_cron_send_weekly_digest`, resets `user_websites.last_digest_id` to 0, creates a published post, then sets the last digest id to 999999 to simulate an interrupted batch and runs `send_weekly_digest()`. Nothing is left past that id, so the method must finish and reset the stored id to "0". It proves that resumption reads the stored id and that a finished queue clears it.
+
+### `test_weekly_digest_mail_template` [@ANCHOR: test_weekly_digest_mail_template]
+
+Verification of the weekly digest mail template, carried in code by the test id `COMM_test_weekly_digest_mail_template` in `tests/test_subscriptions.py`. `test_01_weekly_digest_and_unsubscribe_headers` runs `send_weekly_digest()` and finds the `mail.mail` for the follower with the subject "Weekly Update from Content Creator", created by the mail service account. The same file also renders the template directly for a post with `send_mail`. The plain id used in this document has no separate code anchor.
+
+### `test_weekly_digest_secret` [@ANCHOR: test_weekly_digest_secret]
+
+Test `test_01_weekly_digest_and_unsubscribe_headers` in `tests/test_subscriptions.py`. It runs `send_weekly_digest()`, takes the generated email, and checks that `List-Unsubscribe` and `List-Unsubscribe-Post` headers exist and that the URL points to `/website/unsubscribe/res.partner/...`. It then opens that URL as a public visitor, expects HTTP 200 with "Unsubscribed Successfully", and checks that the follower is no longer a follower, so the HMAC token round trip works. It also covers `controller_unsubscribe_digest`.
+
+### `ir_cron_flush_view_counters` [@ANCHOR: ir_cron_flush_view_counters]
+
+The `ir.cron` record in `data/user_websites_data.xml` that runs `model._flush_redis_view_counters()` on `website.page` every 15 minutes as the module service account. It moves Redis page view counters into the `view_count` column. The method can re-trigger the cron when a run did not drain everything; see `website_page_flush_redis_view_counters` for the exact rule. Test: `test_06_cron_redis_flush_batching`.
+
+### `test_cron_redis_flush` [@ANCHOR: test_cron_redis_flush]
+
+Test `test_06_cron_redis_flush_batching` in `tests/test_audit_edge_cases.py`, with a real Redis. One counter holds 42 views and a second sits at 0. After `_flush_redis_view_counters()` the page's `view_count` rose by 42, both keys are gone from Redis, and the patched `_trigger` was never called. A second run finds nothing, triggers nothing and changes nothing. It guards against the 2026-10 storm in which counters left at zero made the cron retrigger itself about 500,000 times a day.
+
+### `procedure_flush_view_counters` [@ANCHOR: procedure_flush_view_counters]
+
+The server action in `data/procedures.xml`, run at module update, that creates the PostgreSQL function `user_websites_flush_view_counters(updates JSONB)`. The argument is a JSON list of objects `{"inc": int, "pid": int}`. The function adds `inc` to `website_page.view_count` (null counts as 0) for page `pid`, in one call for all pages. It returns nothing. `_flush_redis_view_counters()` calls it with `SELECT user_websites_flush_view_counters(%s)` so a flush costs one round trip rather than one per page.
+
+### `simulation_environment` [@ANCHOR: simulation_environment]
+
+Test `test_01_high_speed_full_platform_exercise` in `tests/test_simulation.py`. It repeats a full platform step (guest page loads, login, member actions, administrator report processing and appeal approval, a final database flush) for `SIMULATION_DURATION_MINUTES` iterations (default 60; the name is historical, it counts iterations). Each operation is timed; averages above a threshold (default 0.5 s, `SIMULATION_MAX_AVG_TIME`, with higher limits for GDPR export, report processing and flush) are logged as `[REGRESSION]`. Regressions only warn; the test does not fail on speed.
+
+### `action_take_action_and_strike` [@ANCHOR: action_take_action_and_strike]
+
+`content.violation.report.action_take_action_and_strike()` is defined in the `content_moderation` module (`content_moderation/models/content_violation_report.py`), a `@public_rpc` method. For each report not already `action_taken` or `dismissed` it sets state `action_taken` and calls `_apply_enforcement_action()`, so a resolved report is never struck twice. This module overrides the hook: it adds a strike to the content owner or group (stored procedure `increment_strike_count`) and suspends at three strikes. Tests: `test_01_three_strikes_suspension` and the `content_moderation` test.
+
+### `test_dropzone_settings` [@ANCHOR: test_dropzone_settings]
+
+Test `test_01_res_config_settings` in `tests/test_xpath_rendering.py`. It requests the compiled form view of `base.res_config_settings_view_form` and asserts the arch contains `data-key="user_websites"`, so the module's settings block and the `dropzone_settings` injection point are present. It checks that the block exists, not what the settings fields do. Settings fields are plain `config_parameter` fields without overrides (ADR 0096).
+
+### `user_websites:COMM_blog_blog_create` [@ANCHOR: user_websites:COMM_blog_blog_create]
+
+`blog.blog.create(vals_list)` (`models/blog_blog.py`), `@api.model_create_multi`. It runs `check_access("create")`, `_check_proxy_ownership_create` (owner required, no dual ownership, group membership) and `_check_blog_quota` (by default 5 blogs per user or group, `user_websites.global_blog_limit`, ValidationError past it). Non-administrators have unknown keys dropped, keeping only name, subtitle, owners and SEO fields. The write is then done as the module service account with tracking off. Unique name per owner is a database constraint. Test: `test_01_blog_creation_is_blocked_past_the_configured_limit`.
+
+### `user_websites:COMM_blog_blog_check_access` [@ANCHOR: user_websites:COMM_blog_blog_check_access]
+
+`blog.blog.check_access(operation)`. For `write` and `unlink`, when the caller is a website user who is not a system or module administrator, every blog in the recordset must be owned by that user or by a group they belong to; otherwise it raises `AccessError` ("Access Denied: You do not have permission to modify this blog."). It exists to fail early rather than let the record rule log a denial. Group membership is read once as the service account. Other operations pass to the base method. Test: `test_01_community_blog_container_protection`.
+
+### `user_websites:COMM_blog_blog_write` [@ANCHOR: user_websites:COMM_blog_blog_write]
+
+`blog.blog.write(vals)`. It calls `check_access("write")` and `_check_proxy_ownership_write` (no ownership transfer by ordinary users). For non-privileged callers, keys outside name, subtitle, owners and SEO fields are silently dropped. The real write runs as the module service account with mail tracking disabled. Returns the base result. Tested in `test_01_community_blog_container_protection`, where a second user's `write` on a community blog raises.
+
+### `user_websites:COMM_blog_blog_unlink` [@ANCHOR: user_websites:COMM_blog_blog_unlink]
+
+`blog.blog.unlink()`. It runs `check_access("unlink")`, which raises `AccessError` unless the caller owns the blog, belongs to the owning group, or is an administrator, and then deletes as the module service account with tracking off. Tested in `test_01_community_blog_container_protection` in `tests/test_exhaustive_isolation.py`.
+
+### `user_websites:COMM_get_blog_urls` [@ANCHOR: user_websites:COMM_get_blog_urls]
+
+`blog.post._get_blog_urls()` returns a list (a set made unique) of blog index paths, `/<slug>/blog`, for the owner user or, failing that, the owning group of each post in the recordset. Posts whose owner has no slug add nothing. It prefetches the slug fields, so one call is two reads. `write` and `unlink` call it before and after a change to tell other workers which blog index pages are stale. Tested in `test_02_blog_post_creation_is_blocked_past_the_configured_limit`.
+
+### `user_websites:COMM_blog_post_check_access` [@ANCHOR: user_websites:COMM_blog_post_check_access]
+
+`blog.post.check_access(operation)`: for `write` or `unlink`, a website user who is not an administrator may only touch posts they own or that belong to a group they are a member of; otherwise `AccessError` ("...permission to modify this post."). Group membership is read once as the service account. Everything else defers to the base class. Tested by `test_05_blog_post_cross_tenant_mutation`.
+
+### `user_websites:COMM_blog_post_write` [@ANCHOR: user_websites:COMM_blog_post_write]
+
+`blog.post.write(vals)`. It runs `check_access("write")` and `_check_proxy_ownership_write`. Non-administrators keep only allowed keys (name, content, is_published, owners, blog_id, website_id and SEO fields), their content is sanitized, and a new `blog_id` must be writable by them. It writes as the service account, falling back to the caller on `AccessError`. When publication, name, content or owner changes it computes the blog index URLs before and after and sends cache invalidation for them, then queues the Cloudflare purge. Tested by `test_05_blog_post_cross_tenant_mutation`.
+
+### `user_websites:COMM_blog_post_unlink` [@ANCHOR: user_websites:COMM_blog_post_unlink]
+
+`blog.post.unlink()`. It checks `check_access("unlink")`, captures the affected blog index URLs, enqueues the Cloudflare purge before the delete, deletes as the service account (falling back to the caller on `AccessError`) and then sends cache invalidation for those URLs. Tested by `test_05_blog_post_cross_tenant_mutation` in `tests/test_exhaustive_isolation.py`, where a second user's `unlink` of a victim's post raises.
+
+### `user_websites:COMM_check_appeal_target` [@ANCHOR: user_websites:COMM_check_appeal_target]
+
+`content.violation.appeal._check_appeal_target()`, an `@api.constrains("user_id", "group_id")` constraint. Exactly one of `user_id` (suspended user) and `group_id` (suspended group) must be set; both or neither raises `ValidationError` ("An appeal must be tied to either a User or a Group, but not both."). It runs on create and on writes to those two fields. Tested by `test_03_reject_appeal_leaves_suspension_in_place`, which creates an appeal with no target and expects the error.
+
+### `user_websites:COMM_appeal_action_approve` [@ANCHOR: user_websites:COMM_appeal_action_approve]
+
+`content.violation.appeal.action_approve()`, a `@public_rpc` method used by the admin form button. Every record must be in state `new`, else `UserError` and nothing is changed, so a stale tab cannot pardon twice. Each appeal moves to `approved`, calls `action_pardon_group_websites()` or `action_pardon_user_websites()` (strikes reset, suspension lifted, content not republished) and posts a note as the mail service account. Tests: `test_02_submit_and_approve_appeal`, `test_04_state_guards_block_reprocessing_a_resolved_appeal`.
+
+### `user_websites:COMM_appeal_action_reject` [@ANCHOR: user_websites:COMM_appeal_action_reject]
+
+`content.violation.appeal.action_reject()`, a `@public_rpc` method. Any record not in state `new` raises `UserError` ("already been resolved"), so an approved appeal cannot be flipped to rejected with a false message. Otherwise the state becomes `rejected`, the suspension stays, and a note ("remains suspended") is posted as the mail service account. Tests: `test_03_reject_appeal_leaves_suspension_in_place` and `test_04_state_guards_block_reprocessing_a_resolved_appeal`.
+
+### `user_websites:COMM_increment_strike_count` [@ANCHOR: user_websites:COMM_increment_strike_count]
+
+`content.violation.report._increment_strike_count(table_name, rec_id)` (`models/content_violation_report_moderation.py`). It runs `SELECT increment_strike_count(%s, %s)`. The stored procedure (see `user_websites:COMM_db_functions_init`) locks the row `FOR NO KEY UPDATE` and adds 1 to `violation_strike_count`, so concurrent reports cannot lose a count. `table_name` must be `res_users` or `user_websites_group`; any other value does nothing. Returns nothing. It is a separate method so tests can verify it without mocking the cursor. Test: `test_01_three_strikes_suspension`.
+
+### `user_websites:COMM_action_mark_under_review` [@ANCHOR: user_websites:COMM_action_mark_under_review]
+
+`content.violation.report.action_mark_under_review()`, in `content_moderation/models/content_violation_report.py`. A report already `action_taken` or `dismissed` raises `UserError` ("cannot be reopened for review"); otherwise the state is written as `under_review`. It does not touch strikes or content. Tested from this module by `tests/test_moderation.py` and `tests/test_audit_edge_cases.py`.
+
+### `user_websites:COMM_report_action_dismiss` [@ANCHOR: user_websites:COMM_report_action_dismiss]
+
+`content.violation.report.action_dismiss()`, a `@public_rpc` method in `content_moderation`. Resolved reports (`action_taken` or `dismissed`) raise `UserError`; otherwise the state becomes `dismissed`, with no strike and no change to the content. Exercised by `tests/test_moderation.py` and by the simulation, where the administrator dismisses reports.
+
+### `user_websites:COMM_action_suspend_group_websites` [@ANCHOR: user_websites:COMM_action_suspend_group_websites]
+
+`user.websites.group.action_suspend_group_websites()`, a `@public_rpc` method. It sets `is_suspended_from_websites` on each group and evicts the page caches. Unpublishing pages and posts is done after commit on a background thread; in test mode it runs inline in batches of 5000 as the service account. It posts a note as the service account. It does not check strikes: the caller decides, normally at three strikes. Test: `test_01_group_suspension`, which polls until the content is unpublished.
+
+### `user_websites:COMM_action_pardon_group_websites` [@ANCHOR: user_websites:COMM_action_pardon_group_websites]
+
+`user.websites.group.action_pardon_group_websites()`, a `@public_rpc` method. For each group it resets `violation_strike_count` to 0, clears `is_suspended_from_websites`, evicts page caches and posts a note. It does not republish content, which stays unpublished until restored by hand. Called by `content.violation.appeal.action_approve()`. Test: `test_02_group_pardoning`.
+
+### `user_websites:COMM_action_suspend_user_websites` [@ANCHOR: user_websites:COMM_action_suspend_user_websites]
+
+`res.users.action_suspend_user_websites()`, an `@api.private` method. After commit, `_async_unpublish_content` runs on a background executor for the user ids. Each user is flagged `is_suspended_from_websites`, page caches are evicted and a note is posted on the partner as the mail service account. Called by the strike rule at three strikes. The unpublish is asynchronous, so content disappears slightly after the flag. Test: `test_01_three_strikes_suspension`.
+
+### `user_websites:COMM_action_pardon_user_websites` [@ANCHOR: user_websites:COMM_action_pardon_user_websites]
+
+`res.users.action_pardon_user_websites()`, a `@public_rpc` method. For each user it sets `violation_strike_count` to 0, clears `is_suspended_from_websites`, evicts page caches and posts a note. It does not republish pages or posts. Called by `content.violation.appeal.action_approve()`. It posts its note on the user's partner as the mail service account. Test: `test_02_pardon_functionality`, which sets three strikes, suspends, pardons and expects zero strikes and no suspension.
+
+### `user_websites:COMM_compute_suspended_group_ids` [@ANCHOR: user_websites:COMM_compute_suspended_group_ids]
+
+`res.users._compute_suspended_group_ids()` fills the non-stored `suspended_group_ids`: groups the user belongs to that are suspended. It searches suspended groups whose members include any user in the recordset, in pages of 1000 by id, then maps members to group ids, so cost is a few queries however many users are computed. A user with none gets an empty set. Test: `test_03_compute_suspended_group_ids`, in both directions.
+
+### `user_websites:COMM_gdpr_token_compute_name` [@ANCHOR: user_websites:COMM_gdpr_token_compute_name]
+
+`ham.gdpr.export.token._compute_name()`, a stored compute depending on `user_id` and its login and name. It sets `name` to "GDPR Export Token for <user name, else login, else id>" so tokens are recognizable in the backend. The token string itself is not part of the name. Tested in `tests/test_privacy_gdpr.py`.
+
+### `user_websites:COMM_create_for_current_user` [@ANCHOR: user_websites:COMM_create_for_current_user]
+
+`ham.gdpr.export.token.create_for_current_user()`, `@api.private @api.model`, no arguments. It returns a new `secrets.token_urlsafe(32)` string and stores it for the calling user (`env.uid`), creating the row as the `user_gdpr_export_service` service account because ordinary users have no create access. It is the only path that makes a token, so `user_id` is always an authenticated identity. The token expires after 5 minutes and is single use (see `_consume`). Test: `test_privacy_gdpr.py`.
+
+### `user_websites:COMM_get_gdpr_streamed_keys` [@ANCHOR: user_websites:COMM_get_gdpr_streamed_keys]
+
+`res.users._get_gdpr_streamed_keys()` (single record) returns a dict of key name to a zero-argument generator function: `pages` (name, url, arch), `blog_posts`, `submitted_reports` and `appeals`, added to what the base class supplies. In production each generator pages through records 1000 at a time under a fresh cursor and the service account, so a large export streams instead of being held in memory. In test mode they iterate lists loaded up to 10000 rows. Test: `test_01e_consume_and_export_materializes_data_and_streamed_keys`.
