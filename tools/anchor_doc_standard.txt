@@ -682,6 +682,7 @@ daemons/shack_console/docs/stories/allstar_mode.md
 daemons/shack_console/docs/stories/non_visual_spoken_status.md
 daemons/shack_console/docs/stories/console_panel_helpers.md
 daemons/shack_console/docs/stories/signal_slot_rst_power_and_tx_meters.md
+daemons/shack_console/docs/stories/waterfall_demo_band.md
 daemons/shack_console/docs/stories/waterfall_menus_rig_bar_and_edit_handlers.md
 daemons/shack_console/docs/stories/zoom_group_and_panel_drag.md
 daemons/loupedeck_ct/docs/stories/loupedeck_ct_driver.md
