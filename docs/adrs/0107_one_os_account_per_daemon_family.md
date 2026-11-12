@@ -1,7 +1,9 @@
 # ADR 0107: One OS Account Per Daemon Family
 
 ## Status
-Accepted (Bruce, 2026-10-03, decision 86). Phase 1 implemented 2026-10-04; later phases open.
+Accepted (Bruce, 2026-10-03, decision 86). Phase 1 implemented 2026-10-04. Checked 2026-11-12: the code now has 24 distinct `hamsd_*` accounts
+in `FAMILY_ACCOUNT_UNITS` (Phases 2 to 4 and the start of Phase 5 are in code and tests, per `docs/proposals/DAEMON_OS_ISOLATION_PLAN.md`); units still on `odoo` are
+listed with a reason in `SHARED_ODOO_ACCOUNT_UNITS`.
 
 ## Context
 
@@ -25,7 +27,7 @@ owner, so the file stays `odoo`-owned (the only writer) and the group is the rea
 
 **3. A migrated unit narrows what it can touch.** `ReadWritePaths=` names only directories the family's account owns; it loads only the
 environment files its daemon uses (non-secret values are in `common.env`); and it adds `ProtectProc=invisible` and the kernel and namespace
-`Protect*`/`Restrict*` directives. A ratchet in `tools/test_infrastructure.py` (`FAMILY_ACCOUNT_UNITS`, `SHARED_ODOO_ACCOUNT_UNITS`)
+`Protect*`/`Restrict*` directives. A ratchet in `tools/test_infrastructure.py` over the two tables in `tools/infrastructure.py` (`FAMILY_ACCOUNT_UNITS`, `SHARED_ODOO_ACCOUNT_UNITS`)
 fails when a unit under a `hamsd_` account is not held to these rules and when a unit still on `odoo` is not on the reviewed list, so
 the list can only shrink.
 
@@ -37,7 +39,7 @@ ordering on a live host, rollback and the rehearsal procedure are in hams_com `d
 - A compromised family daemon can read its own key and nothing else in the key directory; with its environment trimmed it also holds none of
   the shared secrets. Until a family is migrated and its environment trimmed it has neither protection.
 - Phase 1 accounts join `hams_com` to reach `/opt/hams` (as `pdns` does). The unit's read-only sandbox keeps them out of the `hams_com`-writable
-  directories; Phase 2 replaces the membership with a traverse-only grant.
+  directories; Phase 2 (implemented) replaces the membership with a traverse-only grant.
 - Deploying a phase needs the key-manager upgrade (`odoo -u daemon_key_manager`), a provision run, and a restart of `odoo.service` (a process
   gets its supplementary groups when it starts).
 

@@ -90,10 +90,11 @@ unprivileged daemon is the one polling for a result rather than being polled).
    activation units with the identical "linked but not enabled" footgun documented in that step's own
    2026-09-23 bug-fix comment.
 
-5. **Scope, deliberately narrow**: only pgbackrest's `backup` operation is delegated
-   (`_PGBACKREST_PRIVILEGED_OPS = ("backup",)` in `main.py`). `pgbackrest info` (read-only, used by
-   `sync_snapshots`) already works fine as `odoo` -- confirmed against the real job log before this change --
-   and stays on the direct-subprocess path. `pgbackrest restore` remains a manual admin operation, as it
+5. **Scope, deliberately narrow**: when this ADR was written only pgbackrest's `backup` operation was
+   delegated, and `pgbackrest info` (read-only, used by `sync_snapshots`) stayed on the direct-subprocess
+   path. Since 2026-10-04 (hams_open #613, which added selecting a pgBackRest repository by number) `info`
+   is delegated too: `_PGBACKREST_PRIVILEGED_OPS = ("backup", "info")` in `main.py` and
+   `_ALLOWED_OPERATIONS` in `pgbackrest_sidecar.py`. `pgbackrest restore` remains a manual admin operation, as it
    already was before this ADR; extending the sidecar to cover it is new work for later, not assumed here.
 
 ## Consequences
