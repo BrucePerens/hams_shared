@@ -944,3 +944,5 @@ ham_member_certs/docs/stories/js_member_cert_auto.md
 ham_member_certs/docs/stories/js_member_cert_enroll.md
 ham_member_certs/docs/stories/test_signer_support_reference.md
 ham_relay_bridge/README.md
+ham_demo_mode/README.md
+daemons/hams_simulated_bots/fine_tuning/README.md
