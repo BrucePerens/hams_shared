@@ -1307,3 +1307,16 @@ daemons/hamcall_idx_sync/README.md
 daemons/noaa_swpc_sync/README.md
 docs/modules/ham_logbook.md
 docs/stories/ingest_gemini_attestation.md
+daemons/shack_console/docs/stories/award_status_loader.md
+daemons/shack_console/docs/stories/grant_page.md
+daemons/shack_console/docs/stories/js_settings_audio_view.md
+daemons/shack_console/docs/stories/js_test_harness.md
+daemons/shack_console/docs/stories/log_local_log.md
+daemons/shack_console/docs/stories/nets_control.md
+daemons/shack_console/docs/stories/qso_ingest_qso_map.md
+daemons/shack_console/docs/stories/satellites_bundle.md
+daemons/shack_console/docs/stories/settings_bridges.md
+daemons/shack_console/docs/stories/simband_over_capture.md
+daemons/shack_console/docs/stories/simband_sim_cw_tx.md
+daemons/shack_console/docs/stories/storage_health.md
+daemons/shack_console/docs/stories/voice_ml_env.md
