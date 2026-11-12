@@ -2,6 +2,5 @@
   "backup_management/static/src/components/board/board.js::BackupBoard.fetchData",
   "backup_management/static/src/components/board/board.js::BackupBoard.setup",
   "backup_management/static/src/components/board/board.js::BackupBoard.syncSnapshots",
-  "backup_management/static/src/components/board/board.js::BackupBoard.triggerBackup",
-  "user_websites/static/src/js/owner_delete_dialog.js::OwnerDeleteDialog.start"
+  "backup_management/static/src/components/board/board.js::BackupBoard.triggerBackup"
 ]
