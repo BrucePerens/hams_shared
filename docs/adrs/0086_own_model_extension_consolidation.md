@@ -72,7 +72,7 @@ files that both assumed they fully controlled the model.
 3. **Exemption: genuinely optional/pluggable modules.** A cross-module
    `_inherit` is unavoidable, and MUST be left alone, when the extension
    references the *extending* module's own models, service accounts, or
-   utilities (e.g. `pager_duty` extending `zero_sudo.security.utils`,
+   utilities (e.g. `ham_events` and `content_security_policy` extending `zero_sudo.security.utils`,
    `cloudflare` extending `edge.routing.domain`, `ham_sk_workflow` adding a
    `selection_add` value to `zero_sudo.security.log`). Merging these into
    the base model would require the base module to depend on the module
