@@ -10,8 +10,5 @@
   "pager_duty/static/src/components/log_viewer/log_viewer.js::LogViewer.fetchFiles",
   "pager_duty/static/src/components/log_viewer/log_viewer.js::LogViewer.onKeyup",
   "pager_duty/static/src/components/log_viewer/log_viewer.js::LogViewer.setup",
-  "user_websites/static/src/js/owner_delete_dialog.js::OwnerDeleteDialog.start",
-  "zero_sudo/static/src/components/security_dashboard/security_dashboard.js::SecurityDashboard.loadLogs",
-  "zero_sudo/static/src/components/security_dashboard/security_dashboard.js::SecurityDashboard.setup",
-  "zero_sudo/static/src/components/security_dashboard/security_dashboard.js::SecurityDashboard.togglePause"
+  "user_websites/static/src/js/owner_delete_dialog.js::OwnerDeleteDialog.start"
 ]
