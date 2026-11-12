@@ -236,6 +236,7 @@ daemons/shack_console/docs/stories/console_asset_pipeline.md
 daemons/shack_console/docs/stories/console_audio_alerts_cw_text_and_award_helpers.md
 daemons/shack_console/docs/stories/console_award_order_and_antenna_selector.md
 daemons/shack_console/docs/stories/console_band_dialog_and_alert_queue.md
+daemons/shack_console/docs/stories/console_fixed_format_and_frequency_scale.md
 daemons/shack_console/docs/stories/console_gps_notice_indicator.md
 daemons/shack_console/docs/stories/console_gps_sky_page.md
 daemons/shack_console/docs/stories/console_hams_redirect_role_notices.md
