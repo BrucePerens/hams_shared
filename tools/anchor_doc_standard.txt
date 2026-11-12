@@ -951,3 +951,14 @@ ham_club_management/README.md
 ham_nets/README.md
 ham_shared_callsigns/README.md
 hamcall_verify/README.md
+ham_events/docs/stories/06_event_listings_search_and_adoption.md
+ham_events/docs/stories/05_events_and_clubs.md
+ham_repeater_dir/docs/stories/07_satellite_and_repeaters.md
+ham_dns/docs/stories/07_dns_management_and_maintenance.md
+content_security_policy/docs/stories/csp_reporting.md
+ham_forum_extension/docs/stories/09_forum_reports_holds_and_trust.md
+docs/stories/daemons_polite_fetcher_and_page_registry_reference.md
+docs/stories/daemons_simulated_bots_reference.md
+docs/stories/daemons_fetch_core_reference.md
+docs/stories/daemons_dx_fcc_and_club_recrawl_reference.md
+docs/modules/zero_sudo.md
