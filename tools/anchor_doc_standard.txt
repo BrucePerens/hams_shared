@@ -270,6 +270,7 @@ daemons/shack_console/docs/stories/s1_rig_pins_mode_sync.md
 daemons/shack_console/docs/stories/s1_rig_pins_store.md
 daemons/shack_console/docs/stories/s1_rig_trail.md
 daemons/shack_console/docs/stories/s1_rigs.md
+daemons/shack_console/docs/stories/s1_style_segments_split_plans.md
 daemons/shack_console/docs/stories/scope_cw_and_decode_overlay.md
 daemons/shack_console/docs/stories/settings_page_alerts.md
 daemons/shack_console/docs/stories/s1_tabs_operate_mode.md
