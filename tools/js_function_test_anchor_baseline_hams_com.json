@@ -1,7 +1,4 @@
 [
-  "ham_logbook/static/src/js/qsl_collection.js::loadCard",
-  "ham_logbook/static/src/js/qsl_collection.js::renderPlaceholder",
-  "ham_logbook/static/src/js/qsl_collection.js::renderQslCard",
   "ham_member_certs/static/src/js/device_keys.js::KeyMissingError.constructor",
   "ics_forms/static/src/js/ics_editor.js::flushQueuedSaves",
   "ics_forms/static/src/js/ics_editor.js::init",
