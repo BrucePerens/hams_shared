@@ -232,6 +232,7 @@ daemons/shack_console/docs/stories/console_shared_receiver_and_speech_dock.md
 daemons/shack_console/docs/stories/console_speech_repair_guards_language.md
 daemons/shack_console/docs/stories/console_style_adapter_region_tones_sources.md
 daemons/shack_console/docs/stories/console_waterfall_screen_and_host.md
+daemons/shack_console/docs/stories/console_waterfall_transmit_sync_rtt_settings.md
 daemons/shack_console/docs/stories/layout_height.md
 daemons/shack_console/docs/stories/layout_library.md
 daemons/shack_console/docs/stories/layout_presets.md
