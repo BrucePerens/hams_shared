@@ -5145,15 +5145,15 @@ class ExternalFetchUnitsNeverActivatedInTestTests(unittest.TestCase):
 
     def test_the_fixture_element_set_passes_the_publishers_own_checksum(self):
         import importlib.util
-        for com in (os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "hams_com"),):
-            path = os.path.join(com, "daemons", "relay_satellites", "publish.py")
-            if not os.path.exists(path):
-                self.skipTest("hams_com is not beside hams_shared here")
-            spec = importlib.util.spec_from_file_location("relay_satellites_publish", path)
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            self.assertTrue(module.tle_checksum_ok(sf_fixtures.TEST_TLE[1]))
-            self.assertTrue(module.tle_checksum_ok(sf_fixtures.TEST_TLE[2]))
+        # Reached as hams_com/tools (a symlink to hams_shared/tools): the daemons directory is beside the path as named, not beside the real file.
+        path = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "daemons", "relay_satellites", "publish.py"))
+        if not os.path.exists(path):
+            self.skipTest("run from hams_shared alone: hams_com daemons are not beside tools")
+        spec = importlib.util.spec_from_file_location("relay_satellites_publish", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        self.assertTrue(module.tle_checksum_ok(sf_fixtures.TEST_TLE[1]))
+        self.assertTrue(module.tle_checksum_ok(sf_fixtures.TEST_TLE[2]))
         self.assertIn("ham_satellite_tle", sf_fixtures.tle_fixture_sql())
 
     def test_band_keys_are_random_private_and_never_overwrite(self):
