@@ -241,3 +241,7 @@ class RunTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: bisect_modules:bisect_modules_trial_class]
+# Tests [@ANCHOR: bisect_modules:bisect_modules_bisect_error_class]

@@ -534,3 +534,6 @@ class KnownListTests(RuleTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: check_boundary_hazards:check_boundary_hazards__tree_class]

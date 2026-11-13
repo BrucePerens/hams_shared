@@ -707,3 +707,6 @@ class GateCannotPassWithoutLookingTests(unittest.TestCase):
         problems = ccf.check_claims(self.tmp)
         self.assertEqual(len(problems), 1, problems)
         self.assertIn("cannot be read", problems[0][1])
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: check_claims_freshness:check_claims_freshness_git_listing_error_class]

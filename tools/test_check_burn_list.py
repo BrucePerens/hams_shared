@@ -6690,3 +6690,8 @@ def test_a_module_colon_test_class_target_is_still_accepted(tmp_path):
     # tools/test.py passes `module:TestClass`; that is not a directory and must stay a no-op, not an error.
     result = _run_burn_list(tmp_path / "some_module:TestThing")
     assert result.returncode == 0, result.stdout
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: check_burn_list:check_burn_list_taint_visitor_class]
+# Tests [@ANCHOR: check_burn_list:check_burn_list_odoo_htmlparser_class]
+# Tests [@ANCHOR: check_burn_list:check_burn_list_xmlnode_class]

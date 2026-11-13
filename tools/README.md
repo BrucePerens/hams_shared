@@ -5606,3 +5606,254 @@ Every class of the tools that is not a function, with its fields, who creates it
 
 **Notes.** Fields `cfg`, `runner` and `handle` (open file, `None` outside the block). In plan mode nothing is locked. The lock is released when the file closes at `__exit__`, or when the process dies, so a crashed run leaves no stale lock.
 
+
+### `ConfigurationError` [@ANCHOR: backup_selftest:backup_selftest_configuration_error_class]
+
+**Purpose.** Raised by backup_selftest when its JSON configuration cannot be used: the file is unreadable or not an object, the profile or a stage name is unknown, a key entry or a restore table is malformed. Subclass of ValueError with no state of its own.
+**Definition.** `class ConfigurationError(ValueError)` in `tools/backup_selftest.py`.
+
+**Notes.** Raised only by the config loader, before any stage runs; the command line reports the message and exits with a usage-style failure. Never serialized.
+
+### `StageFailed` [@ANCHOR: backup_selftest:backup_selftest_stage_failed_class]
+
+**Purpose.** A stage found a problem; the message is the (secret-free) detail on its FAIL line.
+**Definition.** `class StageFailed(RuntimeError)` in `tools/backup_selftest.py`.
+
+**Notes.** The stage runner catches it, adds a FAIL result to the `Report` (the text is scrubbed of secrets first) and goes on or stops according to the profile. It is the normal way a stage reports a failed verification, not a program error.
+
+### `Refused` [@ANCHOR: backup_selftest:backup_selftest_refused_class]
+
+**Purpose.** The test must not run now (load, disk): not a backup problem, so no alert; the freshness check catches a test that never runs.
+**Definition.** `class Refused(RuntimeError)` in `tools/backup_selftest.py`.
+
+**Notes.** Distinct from `StageFailed` because it means "try again later", not "the backup is bad"; the runner turns it into a skipped or refused result rather than a failed verification. Message text includes the numbers compared.
+
+### `Context` [@ANCHOR: backup_selftest:backup_selftest_context_class]
+
+**Purpose.** Shared state of one run: the config, scrubbing of secrets from tool output, and cached pgbackrest info.
+**Definition.** `class Context` in `tools/backup_selftest.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `cfg` | `cfg` | The configuration dictionary with defaults filled in by the loader (limits, run_as, pgbackrest, restore and keys sections). |
+| `now` | `now` | Clock function returning seconds since the epoch; `time.time` unless a test injects another. |
+| `secret_texts` | `[s for s in secret_texts or [] if len(s) >= 6]` | Secret strings of six or more characters to be replaced by `<redacted>` in every captured stdout or stderr. |
+| `_info` | `None` | Cached parsed `pgbackrest info` result, or `None` until first needed. |
+| `scratch_dir` | `None` | Per-run scratch directory path, `None` until a stage that needs one creates it. |
+
+**Methods.** `__init__(self, cfg: dict, secret_texts: list | None=None, now=time.time)`; `scrub(self, text: str)`; `limits_prefix(self)`; `wrap(self, argv: list, limited: bool=False)`; `run(self, argv: list, timeout: float, ok_codes=(0,), label: str='')`; `pgbackrest_argv(self, *args: str)`; `info(self)`; `backups(self, types=None)`.
+
+**Notes.** `wrap` puts the `run_as` prefix, and for heavy work the nice, ionice and optional systemd-run limits, before an argv. `run(argv, timeout, ok_codes, label)` runs with a minimal environment and no stdin, scrubs the output and raises `StageFailed` for a missing tool, a timeout or an unaccepted exit code. Used by one thread only.
+
+### `Report` [@ANCHOR: backup_selftest:backup_selftest_report_class]
+
+**Purpose.** The result lines of a run; also what is written to the status file.
+**Definition.** `class Report` in `tools/backup_selftest.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `out` | `out` | Text stream the lines are printed to, flushed after every line. |
+| `results` | `[]` | List of dictionaries with keys `stage`, `status` and `detail`, in the order the stages ran. |
+
+**Methods.** `__init__(self, out)`; `add(self, stage: str, status: str, detail: str='')`; `first_failure(self)`; `passed(self)`.
+
+**Notes.** `add(stage, status, detail)` appends and prints `STATUS stage: detail`. The property `first_failure` gives the first stage whose status is FAIL, or `None`; `passed` is true when no stage failed. Not shared between threads.
+
+### `RestoreState` [@ANCHOR: backup_selftest:backup_selftest_restore_state_class]
+
+**Purpose.** Mutable state of the restore stages of backup_selftest: where the restored database lives, the temporary PostgreSQL server started on it and how to reach it. The stages fill it in step by step and later stages (queries, shutdown, cleanup) read it.
+**Definition.** `class RestoreState` in `tools/backup_selftest.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `ctx` | `ctx` | The run's `Context`, used to run tools and read the configuration. |
+| `root` | `None` | Per-run scratch directory holding the restore, `None` before it is created. |
+| `data` | `None` | Directory of the restored PGDATA, `None` until the restore has happened. |
+| `sock` | `None` | Unix socket directory of the temporary server. |
+| `port` | `None` | TCP port number used by the temporary server, which listens on the socket only. |
+| `pg_bin` | `None` | Directory of the PostgreSQL binaries; when `None` tool names are looked up on PATH. |
+| `started` | `False` | True while the temporary PostgreSQL server is running, so cleanup knows to stop it. |
+| `t0` | `ctx.now()` | Start time from `ctx.now()`, used to report elapsed time. |
+| `checksums` | `False` | True when the restored cluster has data checksums enabled. |
+
+**Methods.** `__init__(self, ctx: Context)`; `pg(self, tool: str)`; `psql(self, sql: str, db: str='postgres')`.
+
+**Notes.** `pg(tool)` gives the path of a PostgreSQL tool; `psql(sql, db)` runs one statement as the configured restore user against the temporary server and returns its output. The server runs on the machine under test and is always stopped and removed at the end.
+
+### `_Interrupted` [@ANCHOR: batch_queue:batch_queue__interrupted_class]
+
+**Purpose.** Private exception of batch_queue raised from the SIGTERM and SIGHUP handler while a process waits to join a batch. It derives from BaseException so no ordinary `except Exception` in between can swallow it.
+**Definition.** `class _Interrupted(BaseException)` in `tools/batch_queue.py`.
+
+**Notes.** Carries the signal number as its argument. The wait loop catches it, leaves the queue (removes the member from the shared state) and then exits with status 128 plus the signal. Never leaves the module.
+
+### `BisectError` [@ANCHOR: bisect_modules:bisect_modules_bisect_error_class]
+
+**Purpose.** The bisection cannot start or cannot be trusted (it names the cause).
+**Definition.** `class BisectError(RuntimeError)` in `tools/bisect_modules.py`.
+
+**Notes.** The command line catches it, prints the message and exits non-zero. A test run that merely fails is not an error; it is a `Trial` with a failed list.
+
+### `Trial` [@ANCHOR: bisect_modules:bisect_modules_trial_class]
+
+**Purpose.** One `test.py` run of a bisection: what was run and what came of it (a plain record for the JSON report).
+**Definition.** `class Trial` in `tools/bisect_modules.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `modules` | `list(modules)` | List of the Odoo module names that were run. |
+| `exit_status` | `exit_status` | Exit status of the `test.py` process. |
+| `failed` | `failed` | The failures found in the run's results (names of failing tests), empty when it passed. |
+| `seconds` | `seconds` | Wall-clock duration of the run in seconds. |
+| `log_directory` | `log_directory` | Directory holding that run's logs. |
+
+**Methods.** `__init__(self, modules, exit_status, failed, seconds, log_directory)`; `as_dict(self, reproduced)`.
+
+**Notes.** `as_dict(reproduced)` gives the JSON form, with the duration rounded to 0.1 s and a `reproduced` flag saying whether the original failure appeared again.
+
+### `_Tree` [@ANCHOR: check_boundary_hazards:check_boundary_hazards__tree_class]
+
+**Purpose.** One parsed file with the lookups every rule needs.
+**Definition.** `class _Tree` in `tools/check_boundary_hazards.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `source` | `source` | The full text of the file. |
+| `lines` | `source.splitlines()` | The source split into lines, index 0 being line 1. |
+| `path` | `path` | File name used in messages and keys. |
+| `tree` | `ast.parse(source, filename=path)` | The AST from `ast.parse`; a syntax error raises SyntaxError from the constructor. |
+| `parent` | `{}` | Dictionary mapping every AST node to its parent node. |
+
+**Methods.** `__init__(self, source, path)`; `enclosing_function(self, node)`; `symbol(self, node)`; `ignored(self, rule, *linenos)`; `try_bodies_around(self, node)`.
+
+**Notes.** `symbol(node)` gives the stable key `Class.method` (or `function` or `<module>`); `ignored(rule, *linenos)` tells whether one of those lines carries an ignore comment for the rule. Built once per file and only read afterwards.
+
+### `XMLNode` [@ANCHOR: check_burn_list:check_burn_list_xmlnode_class]
+
+**Purpose.** One element of a parsed Odoo XML or HTML template in check_burn_list: tag, attributes, line range, children, parent and text. The checks walk this tree instead of re-reading the file.
+**Definition.** `class XMLNode` in `tools/check_burn_list.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `tag` | `tag` | Element tag name; comments use `#comment`. |
+| `attrs` | `attrs` | Dictionary of attribute names to values. |
+| `lineno` | `max(1, lineno)` | First line of the element, at least 1. |
+| `end_lineno` | `self.lineno` | Last line, set when the closing tag is seen; equals `lineno` until then. |
+| `children` | `[]` | List of child XMLNode objects in document order. |
+| `parent` | `None` | Parent node, `None` for the root. |
+| `text` | `''` | Concatenated text content directly inside the element. |
+
+**Methods.** `__init__(self, tag, attrs, lineno)`; `walk(self)`; `get_ancestors(self)`.
+
+**Notes.** `walk()` yields the node and all descendants depth first; `get_ancestors()` lists parents up to the root. Built by the HTML parser or the XML loader, then only read.
+
+### `OdooHTMLParser` [@ANCHOR: check_burn_list:check_burn_list_odoo_htmlparser_class]
+
+**Purpose.** HTML parser subclass of check_burn_list that builds an `XMLNode` tree from QWeb or HTML template text, tolerating void elements (br, img, input and others) that have no closing tag and recording line numbers.
+**Definition.** `class OdooHTMLParser(html.parser.HTMLParser)` in `tools/check_burn_list.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `root` | `XMLNode('root_wrapper', {}, 1)` | Synthetic `root_wrapper` XMLNode that holds the top-level elements. |
+| `stack` | `[self.root]` | List of currently open nodes, innermost last. |
+| `void_elements` | `{'area', 'base', 'br', 'col', 'embed', 'hr', 'img'` | Set of tag names that never get an end tag and are not pushed on the stack. |
+
+**Methods.** `__init__(self)`; `handle_starttag(self, tag, attrs)`; `handle_endtag(self, tag)`; `handle_data(self, data)`; `handle_comment(self, data)`.
+
+**Notes.** `handle_starttag`, `handle_endtag`, `handle_data` and `handle_comment` are the standard callbacks; an end tag closes the nearest open node of that name and discards anything opened after it. Feed it with `feed(text)` and read `root`.
+
+### `TaintVisitor` [@ANCHOR: check_burn_list:check_burn_list_taint_visitor_class]
+
+**Purpose.** The AST visitor behind most Python checks of check_burn_list: it walks one parsed file once and records errors and warnings for risky patterns in Odoo modules (SQL string building, unsafe requests, test-cursor misuse, stale reads and many more), tracking assignments and the enclosing method.
+**Definition.** `class TaintVisitor(ast.NodeVisitor)` in `tools/check_burn_list.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `errors` | `[]` | List of (line, message) tuples that fail the check. |
+| `warnings` | `[]` | List of (line, message) tuples that are reported but do not fail. |
+| `assignments` | `{}` | Map from variable name to the assigned value nodes, used to follow a value from where it is built to where it is used. |
+| `loop_depth` | `0` | Number of loops the visitor is currently inside. |
+| `in_http_controller` | `False` | True inside a class that is an Odoo HTTP controller. |
+| `in_real_transaction_case` | `False` | True inside a test class that commits for real (RealTransactionCase, HamsHttpCase, HttpCase). |
+| `in_strict_real_transaction_case` | `False` | True only inside a real RealTransactionCase subclass, for the stale-read check. |
+| `filename` | `filename` | Base name of the file being checked. |
+| `filepath` | `filepath` | Full path, used to find the enclosing module and its manifest. |
+| `lines` | `lines` | Source lines, used for ignore comments. |
+| `is_odoo_module` | `is_odoo_module` | True when the file belongs to an Odoo module. |
+| `_assignment_stack` | `set()` | Names being resolved right now, to stop recursion on cyclic assignments. |
+| `current_method` | `None` | Name of the method being visited, `None` outside one. |
+| `current_decorators` | `[]` | Decorators of the method being visited. |
+| `current_kwarg_name` | `None` | Keyword argument being visited, for checks that depend on it. |
+| `defined_functions` | `{n.name for n in _tree_nodes if isinstance(n, (ast` | Names of all functions defined in the file. |
+| `function_def_nodes_by_name` | `{n.name: n for n in _tree_nodes if isinstance(n, (` | Map from function name to its node, the last definition winning. |
+| `_robotfileparser_names` | `set()` | Names bound to a `RobotFileParser`, for the robots.txt check. |
+| `_requests_session_names` | `set()` | Names bound to a requests session, for the outbound request checks. |
+| `has_ham_base` | `False` | True when the module depends on the ham_base addon. |
+| `_OUTBOUND_REQUESTS_VERBS` | `('get', 'post', 'put', 'patch', 'delete', 'head', ` | Class constant, the requests function names (get, post and so on) treated as outbound calls. |
+| `_NON_IDEMPOTENT_RETRY_METHODS` | `('POST', 'PATCH')` | Class constant ("POST", "PATCH"), the methods that must not be retried blindly. |
+
+**Methods.** `__init__(self, filename, lines, is_odoo_module, filepath='')`; `node_span_text(self, node)`; `add_error(self, lineno, msg)`; `add_warning(self, lineno, msg)`; `is_tainted_sql(self, node)`; `is_untranslated_string(self, node)`; `visit_Compare(self, node)`; `visit_BinOp(self, node)`; `visit_With(self, node)`; `visit_Dict(self, node)`; `visit_For(self, node)`; `visit_ClassDef(self, node)`; `_node_calls_something_real(self, node, visited=None)`; `_check_test_empty(self, node)`; `_check_real_transaction_case_stale_read(self, node)`; `visit_FunctionDef(self, node)`; `visit_Assign(self, node)`; `visit_Import(self, node)`; `visit_Expr(self, node)`; `visit_Tuple(self, node)`.
+
+**Notes.** Defined inside the checking function, so it is a closure over `tree` and the file. Created once per file; `visit(tree)` fills `errors` and `warnings`, which the function returns. No I/O except reading the module manifest path while locating `ham_base`.
+
+### `GitListingError` [@ANCHOR: check_claims_freshness:check_claims_freshness_git_listing_error_class]
+
+**Purpose.** `git ls-files` could not list the tree (not a repository, git missing, dubious ownership). Raised, never swallowed into an empty list: an empty list reads as "no claims, all fresh" and the gate printed SUCCESS for a tree it had not looked at.
+**Definition.** `class GitListingError(RuntimeError)` in `tools/check_claims_freshness.py`.
+
+**Notes.** Subclass of RuntimeError with the git error text in the message; the command line catches it and fails with that message.
+
+### `FreshnessContext` [@ANCHOR: check_claims_freshness:check_claims_freshness_freshness_context_class]
+
+**Purpose.** Per-run state of the legacy-claim history check: dates of claim commits, and a persistent cache of verdicts (`~/.cache/hams_claims/history_verdicts.json`, or `$HAMS_CLAIM_CACHE_DIR`). A verdict is keyed by (recorded hash, anchor, current v2 hash, claim commit time, file), which fully determines it, because the revisions it reads are all older than the claim commit.
+**Definition.** `class FreshnessContext` in `tools/check_claims_freshness.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `depth` | `depth` | How many revisions of a file the history walk examines at most (`HISTORY_DEPTH`). |
+| `cache_dir` | `cache_dir or os.environ.get('HAMS_CLAIM_CACHE_DIR'` | Directory of the cache: the argument, else `$HAMS_CLAIM_CACHE_DIR`, else `~/.cache/hams_claims`. |
+| `cache_path` | `os.path.join(self.cache_dir, 'history_verdicts.jso` | `history_verdicts.json` inside `cache_dir`. |
+| `_cache` | `None` | Loaded verdict dictionary, `None` until first use; a missing or unreadable file gives an empty dictionary. |
+| `_dirty` | `False` | True when verdicts were added and `save` must write them. |
+| `_times` | `{}` | Memo of claim file path to (unix time, ISO date) of its last commit. |
+| `history_lookups` | `0` | Count of revisions walked and not served from the cache, for tests. |
+
+**Methods.** `__init__(self, cache_dir=None, depth=HISTORY_DEPTH)`; `_load(self)`; `save(self)`; `claim_time(self, claim_path)`; `claim_date(self, fields, claim_path)`; `history_verdict(self, claim_path, anchor, info, recorded, date_algorithm)`.
+
+**Notes.** `claim_time(path)` asks git for the last commit that wrote the claim; `save()` writes the cache through a temporary file and `os.replace`, and ignores write errors because a cache that cannot be written only makes the next run slower. Single-threaded.
+
+### `_SameHostRedirect` [@ANCHOR: check_dependency_releases:check_dependency_releases__same_host_redirect_class]
+
+**Purpose.** Follows a redirect only to the same https host. GitHub answers a renamed repository with a 301 to `api.github.com/repositories/<id>`; anywhere else the token must not follow (urllib copies every request header to the target of a redirect), so the redirect is refused and surfaces as the HTTPError of the 3xx status.
+**Definition.** `class _SameHostRedirect(urllib.request.HTTPRedirectHandler)` in `tools/check_dependency_releases.py`.
+
+**Methods.** `redirect_request(self, req, fp, code, msg, headers, newurl)`.
+
+**Notes.** `redirect_request` returns `None` for another scheme or host, so the redirect surfaces as the HTTPError of the 3xx status; otherwise it defers to the standard handler. No state.
+
+### `cache_slots` [@ANCHOR: check_untyped_utility_files:check_untyped_utility_files_cache_slots_class]
+
+**Purpose.** Hands each concurrent mypy run a cache directory of its own (`.mypy_cache/w<N>`). mypy's cache is not safe for concurrent runs: with one shared directory and a cold or stale cache, parallel runs read each other's half-written files and crash with `AssertionError: Cannot find module for csv`. It never showed on the dev box, whose cache was already warm; a lint runner with a fresh mirror failed ever
+**Definition.** `class cache_slots` in `tools/check_untyped_utility_files.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `_free` | `queue.Queue()` | Thread-safe queue holding the free slot numbers 0 to workers minus 1. |
+
+**Methods.** `__init__(self, workers)`; `borrow(self)`.
+
+**Notes.** Constructor takes the number of workers. `borrow()` is a context manager that blocks until a slot is free, yields the number and puts it back in a `finally`. A worker keeps its directory between runs, so each one warms up once. Lower-case class name by design, used like a function.
+
+### `GroupPopen` [@ANCHOR: chrome_teardown:chrome_teardown_group_popen_class]
+
+**Purpose.** Popen whose terminate() takes the whole process group down and waits for it (see module doc).
+**Definition.** `class GroupPopen(subprocess.Popen)` in `tools/chrome_teardown.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `teardown_cap` | `DEFAULT_CAP_SECONDS` | Seconds the teardown may take before it gives up waiting, default `DEFAULT_CAP_SECONDS`. |
+
+**Methods.** `terminate(self)`.
+
+**Notes.** `install(common_module)` makes `ChromeBrowser` start Chrome in its own session with this class (idempotent). `terminate()` calls `terminate_group(self, cap=...)`, which sends SIGTERM to the process, its group and every descendant it has at that moment, waits up to the cap for them to be gone, and force-kills and reports any that remain.
+

@@ -27,6 +27,7 @@ MAX_JOBS = 2
 RESULTS_GLOB = "test_results*.json"
 
 
+# [@ANCHOR: bisect_modules:bisect_modules_bisect_error_class]
 class BisectError(RuntimeError):
     """The bisection cannot start or cannot be trusted (it names the cause)."""
 
@@ -125,6 +126,7 @@ def child_command(test_py, modules, test_tags, log_directory, extra=()):
     ]
 
 
+# [@ANCHOR: bisect_modules:bisect_modules_trial_class]
 class Trial:
     """One `test.py` run of a bisection: what was run and what came of it (a plain record for the JSON report)."""
 

@@ -724,3 +724,6 @@ class AttributionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: batch_queue:batch_queue__interrupted_class]

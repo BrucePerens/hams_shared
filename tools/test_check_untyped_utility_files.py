@@ -396,3 +396,6 @@ class ResolveRepoRootsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: check_untyped_utility_files:check_untyped_utility_files_cache_slots_class]

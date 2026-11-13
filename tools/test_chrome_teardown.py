@@ -144,3 +144,6 @@ class InstallTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: chrome_teardown:chrome_teardown_group_popen_class]

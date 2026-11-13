@@ -242,6 +242,7 @@ def parse_args(argv):
     return argv[1], {os.path.realpath(path) for path in argv[index + 1:]}
 
 
+# [@ANCHOR: check_untyped_utility_files:check_untyped_utility_files_cache_slots_class]
 class cache_slots:
     """Hands each concurrent mypy run a cache directory of its own (`.mypy_cache/w<N>`).
 
