@@ -59,6 +59,7 @@ _SKIPPED_DIRS = frozenset(
 _ERE_SPECIAL = set(".[]()*+?{}|^$\\")
 
 
+# [@ANCHOR: runner_slots:runner_slots_slot_config_error_class]
 class SlotConfigError(ValueError):
     """A slot count or a slot-derived name that cannot be used."""
 

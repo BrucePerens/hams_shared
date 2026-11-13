@@ -37,6 +37,7 @@ STATIC_USER = "hams_static"
 UNIT_TEMPLATE = "hams-static@.service"
 
 
+# [@ANCHOR: static_site_ctl:static_site_ctl_static_paths_class]
 @dataclasses.dataclass(frozen=True)
 class StaticPaths:
     data_root: str = "/var/lib/hams-static"
@@ -212,6 +213,7 @@ def probe(port, path="/", host="perens.com"):
     request = urllib.request.Request(f"http://127.0.0.1:{port}{path}",
                                      headers={"Host": host, "User-Agent": "HamsStaticProbe/1.0"})
 
+    # [@ANCHOR: static_site_ctl:static_site_ctl_no_redirect_class]
     class NoRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, *args, **kwargs):
             return None

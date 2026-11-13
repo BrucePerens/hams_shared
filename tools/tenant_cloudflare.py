@@ -38,6 +38,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import tenant_lib as lib  # noqa: E402
 
 
+# [@ANCHOR: tenant_cloudflare:tenant_cloudflare__no_redirect_class]
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     """Refuses every redirect. urllib copies all request headers, the credential included, to wherever a 3xx answer
     points; a refused redirect surfaces as the HTTPError of the 3xx status."""
@@ -221,6 +222,7 @@ def read_credentials(path=ENV_FILE):
     return values
 
 
+# [@ANCHOR: tenant_cloudflare:tenant_cloudflare_api_class]
 class Api:
     def __init__(self, token, opener=None):
         self._token = token

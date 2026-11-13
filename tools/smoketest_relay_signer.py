@@ -23,6 +23,7 @@ from cryptography.hazmat.primitives.asymmetric import ec, utils  # noqa: E402
 KEY_VERSION = "projects/test/locations/none/keyRings/test/cryptoKeys/throwaway/cryptoKeyVersions/1"
 
 
+# [@ANCHOR: smoketest_relay_signer:smoketest_relay_signer_throwaway_kms_class]
 class ThrowawayKms:
     """The two Cloud KMS calls relay_signer makes, answered by a random software key made at start."""
 

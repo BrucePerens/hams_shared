@@ -46,6 +46,7 @@ def http_probe(port, host):
     """Status code of GET / on the tenant's loopback port with the given Host header; 0 on error.
     Redirects are not followed: a 301 to the canonical host is a healthy answer."""
 
+    # [@ANCHOR: tenant_ctl:tenant_ctl_no_redirect_class]
     class NoRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, *args, **kwargs):
             return None

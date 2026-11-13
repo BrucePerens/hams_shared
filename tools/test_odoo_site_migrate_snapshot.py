@@ -837,3 +837,6 @@ if __name__ == "__main__":
 
 # Class anchors (ADR 0113) exercised by the tests above.
 # Tests [@ANCHOR: odoo_snapshot_source:odoo_snapshot_source_snapshot_error_class]
+# Tests [@ANCHOR: site_compare:site_compare__no_redirect_class]
+# Tests [@ANCHOR: site_compare:site_compare_fetcher_class]
+# Tests [@ANCHOR: site_compare:site_compare__page_class]

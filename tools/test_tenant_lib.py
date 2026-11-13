@@ -1139,3 +1139,13 @@ class CloudflareApiRedirectTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: tenant_cloudflare:tenant_cloudflare_api_class]
+# Tests [@ANCHOR: tenant_cloudflare:tenant_cloudflare__no_redirect_class]
+# Tests [@ANCHOR: tenant_ctl:tenant_ctl_no_redirect_class]
+# Tests [@ANCHOR: tenant_lib:tenant_lib_step_class]
+# Tests [@ANCHOR: tenant_lib:tenant_lib_system_class]
+# Tests [@ANCHOR: tenant_lib:tenant_lib_result_class]
+# Tests [@ANCHOR: tenant_lib:tenant_lib_paths_class]
+# Tests [@ANCHOR: tenant_lib:tenant_lib_spec_error_class]
