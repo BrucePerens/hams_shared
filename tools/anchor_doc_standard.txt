@@ -2232,3 +2232,21 @@ daemons/hams_local_relay/docs/stories/relay_tools_function_anchors_01.md
 devbox_tools/docs/stories/devbox_tools_data_structures_01_tools.md
 devbox_tools/docs/stories/devbox_tools_data_structures_02_rigs.md
 reference/ambe/imbe.rs/docs/stories/imbe_data_structures_01.md
+
+# The last source directories and files (with the entries above, every source file of the repositories is covered; the scan prunes
+# build output, dependencies and the vendored Odoo type stubs). Documentation files are listed by name: claims files and night-shift
+# notes are records, not anchor entries, and are left out on purpose.
+daemons
+agents/skills/bug-hunt
+agents/skills/patent-portfolio-analysis
+hardware
+fix_worktree_symlinks.py
+hams_shared/eslint.config.js
+agents/skills/bug-hunt/PRIMER.md
+agents/skills/pipeline-collab-chat/SKILL.md
+daemons/hams_local_relay/docs/stories/relay_ais.md
+daemons/hams_local_relay/docs/stories/relay_traffic_feed.md
+daemons/hams_local_relay/tools/xrun_loopback/README.md
+nginx/prod/lotw_ca/README.md
+hams_shared/agents/skills/general-development-requirements/SKILL.md
+hams_shared/agents/skills/night-watch/SKILL.md
