@@ -193,6 +193,20 @@ class UnitTests(unittest.TestCase):
                 handle.write('{"x": NaN, "y": 3, "z": "no"}')
             self.assertEqual(otb.load_durations(tmp), {"y": 3.0})
 
+    @unittest.skipIf(os.geteuid() == 0, "root ignores directory permissions")
+    def test_write_pass_record_failure_keeps_old_record(self):
+        # Tests [@ANCHOR: odoo_test_batch:write_pass_record]
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {"XDG_CACHE_HOME": tmp}
+            path = otb.write_pass_record("abc", ["ham_a"], 1, env)
+            old = open(path).read()
+            os.chmod(os.path.dirname(path), 0o555)
+            try:
+                otb.write_pass_record("abc", ["ham_b"], 2, env)
+            finally:
+                os.chmod(os.path.dirname(path), 0o755)
+            self.assertEqual(open(path).read(), old)
+
     def test_write_pass_record(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = otb.write_pass_record("abc", ["ham_a", "ham_b"], 4, {"XDG_CACHE_HOME": tmp})

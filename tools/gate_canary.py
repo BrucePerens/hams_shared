@@ -36,6 +36,7 @@ import gate_snapshot
 import known_red
 import lint_cache
 import runner_slots
+import atomic_io
 
 DEFAULT_STATE_DIR = os.path.expanduser("~/.cache/hams-test/canary")
 STATUS_NAME = "status.json"
@@ -287,11 +288,7 @@ def shell_runner(command, log_path):
 
 def _write_json(path, data):
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    temporary = "%s.tmp%d" % (path, os.getpid())
-    with open(temporary, "w", encoding="utf-8") as handle:
-        json.dump(data, handle, indent=1, sort_keys=True)
-        handle.write("\n")
-    os.replace(temporary, path)
+    atomic_io.atomic_write(path, json.dumps(data, indent=1, sort_keys=True) + "\n", mode=0o644)
 
 
 def _rebuild_overwritten_artifacts(problems, trees, cargo_target_dir, out):

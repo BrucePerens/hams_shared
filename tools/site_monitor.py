@@ -53,6 +53,7 @@ import time
 import urllib.error
 import urllib.request
 from email.message import EmailMessage
+import atomic_io
 
 logger = logging.getLogger("site_monitor")
 
@@ -337,10 +338,7 @@ def load_state(path):
 
 def save_state(path, state):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as handle:
-        json.dump(state, handle)
-    os.replace(tmp, path)
+    atomic_io.atomic_write(path, json.dumps(state), mode=0o644)
 
 
 # ---- what to log (quiet on success) -----------------------------------------------------------------------------

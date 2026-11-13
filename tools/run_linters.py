@@ -31,6 +31,7 @@ import lint_layout
 import lint_lock
 import lint_remote
 import lint_test_durations
+import atomic_io
 
 
 def _resolve_repo_root(given_path):
@@ -522,14 +523,7 @@ def stamp_text(mode, step_names, hosts=(), known_red="", siblings=(), impact=())
 
 def write_stamp_file(path, text):
     """Writes a pass stamp whole or not at all (temporary file, then rename): a crash or power loss never leaves a cut-off stamp the gate could read."""
-    part = f"{path}.{os.getpid()}.tmp"
-    try:
-        with open(part, "w", encoding="utf-8") as handle:
-            handle.write(text)
-        os.replace(part, path)
-    finally:
-        if os.path.exists(part):
-            os.remove(part)
+    atomic_io.atomic_write(path, text, mode=0o644)
 
 
 # [@ANCHOR: run_linters:write_batch_stamp]

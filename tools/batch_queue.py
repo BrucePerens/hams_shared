@@ -45,6 +45,7 @@ import time
 import uuid
 
 import lock_queue
+import atomic_io
 
 STATE_VERSION = 1
 DEFAULT_MAX_BRANCHES = 8
@@ -301,10 +302,7 @@ def write_verdicts(sdir, batch_id, doc, now=time.time):
     vdir = os.path.join(sdir, "verdicts")
     os.makedirs(vdir, exist_ok=True)
     doc = dict(doc, batch=batch_id, finished=now())
-    tmp = os.path.join(vdir, ".tmp-%d-%s" % (os.getpid(), uuid.uuid4().hex))
-    with open(tmp, "w", encoding="utf-8") as handle:
-        json.dump(doc, handle)
-    os.replace(tmp, _verdict_path(sdir, batch_id))
+    atomic_io.atomic_write(_verdict_path(sdir, batch_id), json.dumps(doc), mode=0o644)
     for name in os.listdir(vdir):
         path = os.path.join(vdir, name)
         try:
