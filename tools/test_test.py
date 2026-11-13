@@ -3162,3 +3162,12 @@ class MissingHostAptPackagesTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: test:test__runner_argument_parser_class]
+# Tests [@ANCHOR: test:test__aggregated_burn_result_class]
+# Tests [@ANCHOR: test:test_failure_extractor_class]
+# Tests [@ANCHOR: test:test_resource_monitor_thread_class]
+# Tests [@ANCHOR: test:test_virtual_clock_thread_class]
+# Tests [@ANCHOR: test:test__post_fork_safe_log_class]
+# Tests [@ANCHOR: test:test_oomwatchdog_class]

@@ -222,6 +222,7 @@ def php_unserialize(text):
 # --------------------------------------------------------------------------------------------
 
 
+# [@ANCHOR: wordpress_to_odoo:wordpress_to_odoo_credential_refused_class]
 class CredentialRefused(ValueError):
     """A credential-looking WordPress option was about to be copied into an export or a report."""
 
@@ -241,6 +242,7 @@ def _rows(dump, table):
     return [dict(zip(entry["columns"], row)) for row in entry["rows"]]
 
 
+# [@ANCHOR: wordpress_to_odoo:wordpress_to_odoo_word_press_site_class]
 class WordPressSite:
     """One site of a (multisite) WordPress dump, by blog id (prefix `wp_8_`; blog 1 has prefix `wp_`)."""
 
@@ -710,6 +712,7 @@ IMAGE_TYPES = ("image/",)
 MEDIA_CAP_BYTES = mig.BINARY_CAP_MB * 1048576
 
 
+# [@ANCHOR: wordpress_to_odoo:wordpress_to_odoo_media_class]
 class Media:
     """Finds the files posts reference under /wp-content/uploads/ and turns each found file into an attachment."""
 

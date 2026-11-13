@@ -793,3 +793,8 @@ class ScanTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: wordpress_to_odoo:wordpress_to_odoo_media_class]
+# Tests [@ANCHOR: wordpress_to_odoo:wordpress_to_odoo_word_press_site_class]
+# Tests [@ANCHOR: wordpress_to_odoo:wordpress_to_odoo_credential_refused_class]
