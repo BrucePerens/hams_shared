@@ -43,7 +43,7 @@ Because this is a standalone Open Source module that relies on an external Pytho
    * The daemon requires `/opt/hams/etc/keys/cache_manager/cache_manager_db.env`, which holds `DB_USER`/`DB_PASS` for its restricted PostgreSQL role; it refuses to start without those credentials. See `daemons/README.md` for how that file is provisioned.
    * It does not read `/opt/hams/etc/keys/cache_manager.env`, the Odoo login the Daemon Key Manager used to keep for this service: the daemon has no use for an Odoo login, and since version 1.1 the module no longer registers one.
    * The daemon does **not** read the Redis settings saved in Odoo. It takes `REDIS_HOST`, `REDIS_PORT` and `REDIS_PASSWORD` from its own environment, defaulting to `localhost`, 6379 and no password (note that the Odoo side defaults to host `redis`), and `DB_HOST`, `DB_PORT` and `DB_NAME` likewise, defaulting to `localhost`, 5432 and `odoo`. It listens on exactly one database, `DB_NAME`. Set these for the service when your deployment differs from the defaults.
-5. Navigate to **Settings > Technical > Distributed Cache** in Odoo to verify the connection status. The menu is shown to members of the Cache Manager group, which includes the administrator by default. The status check tests only this Odoo server's own Redis connection, not the daemon. [@ANCHOR: COMM_distributed_cache_view]
+5. Navigate to **Settings > Technical > Distributed Cache** in Odoo to verify the connection status. The menu is shown to members of the Cache Manager group, which includes the administrator by default. The status check tests only this Odoo server's own Redis connection, not the daemon. [@ANCHOR: COMM_distributed_redis_cache:distributed_cache_view]
 
 ## Upgrading modules on a server (Redis credentials)
 

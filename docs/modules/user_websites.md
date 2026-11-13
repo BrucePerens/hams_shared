@@ -561,7 +561,7 @@ The group counterpart of `slug_cache_invalidation`: writing `website_slug` (or `
 
 Deleting a `user.websites.group` evicts its slug from the slug cache through `edge.routing.mixin.unlink()`, as for users (see `slug_cache_invalidation_unlink`). The slugs are read before the delete and the invalidation is sent after it, and a failed notification is logged, not raised. Tested by `test_05_bdd_ormcache_query_counting_group_slugs` in `tests/test_audit_edge_cases.py`.
 
-### `utils_slugify` [@ANCHOR: utils_slugify]
+### `utils_slugify` [@ANCHOR: edge_routing:utils_slugify]
 
 `slugify(s, max_length=None)` in `edge_routing/utils.py` (code anchor `edge_routing:utils_slugify`, test `test_utils_slugify`). It lower-cases and strips the text, folds accents to ASCII (NFKD, dropping what cannot be folded), replaces every run of characters outside `a-z0-9` with a single hyphen and trims hyphens at both ends. A falsy input gives `""`. With `max_length` the result is cut to that length and trailing hyphens are trimmed, and `max_length=0` really gives the empty string. Pure and side-effect free; it does not check reserved words or uniqueness.
 
@@ -605,7 +605,7 @@ The server action in `data/procedures.xml`, run at module update, that creates t
 
 Test `test_01_high_speed_full_platform_exercise` in `tests/test_simulation.py`. It repeats a full platform step (guest page loads, login, member actions, administrator report processing and appeal approval, a final database flush) for `SIMULATION_DURATION_MINUTES` iterations (default 60; the name is historical, it counts iterations). Each operation is timed; averages above a threshold (default 0.5 s, `SIMULATION_MAX_AVG_TIME`, with higher limits for GDPR export, report processing and flush) are logged as `[REGRESSION]`. Regressions only warn; the test does not fail on speed.
 
-### `action_take_action_and_strike` [@ANCHOR: action_take_action_and_strike]
+### `action_take_action_and_strike` [@ANCHOR: content_moderation:action_take_action_and_strike]
 
 `content.violation.report.action_take_action_and_strike()` is defined in the `content_moderation` module (`content_moderation/models/content_violation_report.py`), a `@public_rpc` method. For each report not already `action_taken` or `dismissed` it sets state `action_taken` and calls `_apply_enforcement_action()`, so a resolved report is never struck twice. This module overrides the hook: it adds a strike to the content owner or group (stored procedure `increment_strike_count`) and suspends at three strikes. Tests: `test_01_three_strikes_suspension` and the `content_moderation` test.
 
