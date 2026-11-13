@@ -51,6 +51,31 @@ def _load_test_py_module():
 _test_runner = _load_test_py_module()
 
 
+class RobustReapGroupTests(unittest.TestCase):
+    """robust_reap must not stop at the leader's exit while a child in its group ignored SIGTERM."""
+
+    def test_a_child_that_ignores_sigterm_is_killed_after_the_leader_exits(self):
+        # The child ends itself after 20 s, so a failing run leaks nothing for long.
+        script = (
+            "import subprocess, sys, time\n"
+            "child = subprocess.Popen([sys.executable, '-c', 'import signal, time; "
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(20)'])\n"
+            "print(child.pid, flush=True)\n"
+            "time.sleep(120)\n"
+        )
+        leader = subprocess.Popen([sys.executable, "-c", script], stdout=subprocess.PIPE, text=True, start_new_session=True)
+        child_pid = int(leader.stdout.readline())
+        time.sleep(0.5)  # let the child install its SIGTERM handler
+        # A fake monotonic clock jumps 10 s per call so the 30 s SIGTERM window ends at once.
+        with patch.object(_test_runner, "kill_test_chrome"), patch.object(_test_runner.time, "monotonic", side_effect=itertools.count(0, 10.0)):
+            _test_runner.robust_reap(leader.pid)
+        leader.wait()
+        deadline = time.time() + 5
+        while _test_runner._group_has_live_members(leader.pid) and time.time() < deadline:
+            time.sleep(0.1)
+        self.assertFalse(_test_runner._group_has_live_members(leader.pid), f"child {child_pid} survived robust_reap")
+
+
 class DefaultTestTmpdirTests(unittest.TestCase):
     """The Odoo test process keeps its temporary files (and Chrome profiles) on the roomy disk, not the small /tmp partition."""
 
