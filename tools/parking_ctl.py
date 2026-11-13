@@ -53,6 +53,7 @@ BOOLS = ("preserve_path", "include_www", "noindex")
 MAX_BATCH = 200
 
 
+# [@ANCHOR: parking_ctl:parking_ctl_input_error_class]
 class InputError(ValueError):
     pass
 
@@ -170,6 +171,7 @@ def dns_records(entries, tunnel_id):
     return [{"type": "CNAME", "name": name, "content": target, "proxied": True} for name in names]
 
 
+# [@ANCHOR: parking_ctl:parking_ctl_odoo_client_class]
 class OdooClient:
     """Thin client for the parking instance (loopback, admin account): XML-RPC, or any transport with
     `call(model, method, args, kwargs)` (the JSON-2 one of odoo_site_migrate)."""

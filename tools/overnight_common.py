@@ -173,6 +173,7 @@ def read_load(stats_path=dispatch_ok.DEFAULT_STATS, meminfo="/proc/meminfo", now
                 number(queues.get("lint_running"), 0), lint_slots, mem_available_gb(meminfo))
 
 
+# [@ANCHOR: overnight_common:overnight_common_job_result_class]
 class JobResult:
     """`status` is `ok` (exit 0), `failed` (non-zero), `timeout` (stopped at the time limit), `error` (could not start or no exit record)."""
 

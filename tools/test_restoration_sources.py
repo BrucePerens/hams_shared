@@ -153,3 +153,14 @@ def test_parse_timestamp_refuses_an_epoch_that_is_not_a_date_with_a_value_error(
 def test_parse_timestamp_reads_an_epoch_and_an_rfc3339_time():
     assert src.parse_timestamp(0).year == 1970
     assert src.parse_timestamp("2026-11-09T12:00:00Z").hour == 12
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: runner:runner_restoration_error_class]
+# Tests [@ANCHOR: secrets_input:secrets_input_secrets_class]
+# Tests [@ANCHOR: sources:sources_pg_back_rest_repo_class]
+# Tests [@ANCHOR: sources:sources_source_check_class]
+# Tests [@ANCHOR: sources:sources_kopia_repo_class]
+# Tests [@ANCHOR: sourceset:sourceset_backup_set_class]
+# Tests [@ANCHOR: sourceset:sourceset_db_plan_class]
+# Tests [@ANCHOR: sourceset:sourceset_file_item_class]
+# Tests [@ANCHOR: runner:runner_runner_class]

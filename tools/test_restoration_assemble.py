@@ -117,3 +117,6 @@ def test_enablement_plan_keeps_restored_links_and_enables_the_rest(tmp_path):
              "c.service": {"enabled": False, "path": "/opt/hams/systemd/c.service"}}
     to_enable, kept = un.enablement_plan(str(tmp_path), units)
     assert to_enable == ["b.timer"] and kept == ["a.timer"]
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: assemble:assemble_chroot_class]

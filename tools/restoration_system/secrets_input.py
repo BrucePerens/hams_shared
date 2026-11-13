@@ -37,6 +37,7 @@ def ask(label):
     return value
 
 
+# [@ANCHOR: secrets_input:secrets_input_secrets_class]
 class Secrets:
     """In-memory store. Nothing here is ever printed: __repr__ shows names only."""
 

@@ -8850,3 +8850,7 @@ class AuthGatewayJournalNamespaceTests(unittest.TestCase):
 
 # Class anchors (ADR 0113) exercised by the tests above.
 # Tests [@ANCHOR: infrastructure:infrastructure_provision_plan_class]
+# Tests [@ANCHOR: provision_cache:provision_cache_result_class]
+# Tests [@ANCHOR: provision_cache:provision_cache_unavailable_class]
+# Tests [@ANCHOR: provision_cache:provision_cache_hash_rejected_class]
+# Tests [@ANCHOR: provision_cache:provision_cache_cache_error_class]

@@ -6613,3 +6613,329 @@ Every class of the tools that is not a function, with its fields, who creates it
 
 **Notes.** `query(sql, params)` returns a list of dictionaries (column name to value); `columns(table)` lists the column names of a public table. `psycopg2` is imported only when no `connect` function is passed, so tests need no database driver.
 
+
+### `TcpForwarder` [@ANCHOR: offline_browser_ns:offline_browser_ns_tcp_forwarder_class]
+
+**Purpose.** A plain TCP relay: accept on (bind_host, bind_port), connect to (dst). Deliberately protocol-agnostic. The DevTools channel is an HTTP connection that upgrades to a WebSocket; a byte forwarder carries that unchanged, where an HTTP-aware proxy would have to be taught about the upgrade. `stop()` closes the listening socket AND every live connection, which is what makes "go offline" a fast, honest co
+**Definition.** `class TcpForwarder` in `tools/offline_browser_ns.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `bind_host` | `bind_host` | Address the listener binds to. |
+| `bind_port` | `bind_port` | TCP port the listener binds to. |
+| `dst_host` | `dst_host` | Address connections are forwarded to. |
+| `dst_port` | `dst_port` | Port connections are forwarded to. |
+| `name` | `name` | Label used in thread names and log lines. |
+| `_listener` | `None` | The listening socket, `None` when stopped. |
+| `_accept_thread` | `None` | Daemon thread running the accept loop. |
+| `_live` | `set()` | Set of the sockets of currently forwarded connections. |
+| `_lock` | `threading.Lock()` | Mutex guarding `_running`, `_listener` and `_live`. |
+| `_running` | `False` | True between `start()` and `stop()`. |
+
+**Methods.** `__init__(self, bind_host, bind_port, dst_host, dst_port, name)`; `running(self)`; `start(self)`; `stop(self)`; `_accept_loop(self)`; `_handle(self, client)`; `_pump(src, dst)`.
+
+**Notes.** `start()` binds with SO_REUSEADDR, listens with a backlog of 64 and starts the accept thread; it does nothing when already running. `stop()` shuts down and closes every live socket, ignoring errors from peers that already left. One thread per connection copies data both ways. `running` is a read-only property.
+
+### `_RelayStubHandler` [@ANCHOR: offline_browser_ns:offline_browser_ns__relay_stub_handler_class]
+
+**Purpose.** Request handler of the fake local relay that offline_browser_ns serves inside the isolated namespace, so browser tests can see a relay that stays reachable while the internet is gone. It answers `/__offline_probe`, `/api/local_content` and one manual document, and 404 for everything else, with CORS open to any origin.
+**Definition.** `class _RelayStubHandler(BaseHTTPRequestHandler)` in `tools/offline_browser_ns.py`.
+
+**Methods.** `_send(self, body, content_type)`; `do_GET(self)`; `log_message(self, log_format, *args)`.
+
+**Notes.** `do_GET` records every path through the server's `record_request`, then answers: the probe body `RELAY_PROBE_BODY` as text/plain, a JSON list with one fake item `web_shack_manual`, that item's HTML body, or 404. No state of its own; created per request by the server.
+
+### `_RelayStubServer` [@ANCHOR: offline_browser_ns:offline_browser_ns__relay_stub_server_class]
+
+**Purpose.** The threaded HTTP server of the fake local relay in offline_browser_ns. It keeps the list of the request paths it served so a test can tell whether the browser reached the relay while offline.
+**Definition.** `class _RelayStubServer(ThreadingHTTPServer)` in `tools/offline_browser_ns.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `daemon_threads` | `True` | Class attribute True: request threads do not keep the process alive. |
+| `allow_reuse_address` | `True` | Class attribute True: the port can be rebound at once after a restart. |
+| `requests_seen` | `[]` | List of request paths in the order received. |
+| `_req_lock` | `threading.Lock()` | Mutex making the list thread-safe. |
+
+**Methods.** `__init__(self, *args, **kwargs)`; `record_request(self, path)`; `snapshot(self)`.
+
+**Notes.** `record_request(path)` appends a path; `snapshot()` returns a copy of the list. Bound by the broker to `RELAY_PORT` on 127.0.0.1 inside the namespace.
+
+### `_Broker` [@ANCHOR: offline_browser_ns:offline_browser_ns__broker_class]
+
+**Purpose.** The privileged broker of the offline-browser test harness: running as root in a nested network namespace, it owns the veth link, the TCP forwarders and the fake relay, launches Chrome as the unprivileged Odoo user on request from the test over a control socket, and switches the namespace "offline" and "online" on command.
+**Definition.** `class _Broker` in `tools/offline_browser_ns.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `config` | `config` | The broker's configuration dictionary (`ctl_sock`, `chrome_binary`, optional `odoo_user`, `log_file`). |
+| `ctl_path` | `config['ctl_sock']` | Path of the Unix control socket the test client connects to. |
+| `chrome_binary` | `config['chrome_binary']` | The only browser executable the broker will start, from the config. |
+| `odoo_user` | `config.get('odoo_user', 'odoo')` | Account Chrome is started as; default "odoo". |
+| `gateway` | `TcpForwarder('127.0.0.1', ODOO_HTTP_PORT, PARENT_I` | `TcpForwarder` from 127.0.0.1 in the namespace to the parent's Odoo HTTP port. |
+| `relay` | `None` | The `_RelayStubServer`, `None` until started. |
+| `_chromes` | `[]` | List of running Chrome processes, for teardown. |
+| `_chrome_lock` | `threading.Lock()` | Mutex guarding `_chromes`. |
+
+**Methods.** `__init__(self, config)`; `configure_namespace(self)`; `_sanitize_chrome_argv(self, argv)`; `launch_chrome(self, argv, env_overrides)`; `kill_chrome(self, proc)`; `serve(self)`; `_handle_control(self, conn)`; `_wait_for_shim_eof(self, conn, reader, proc)`; `_reply(conn, payload)`.
+
+**Notes.** `configure_namespace()` brings up loopback and the child veth address and default route, waiting up to 30 s for the veth to appear. `_sanitize_chrome_argv(argv)` never lets the caller choose the binary (the socket is reachable by the unprivileged test user, so an arbitrary argv[0] run as root would be a privilege escalation); it passes Odoo's switches and rewrites only the DevTools address and profile directory. `launch_chrome` drops privileges to the Odoo user and sets PR_SET_PDEATHSIG; `kill_chrome` ends a browser. Needs root and `ip`; never run outside the harness.
+
+### `OfflineNamespaceClient` [@ANCHOR: offline_browser_ns:offline_browser_ns_offline_namespace_client_class]
+
+**Purpose.** Minimal client for the broker's control socket. Deliberately dependency-free and tiny so a test in any module can either import it (when `hams_shared/tools` is importable) or paste the equivalent fifteen lines into its own file.
+**Definition.** `class OfflineNamespaceClient` in `tools/offline_browser_ns.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `ctl_path` | `ctl_path or os.environ.get('HAMS_OFFLINE_NS_CTL')` | Path of the broker's Unix socket: the argument, else `HAMS_OFFLINE_NS_CTL` from the environment. |
+
+**Methods.** `__init__(self, ctl_path=None)`; `_request(self, payload)`; `go_offline(self)`; `go_online(self)`; `status(self)`.
+
+**Notes.** The constructor raises RuntimeError when no path is known ("not an offline-isolation run"). `_request(payload)` connects with a 30 s timeout, sends the JSON and a newline, reads up to the first newline and raises RuntimeError if the broker closes with no reply. `go_offline()` sends `{"cmd": "offline"}`, `go_online()` sends `{"cmd": "online"}`, `status()` asks for the state.
+
+### `JobResult` [@ANCHOR: overnight_common:overnight_common_job_result_class]
+
+**Purpose.** `status` is `ok` (exit 0), `failed` (non-zero), `timeout` (stopped at the time limit), `error` (could not start or no exit record).
+**Definition.** `class JobResult` in `tools/overnight_common.py`.
+
+**Methods.** `__init__(self, status, exit_code, log, text='')`; `__repr__(self)`.
+
+**Notes.** Constructor `JobResult(status, exit_code, log, text="")`; attributes of the same names are public and not changed afterwards. `status` is `ok` (exit 0), `failed` (non-zero), `timeout` (stopped at the time limit) or `error` (could not start, or no exit record). `repr` shows status, exit code and log path.
+
+### `InputError` [@ANCHOR: parking_ctl:parking_ctl_input_error_class]
+
+**Purpose.** Raised by parking_ctl for a bad command line or input file value: a word that is not a boolean, an unknown option and similar. Subclass of ValueError.
+**Definition.** `class InputError(ValueError)` in `tools/parking_ctl.py`.
+
+**Notes.** The command line catches it and prints the message with a usage exit; nothing is sent to the server.
+
+### `OdooClient` [@ANCHOR: parking_ctl:parking_ctl_odoo_client_class]
+
+**Purpose.** Thin client for the parking instance (loopback, admin account): XML-RPC, or any transport with `call(model, method, args, kwargs)` (the JSON-2 one of odoo_site_migrate).
+**Definition.** `class OdooClient` in `tools/parking_ctl.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `_transport` | `transport` | The injected transport, or None when XML-RPC is used. |
+| `_uid` | `common.authenticate(db, login, password, {})` | User id from `authenticate`, set only for XML-RPC. |
+| `_models` | `proxy_factory(f'{url}/xmlrpc/2/object', allow_none` | XML-RPC proxy of `/xmlrpc/2/object`, set only for XML-RPC. |
+
+**Methods.** `__init__(self, url, db, login, password, proxy_factory=None, transport=None)`; `call(self, model, method, args, kwargs=None)`; `search_read(self, domain, fields)`; `create(self, vals_list)`; `write(self, ids, vals)`.
+
+**Notes.** Constructor `OdooClient(url, db, login, password, proxy_factory=None, transport=None)`; with XML-RPC it logs in at once and exits (SystemExit) when authentication fails. `call(model, method, args, kwargs)` runs one call; `search_read(domain, fields)` (with `active_test` false so archived records show), `create(vals_list)` and `write(ids, vals)` act on `parking.domain`. Network bound; writes change the instance.
+
+### `CacheError` [@ANCHOR: provision_cache:provision_cache_cache_error_class]
+
+**Purpose.** Base class for provisioning-cache failures.
+**Definition.** `class CacheError(Exception)` in `tools/provision_cache.py`.
+
+**Notes.** Catch it to handle both `HashRejected` and `Unavailable`; the provisioning code usually lets it stop the run with its message.
+
+### `HashRejected` [@ANCHOR: provision_cache:provision_cache_hash_rejected_class]
+
+**Purpose.** The content does not have the hash it must have (a pin mismatch, or a changed trust-on-first-use hash). Never retried from cache and never swallowed: the file must be reviewed by a person.
+**Definition.** `class HashRejected(CacheError)` in `tools/provision_cache.py`.
+
+**Notes.** Subclass of `CacheError`; the message names the URL and both hashes.
+
+### `Unavailable` [@ANCHOR: provision_cache:provision_cache_unavailable_class]
+
+**Purpose.** The network failed and there is no cached copy to fall back to.
+**Definition.** `class Unavailable(CacheError)` in `tools/provision_cache.py`.
+
+**Notes.** Subclass of `CacheError`; the message has the URL and the network error.
+
+### `Result` [@ANCHOR: provision_cache:provision_cache_result_class]
+
+**Purpose.** What `provision_cache` returns for one fetch: the path of the cached blob, how it was obtained and its content hash.
+**Definition.** `class Result` in `tools/provision_cache.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `path` | `str = -` | Path of the cached blob; read-only for the caller, who must copy it and not modify or move it. |
+| `status` | `str = -` | "hit" (fresh entry, no network), "revalidated" (a 304 renewed it), "fetched" (downloaded now) or "stale" (network failed, old copy used). |
+| `sha256` | `str = -` | Hex sha256 of the content. |
+| `cached` | `bool = True` | True when the blob lives in the cache; False for URLs that are never cached (not https, credentials in the URL) and are fetched directly; default True. |
+
+**Notes.** Dataclass, created by the fetch function and not changed.
+
+### `Chroot` [@ANCHOR: assemble:assemble_chroot_class]
+
+**Purpose.** Runs commands inside the image in a private mount namespace (assemble needs root).
+**Definition.** `class Chroot` in `tools/restoration_system/assemble.py`.
+
+**Methods.** `__init__(self, runner, tree)`; `path(self, rel)`; `run(self, argv, **kw)`.
+
+**Notes.** Constructor `Chroot(runner, tree)` keeps the `Runner` and the image root directory (`runner`, `tree`). `path(rel)` joins a path under the tree; `run(argv, **kw)` runs the argv inside it through the runner, with the runner's minimal environment and error handling.
+
+### `NoRedirect` [@ANCHOR: guest_agent:guest_agent_no_redirect_class]
+
+**Purpose.** urllib redirect handler defined inside `http_checks` of the guest agent, which runs inside the verification VM: it refuses every redirect so an HTTP check reports the status the service itself gave (for example a 302) and never follows a redirect off the machine.
+**Definition.** `class NoRedirect(urllib.request.HTTPRedirectHandler)` in `tools/restoration_system/guest_agent.py`.
+
+**Methods.** `redirect_request(self, *args, **kwargs)`.
+
+**Notes.** `redirect_request` returns None; the 3xx answer then surfaces as an HTTPError whose status is recorded. Nested in the function, so it exists only during one `http_checks` call.
+
+### `RestorationError` [@ANCHOR: runner:runner_restoration_error_class]
+
+**Purpose.** Any refusal or failure of the restoration system. The message says what to do next.
+**Definition.** `class RestorationError(Exception)` in `tools/restoration_system/runner.py`.
+
+**Notes.** Plain Exception subclass without fields; the restoration command line prints the message and exits non-zero.
+
+### `Runner` [@ANCHOR: runner:runner_runner_class]
+
+**Purpose.** Runs commands with a minimal environment; `log` receives one line per command.
+**Definition.** `class Runner` in `tools/restoration_system/runner.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `log` | `log or (lambda line: sys.stderr.write(line + '\n')` | Function that receives one line per command; writes to stderr by default. |
+| `base_env` | `{k: v for k, v in source.items() if k in SAFE_ENV_` | The inherited environment limited to `SAFE_ENV_KEYS`, with a default PATH of `/usr/sbin:/usr/bin:/sbin:/bin`. |
+
+**Methods.** `__init__(self, log=None, base_env=None)`; `run(self, argv, secret_env=None, extra_env=None, check=True, capture=False, stdi`.
+
+**Notes.** `run(argv, secret_env, extra_env, check, capture, stdin, cwd, timeout)` returns the CompletedProcess and raises `RestorationError` when `check` is true and the exit status is not 0, quoting the last eight lines of stderr and stdout. With `capture` stdout is returned as text. Blocking; a timeout raises the subprocess exception.
+
+### `Secrets` [@ANCHOR: secrets_input:secrets_input_secrets_class]
+
+**Purpose.** In-memory store. Nothing here is ever printed: __repr__ shows names only.
+**Definition.** `class Secrets` in `tools/restoration_system/secrets_input.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `_values` | `dict(values or {})` | Dictionary secret name to value, filled from the constructor argument or by asking. |
+
+**Methods.** `__init__(self, values=None)`; `__repr__(self)`; `need(self, names, asker=ask)`; `get(self, name)`; `has(self, name)`; `kopia_env(self)`; `pgbackrest_env(self)`.
+
+**Notes.** `need(names, asker=ask)` asks for any name not yet known, using the label of that name; `get(name)`, `has(name)`; `kopia_env()` gives `KOPIA_PASSWORD` (and the AWS-style key pair when a Backblaze key is held); `pgbackrest_env()` gives the cipher passphrase and S3 key variables. Values live in process memory only and are passed to tools through the environment, never on an argv.
+
+### `KopiaRepo` [@ANCHOR: sources:sources_kopia_repo_class]
+
+**Purpose.** A read-only connection to one kopia repository, living in `state_dir` (0700, removed by close()).
+**Definition.** `class KopiaRepo` in `tools/restoration_system/sources.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `connected` | `False` | True after `connect()` succeeded, so `close()` knows to disconnect. |
+
+**Methods.** `__init__(self, runner, secrets, state_dir, backend_args, label)`; `_argv(self, *args)`; `_call(self, *args, capture=True)`; `connect(self)`; `encryption(self)`; `snapshots(self)`; `restore(self, snapshot_id, destination)`; `close(self)`.
+
+**Notes.** Constructor `KopiaRepo(runner, secrets, state_dir, backend_args, label)`; those five are public attributes. `connect()` connects with `--readonly --no-persist-credentials` and raises `RestorationError` for a wrong password or an absent repository; `encryption()` reads the algorithm from `repository status --json`; `snapshots()` lists all snapshots; `restore(snapshot_id, destination)` restores keeping owners, modes and symlinks and fails on any error; `close()` disconnects.
+
+### `SourceCheck` [@ANCHOR: sources:sources_source_check_class]
+
+**Purpose.** The refusals that apply to every source: missing, empty, not encrypted.
+**Definition.** `class SourceCheck` in `tools/restoration_system/sources.py`.
+
+**Methods.** `kopia_marker(repo_dir)`; `kopia_encrypted(repo)`; `kopia_not_empty(snapshots, label)`; `pgbackrest_marker(repo_dir, stanza)`.
+
+**Notes.** `kopia_marker(repo_dir)` needs a `kopia.repository*` file; `kopia_encrypted(repo)` refuses encryption NONE or empty; `kopia_not_empty(snapshots, label)` refuses no snapshots; `pgbackrest_marker(repo_dir, stanza)` needs `backup/<stanza>/backup.info` and the OpenSSL salted header, which shows the repository is encrypted. No state, no network.
+
+### `PgBackRestRepo` [@ANCHOR: sources:sources_pg_back_rest_repo_class]
+
+**Purpose.** A pgBackRest repository, local (posix) or S3 (Backblaze), opened through a private config file in `state_dir` (0700). The config file holds only locations and the cipher TYPE; passphrase and S3 keys come from the secret store in the environment of each command.
+**Definition.** `class PgBackRestRepo` in `tools/restoration_system/sources.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `conf` | `os.path.join(state_dir, 'pgbackrest.conf')` | Path of `pgbackrest.conf` inside `state_dir`. |
+
+**Methods.** `__init__(self, runner, secrets, state_dir, stanza, cipher_type, repo, pg_path)`; `write_config(self)`; `_argv(self, *args, with_stanza=True)`; `call(self, *args, check=True, capture=True)`; `info(self)`; `check_info(stanza)`; `restore_argv(self, datadir, target_time, wal_dir, backup_label=None)`; `restore(self, datadir, target_time, wal_dir, backup_label=None)`; `fetch_wal(self, backup, stanza_info, wal_dir)`.
+
+**Notes.** Constructor `PgBackRestRepo(runner, secrets, state_dir, stanza, cipher_type, repo, pg_path)`. `write_config()` creates the directories (0700) and the file (0600); `call(*args, check, capture)` runs pgbackrest with that config and `--allow-root`; `info()` returns the stanza's entry of `pgbackrest info --output=json` and raises `RestorationError` for a wrong passphrase, an unreachable repository or a missing stanza.
+
+### `FileItem` [@ANCHOR: sourceset:sourceset_file_item_class]
+
+**Purpose.** One restore action from a kopia repository: `snapshot` goes to `path` inside the image. kind: tree, file or config_tar.
+**Definition.** `class FileItem` in `tools/restoration_system/sourceset.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `label` | `str = -` | Text shown in the report, such as "kopia /etc/odoo". |
+| `snapshot` | `dict = -` | The kopia snapshot description (dictionary) to restore. |
+| `path` | `str = -` | Destination path inside the image. |
+| `kind` | `str = -` | "tree" (a directory), "file" (a single file) or "config_tar" (an archive of configuration). |
+
+**Notes.** Dataclass created by `BackupSet.file_items()` in restore order and only read afterwards.
+
+### `DbPlan` [@ANCHOR: sourceset:sourceset_db_plan_class]
+
+**Purpose.** How the database is restored: kind "pgbackrest" (restore + WAL fetch) or "streams" (sealed base backup and WAL in kopia).
+**Definition.** `class DbPlan` in `tools/restoration_system/sourceset.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `kind` | `str = -` | "pgbackrest" or "streams". |
+| `backup_label` | `str = -` | Label of the base backup used. |
+| `stop_time` | `str = -` | Time the base backup stopped, the earliest recovery point. |
+| `wal_first` | `str = -` | First WAL segment name of the plan. |
+| `wal_last` | `str = -` | Last WAL segment name that will be replayed. |
+| `details` | `dict = -` | Extra information for the report (dictionary); defaults to empty. |
+
+**Notes.** Dataclass created by `BackupSet.db_plan()`.
+
+### `BackupSet` [@ANCHOR: sourceset:sourceset_backup_set_class]
+
+**Purpose.** One complete backup source of the restoration system, of kind "b2" (Backblaze repositories) or the local kind, holding its opened repositories and what they contain. It decides what to restore: the file items, the database plan and the metadata for the image's `RESTORATION_META.json`.
+**Definition.** `class BackupSet` in `tools/restoration_system/sourceset.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `kopia` | `None` | The `KopiaRepo`, `None` until opened. |
+| `pg` | `None` | The `PgBackRestRepo`, `None` until opened. |
+| `pg_info` | `None` | The stanza info from pgBackRest, or `None`. |
+| `pg_backup` | `None` | The selected pgBackRest backup entry, or `None`. |
+| `kopia_snapshots` | `[]` | List of kopia snapshots found; empty until read. |
+| `stream_snapshots` | `{}` | Dictionary of the streamed database snapshots by name; empty until read. |
+
+**Methods.** `__init__(self, kind, runner, secrets, profile, work)`; `close(self)`; `describe(self)`; `file_items(self)`; `db_plan(self)`.
+
+**Notes.** Constructor `BackupSet(kind, runner, secrets, profile, work)`. `file_items()` lists the restore actions in order from the profile; `db_plan()` builds the `DbPlan`; `describe()` gives names and times only, never a secret; `close()` disconnects kopia.
+
+### `Check` [@ANCHOR: verify:verify_check_class]
+
+**Purpose.** One line of the verification report: the name of a check, its status and a detail text.
+**Definition.** `class Check` in `tools/restoration_system/verify.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `name` | `str = -` | What was checked. |
+| `status` | `str = -` | "ok", "FAIL" or "warn". |
+| `detail` | `str = ''` | Explanation, empty for a plain pass. |
+
+**Notes.** Dataclass created by `Report.add` and printed by `Report.text`.
+
+### `Report` [@ANCHOR: verify:verify_report_class]
+
+**Purpose.** The collected checks of one verification run of the restored image. A run passes only when there is at least one check and none has status FAIL; warnings do not fail it.
+**Definition.** `class Report` in `tools/restoration_system/verify.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `checks` | `[]` | List of `Check` in the order added. |
+
+**Methods.** `__init__(self)`; `add(self, name, ok, detail='', warn=False)`; `ok(self)`; `text(self)`.
+
+**Notes.** `add(name, ok, detail, warn)` appends a check (status ok, warn or FAIL) and returns `ok`; the property `ok` is the verdict; `text()` formats one line per check and a final `RESULT: ALL PASS` or `RESULT: FAILED`.
+
+### `Canary` [@ANCHOR: verify:verify_canary_class]
+
+**Purpose.** A listener on the host (TCP and UDP, all addresses) that no packet from the isolated VM may ever reach. verify FAILS if one does.
+**Definition.** `class Canary` in `tools/restoration_system/verify.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `tcp` | `socket.socket()` | The listening TCP socket. |
+| `port` | `self.tcp.getsockname()[1]` | The port number, the same for TCP and UDP. |
+| `udp` | `socket.socket(socket.AF_INET, socket.SOCK_DGRAM)` | The bound UDP socket. |
+| `hits` | `0` | Count of connections or datagrams received; any value above 0 is a failure. |
+| `_stop` | `False` | Flag set by `close()` to end the threads. |
+| `_threads` | `[threading.Thread(target=self._loop, args=(self.tc` | The two daemon threads, one accepting TCP and one reading UDP. |
+
+**Methods.** `__init__(self)`; `_loop(self, sock, is_tcp)`; `close(self)`.
+
+**Notes.** Threads start in the constructor and poll with a 0.5 s timeout. `close()` stops them, waits up to 2 s each and closes the TCP socket. Listens on all interfaces, so run it only while verifying.
+

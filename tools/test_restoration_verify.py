@@ -239,3 +239,35 @@ def test_captured_accounts_and_deployed_commits():
     users, groups = accounts.captured_ids("root:x:0:0::/root:/bin/bash\nhams_com:x:998:997::/opt/hams:/bin/bash\n", "root:x:0:\nhams_com:x:997:odoo\n")
     assert users == {"root": 0, "hams_com": 998} and groups == {"root": 0, "hams_com": 997}
     assert code_layer.parse_deployed_commits("hams_com=9976e1bd\nhams_open=6925c203\nhams_shared=fa775f3\n")["hams_open"] == "6925c203"
+
+
+def test_guest_http_check_does_not_follow_a_redirect():
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    from restoration_system import guest_agent
+
+    class Redirect(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(302)
+            self.send_header("Location", "http://127.0.0.1:1/elsewhere")
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Redirect)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        url = "http://127.0.0.1:%d/" % server.server_address[1]
+        result = guest_agent.http_checks({"verify": {"http_retries": 1, "http_checks": [{"url": url, "contains": "x"}]}})
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert result[0]["status"] == 302
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: verify:verify_canary_class]
+# Tests [@ANCHOR: verify:verify_report_class]
+# Tests [@ANCHOR: guest_agent:guest_agent_no_redirect_class]
+# Tests [@ANCHOR: verify:verify_check_class]

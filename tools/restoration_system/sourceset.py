@@ -17,6 +17,7 @@ from . import sources as src
 STAT_RE = re.compile(r"^(\d+) (\d+),(\d+) (\d+):(\d+)$")
 
 
+# [@ANCHOR: sourceset:sourceset_file_item_class]
 @dataclasses.dataclass
 class FileItem:
     """One restore action from a kopia repository: `snapshot` goes to `path` inside the image. kind: tree, file or config_tar."""
@@ -26,6 +27,7 @@ class FileItem:
     kind: str
 
 
+# [@ANCHOR: sourceset:sourceset_db_plan_class]
 @dataclasses.dataclass
 class DbPlan:
     """How the database is restored: kind "pgbackrest" (restore + WAL fetch) or "streams" (sealed base backup and WAL in kopia)."""
@@ -37,6 +39,7 @@ class DbPlan:
     details: dict
 
 
+# [@ANCHOR: sourceset:sourceset_backup_set_class]
 class BackupSet:
     def __init__(self, kind, runner, secrets, profile, work):
         self.kind, self.runner, self.secrets, self.profile, self.work = kind, runner, secrets, profile, work

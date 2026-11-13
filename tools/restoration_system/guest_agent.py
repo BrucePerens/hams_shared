@@ -210,6 +210,7 @@ def http_checks(cfg):
     import urllib.request
     import urllib.error
 
+    # [@ANCHOR: guest_agent:guest_agent_no_redirect_class]
     class NoRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, *args, **kwargs):
             return None

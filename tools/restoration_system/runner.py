@@ -9,6 +9,7 @@ import subprocess
 import sys
 
 
+# [@ANCHOR: runner:runner_restoration_error_class]
 class RestorationError(Exception):
     """Any refusal or failure of the restoration system. The message says what to do next."""
 
@@ -16,6 +17,7 @@ class RestorationError(Exception):
 SAFE_ENV_KEYS = ("PATH", "LANG", "LC_ALL", "TERM", "TMPDIR", "HOME")
 
 
+# [@ANCHOR: runner:runner_runner_class]
 class Runner:
     """Runs commands with a minimal environment; `log` receives one line per command."""
 

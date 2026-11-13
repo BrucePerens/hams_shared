@@ -51,19 +51,23 @@ _CREDENTIAL_PARAMS = (
 )
 
 
+# [@ANCHOR: provision_cache:provision_cache_cache_error_class]
 class CacheError(Exception):
     """Base class for provisioning-cache failures."""
 
 
+# [@ANCHOR: provision_cache:provision_cache_hash_rejected_class]
 class HashRejected(CacheError):
     """The content does not have the hash it must have (a pin mismatch, or a changed trust-on-first-use
     hash). Never retried from cache and never swallowed: the file must be reviewed by a person."""
 
 
+# [@ANCHOR: provision_cache:provision_cache_unavailable_class]
 class Unavailable(CacheError):
     """The network failed and there is no cached copy to fall back to."""
 
 
+# [@ANCHOR: provision_cache:provision_cache_result_class]
 @dataclass
 class Result:
     path: str        # the cached blob (read-only to the caller: copy it, do not modify or move it)
