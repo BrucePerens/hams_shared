@@ -3,7 +3,7 @@
 ## Status
 Accepted (Consolidates ADRs 0019, 0064)
 
-**Superseded in part (2026-10-23, 2026-10-24):** hams.com removed every ARRL Logbook of the World (LoTW) and TQSL use on 2026-10-23 and restored LoTW on 2026-10-24 only as a licence-verification method for a signed-in member (never sign-in; Bruce's decisions). LoTW verification mentions below apply again; LoTW sign-in, log sync and TQSL mentions are history.
+**Superseded in part (2026-10-23, 2026-10-24):** hams.com removed every ARRL Logbook of the World (LoTW) and TQSL (ARRL's signing tool for Logbook of the World) use on 2026-10-23 and restored LoTW on 2026-10-24 only as a licence-verification method for a signed-in member (never sign-in; Bruce's decisions). LoTW verification mentions below apply again; LoTW sign-in, log sync and TQSL mentions are history.
 
 ## Context & Philosophy
 Domain-specific rules for verifying Amateur Radio operator identities securely without exposing internal ERP models.
@@ -28,6 +28,6 @@ The platform relies on background daemons to perform cross-user lookups. Queryin
 ## Status check 2026-11-12
 
 Checked against `ham_onboarding`. The shadow view `ham.operator.index` exists (`ham_onboarding/models/ham_index.py`, with `ham.swl.index` beside it) and daemons read it (`adif_ingress`, `dx_firehose`). The verification matrix of decision 1
-has changed since it was written. Today's `onboarding_method` values are Ham-CAPTCHA, SWL registration, LoTW certificate, HamCall address-knowledge check (`hamcall_challenge`), administrator-set, and other; the Morse challenge was removed
+has changed since it was written. Today's `onboarding_method` values are Ham-CAPTCHA, SWL (shortwave listener) registration, LoTW certificate, HamCall address-knowledge check (`hamcall_challenge`), administrator-set, and other; the Morse challenge was removed
 (its label is kept for members it already verified) and the QRZ.com profile challenge was removed (2026-10-19, see ADR 0093). LoTW was removed on 2026-10-23 and restored on 2026-10-24 only as a licence-verification method for a signed-in member
-(ADR 0101). The "Official FCC Email OTP" and manual uploaded-licence review remain verification routes; Verified Ham is granted through the routes listed in ADR 0101.
+(ADR 0101). The "Official FCC (US Federal Communications Commission) Email OTP" and manual uploaded-licence review remain verification routes; Verified Ham is granted through the routes listed in ADR 0101.

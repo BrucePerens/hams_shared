@@ -21,7 +21,7 @@ This directory contains the Architecture Decision Records (ADRs) that define the
 * [MASTER 08: Core Architecture & Performance](MASTER_08_CORE_ARCHITECTURE_PERFORMANCE.md)
   Details the hybrid monolith-daemon structure, distributed Redis caching, asynchronous bastions, and bounded chunking.
 * [MASTER 09: API Integrations & Cryptography](MASTER_09_API_INTEGRATIONS.md)
-  Defines HMAC Zero-Knowledge proofs, idempotency, ethical crawling, and strict headless API conventions.
+  Defines HMAC (keyed-hash message authentication code) Zero-Knowledge proofs, idempotency, ethical crawling, and strict headless API conventions.
 * [MASTER 10: Core Identity & Access Control](MASTER_10_IDENTITY_ACCESS_CONTROL.md)
   Outlines the Proxy Ownership pattern, domain sandbox mandates, and secure admin password management.
 * [MASTER 11: Agile Development & Documentation Workflow](MASTER_11_DEVELOPMENT_WORKFLOW_DOCS.md)
@@ -30,7 +30,7 @@ This directory contains the Architecture Decision Records (ADRs) that define the
   Enforces fast-fail CI/CD pipelines, deep AST test verification, strict syntactic parsing, and real-transaction testing methodologies.
 * [MASTER 13: Frontend UX & Accessibility](MASTER_13_FRONTEND_UX.md)
   Governs ARIA live-regions and OLED burn-in protection for dashboards.
-* [MASTER 14: LLM Context & Cognitive Load Management](MASTER_14_LLM_CONTEXT_MANAGEMENT.md)
+* [MASTER 14: LLM (large language model) Context & Cognitive Load Management](MASTER_14_LLM_CONTEXT_MANAGEMENT.md)
   Establishes rules for AI agents, including prompt engineering, API contracts, and patching protocols.
 * [MASTER 15: Domain Identity & Verification](MASTER_15_DOMAIN_IDENTITY.md)
   Defines identity verification fallbacks and the Shadow Profile indexing pattern.
@@ -122,15 +122,15 @@ This directory contains the Architecture Decision Records (ADRs) that define the
   already-real Noise/Ed25519 attestation pipeline, not a new crypto scheme), hams.com's own relay
   infrastructure becomes a fallback for when direct relay-to-relay connectivity genuinely isn't
   available rather than the default path, and IPv6 is a first-class connectivity preference given how
-  much less it relies on NAT than IPv4.
+  much less it relies on NAT (network address translation) than IPv4.
 * ADR 0099: Commit Discipline in a Working Tree Shared by Concurrent Agents -- **retired
   2026-09-22, superseded by ADR 0102.** Its private-`GIT_INDEX_FILE` discipline only ever protected
   the commit step; it never protected the shared working tree itself, and one session's
   `git checkout-index -a -f` destroyed another's uncommitted work despite it. File deleted; the
   decision record lives in git history only.
 * [ADR 0100: A Shared `localhost.hams.com` Certificate, With Its Private Key On Every Relay](0100_shared_localhost_certificate_on_every_relay.md) -- **reversed 2026-10-04 by ADR 0108.**
-  Bruce's 2026-09-20 decision to build both certificates: the relay keeps its per-user `u<id>.local.hams.com` certificate and also serves one shared, centrally renewed `localhost.hams.com` certificate to a browser on the same machine, chosen by SNI. The shared key sits on every relay, which is acceptable because a copied TLS key cannot impersonate a relay (pinned key plus Noise handshake); the key lives in files, never the database, and is distributed over one authenticated, rate-limited, TLS-only route. The relay keeps serving its last good copy with hams.com down (ADR 0097).
-* [ADR 0101: AllStar SIP Credentials Are Synced to the User's Own Browsers (Bounded Exception to ADR 0095)](0101_browser_synced_allstar_sip_credentials.md)
+  Bruce's 2026-09-20 decision to build both certificates: the relay keeps its per-user `u<id>.local.hams.com` certificate and also serves one shared, centrally renewed `localhost.hams.com` certificate to a browser on the same machine, chosen by SNI. The shared key sits on every relay, which is acceptable because a copied TLS (Transport Layer Security) key cannot impersonate a relay (pinned key plus Noise handshake); the key lives in files, never the database, and is distributed over one authenticated, rate-limited, TLS-only route. The relay keeps serving its last good copy with hams.com down (ADR 0097).
+* [ADR 0101: AllStar SIP (Session Initiation Protocol) Credentials Are Synced to the User's Own Browsers (Bounded Exception to ADR 0095)](0101_browser_synced_allstar_sip_credentials.md)
   Bruce's 2026-09-21 decision for the browser-direct AllStar path (no relay, no hams.com in the audio or signalling path): the user's own AllStar SIP password is kept encrypted at rest on the server and synced to their own browsers, because offline operation (ADR 0097) needs the browser to hold it. Mitigations: one narrow owner-only, `no-store`, rate-limited, TLS-only endpoint; service accounts refused; browser copy in IndexedDB under a non-extractable AES-GCM key; never in localStorage, URLs or logs; kept across logout unless the user chooses "forget on this device".
 * [ADR 0102: Concurrent-Session Isolation and Merge Gating (Replaces ADR 0099)](0102_concurrent_session_isolation_and_merge_gating.md)
   Replaces ADR 0099 after its private-index discipline let one session's `git checkout-index -a -f` destroy another's uncommitted work: per-session `git worktree`s instead of a shared checkout, so a destructive local command only ever touches its own copy; real server-side branch protection on both repos (unconditional required review; `enforce_admins` off because only one GitHub account can review, so PRs land via `--admin` by Bruce) instead of a client-side procedure; every PR, including `hams_helpdesk` ticket-triage's `ai-triage/*` and night-watch's `night-shift/*`, reaches a human (the planned night-watch fast-merge script was withdrawn 2026-10-02: a second PAT on the same account cannot approve that account's PRs); and an hourly sweep for worktrees orphaned by a crash rather than a graceful exit.

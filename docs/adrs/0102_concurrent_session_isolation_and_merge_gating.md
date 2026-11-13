@@ -116,7 +116,7 @@ PR past the required review. A revival needs all of the following:
      credential's scope is functionally identical to the ticket-triage PAT's. The separation between
      "night-watch can fast-merge its own work" and "ticket-triage can never self-merge" would rest
      entirely on two different secrets with disjoint access: the
-     ticket-triage MCP server must never be able to read the reviewer credential, and the reviewer must
+     ticket-triage MCP (Model Context Protocol) server must never be able to read the reviewer credential, and the reviewer must
      never be able to read the ticket-triage PAT. Both belong under `~/.secrets/`, each in its own file
      (this dev box's secret convention, not AWS Secrets Manager).
 

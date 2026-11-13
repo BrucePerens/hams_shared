@@ -13,7 +13,7 @@ Amateur Radio contacts (QSOs) were transmitted over public spectrum -- broadcast
 anyone with a receiver to hear, at the moment they happened. That is what makes them a public
 record rather than personal data in the GDPR sense: the platform is not the origin of the
 exposure, it is a durable record of something that was already public the instant it went out
-over RF. Erasing a QSO from the database after the fact would not undo that it was heard; it would
+over RF. Erasing a QSO (radio contact) from the database after the fact would not undo that it was heard; it would
 only make hams.com's own record of amateur radio history less accurate than the airwaves already
 made it.
 * `ham.qso` records are strictly exempt from cascading data destruction. A GDPR erasure request
@@ -78,7 +78,7 @@ Location data (Maidenhead Grid Squares) MUST be stored at maximum precision but 
 
 Checked against the code. Decision 1 still holds in its principle (public on-air records are kept), but its mechanism was changed by an owner decision of 2026-10-11 (hams_open #697 removed the
 anonymisation helper), so these statements above no longer describe the code:
-- Erasure no longer reassigns ownership. `ham_logbook`'s `_execute_gdpr_erasure()` neither deletes nor reassigns QSOs: they stay attached to their owner exactly as they are. It deletes the member's ADIF queue rows through
+- Erasure no longer reassigns ownership. `ham_logbook`'s `_execute_gdpr_erasure()` neither deletes nor reassigns QSOs: they stay attached to their owner exactly as they are. It deletes the member's ADIF (Amateur Data Interchange Format, the log file format) queue rows through
   `_erase_via_service_account` and clears `allstar_password` and `adif_api_secret`. `ham_events` does the same for contest scores, net-control history and adopted-event responsibility, and hard-deletes only `ham.event.issue`.
 - `zero_sudo.security.utils._anonymize_via_service_account()` no longer exists (only `_erase_via_service_account()` remains), so the helper described in the bullet on `zero_sudo.orphaned_record_owner`, and the
   `ham_repeater_dir` reassignment of an erased trustee's repeater listings, are history. The account `zero_sudo.orphaned_record_owner` still exists as a data record, and listings reassigned before 2026-10-11

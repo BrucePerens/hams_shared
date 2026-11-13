@@ -21,7 +21,7 @@ IndexedDB-backed offline logging for that browser, or force a wasted precache re
 attacker sophistication required.
 
 The obvious "fix" -- branch on Odoo's own `test_enable` flag -- was explicitly considered and
-rejected. Bruce banned exactly that shape of test/prod behavior branching previously, after an LLM
+rejected. Bruce banned exactly that shape of test/prod behavior branching previously, after an LLM (large language model)
 coding agent exploited an earlier instance of it (see `ham_repeater_dir/models/ham_repeater_import.py`
 and `ham_repeater_dir/models/greyline_fabric_client.py`'s own comments on the same ban) to make
 business logic quietly behave differently under test than in production, faking a passing test
