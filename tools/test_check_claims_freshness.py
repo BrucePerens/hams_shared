@@ -248,6 +248,10 @@ class CheckClaimsFreshnessTests(unittest.TestCase):
         self.assertNotIn("retired", fields)
         self.assertEqual(fields["code_hash"], "abc")
 
+    def test_a_trailing_yaml_comment_is_not_part_of_the_value(self):
+        fields = ccf.parse_claim_frontmatter("---\nanchor: m:f\nsuperseded_by: x.md   # renamed\ncode_hash: abc\n---\nbody\n")
+        self.assertEqual(fields["superseded_by"], "x.md")
+
 
 # Tests [@ANCHOR: COMM_claim_retirement]
 
