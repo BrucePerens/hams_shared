@@ -6,6 +6,7 @@ import ast
 import os
 import sys
 import tempfile
+import time
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -85,6 +86,43 @@ class BudgetTests(unittest.TestCase):
                                   capture_output=True, text=True)
             self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
             self.assertIn("PARTIAL: 0 of", done.stdout)
+
+
+def _alive(pid):
+    try:
+        with open(f"/proc/{pid}/stat") as handle:
+            return handle.read().rsplit(")", 1)[1].split()[0] != "Z"
+    except OSError:
+        return False
+
+
+class ProcessGroupTests(unittest.TestCase):
+    """[@ANCHOR: mutation_harness:run_group] a timed-out mutant's whole process tree ends, not just the wrapper shell."""
+
+    def test_timeout_ends_grandchild(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pidfile = os.path.join(tmp, "pid")
+            started = time.time()
+            _, _, timed_out = mutation_harness.run_group(f"sh -c 'sleep 60 & echo $! > {pidfile}; wait'", tmp, dict(os.environ),
+                                                         timeout=2, grace=1)
+            self.assertTrue(timed_out)
+            self.assertLess(time.time() - started, 15)
+            pid = int(open(pidfile).read())
+            for _ in range(30):
+                if not _alive(pid):
+                    break
+                time.sleep(0.1)
+            self.assertFalse(_alive(pid), "grandchild survived the timeout")
+
+    def test_memory_cap_gives_nonzero_exit(self):
+        code, _, timed_out = mutation_harness.run_group("python3 -c 'bytearray(2 * 1024**3)'", ".", dict(os.environ),
+                                                        timeout=30, mem_limit_mb=512)
+        self.assertFalse(timed_out)
+        self.assertNotEqual(code, 0)
+
+    def test_exit_zero_survives(self):
+        code, out, _ = mutation_harness.run_group("echo ok", ".", dict(os.environ), timeout=10)
+        self.assertEqual((code, out.strip()), (0, b"ok"))
 
 
 if __name__ == "__main__":

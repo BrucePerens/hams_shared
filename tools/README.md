@@ -4644,6 +4644,10 @@ checkout (incident 2026-11-09). The harness clones the tree with hardlinks into 
 (`require_inside_copy`) any path that does not resolve inside that copy, and checks the original file is byte-identical at the end.
 Pass `--root` as a real tree, never a path whose target lives behind a symlink. Tests: `test_mutation_harness.py`.
 
+### `[@ANCHOR: mutation_harness:run_group]` `run_group(test, cwd, env, timeout=None, mem_limit_mb=4096, grace=3.0)`
+
+Runs the shell command `test` (nice 10, `ulimit -v` of `mem_limit_mb`, `--mem-limit-mb` on the command line, 0 = no cap) in its own process group and returns `(returncode, output, timed_out)`. On timeout, or on any exception including `KeyboardInterrupt`, the whole group (the test command and every grandchild) is terminated, with a force-kill after `grace` seconds for stragglers, and reaped. `subprocess.run(shell=True, timeout=)` killed only the wrapper shell and left runaway mutants running (2026-11-12). A mutant that dies by the memory cap exits nonzero and counts as KILLED. Test: `test_mutation_harness.py` `ProcessGroupTests` (a backgrounded `sleep` must be gone after `--timeout`).
+
 `mutation_harness.py --budget SECONDS` starts no new mutant after that time and prints `PARTIAL: R of N mutants run before the budget`; `mutation_run.py` uses it.
 
 ## Overnight automation (`overnight_common.py`, `mutation_run.py`, `fuzz_run.py`, `hypothesis_scale.py`)
