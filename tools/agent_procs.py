@@ -686,7 +686,7 @@ def start_job(name, argv, tag="", cwd=None, directory=None, timeout=DEFAULT_TIME
 
     Output (standard output and error) goes to `<jobs dir>/<name>.log`, truncated. The record names the wrapper's pid,
     process group, session and start time. Holds an exclusive lock on `<name>.lock` while checking and starting, so two
-    starts of one name cannot both succeed. Raises `ProcError` for a bad name, an empty command, a `cwd` that is not a directory, or a job of that name that
+    starts of one name cannot both succeed. Raises `ProcError` for a bad name, an empty command, a wrapper whose /proc start time cannot be read, a `cwd` that is not a directory, or a job of that name that
     is still running (stop it, or wait for it, first). `timeout` seconds (0: none) and `mem_max` (`6G`; `None`: none) are
     recorded and enforced (see `wrapper_main`, `limit_argv`); `nice` is the niceness."""
     directory = directory or jobs_dir()
@@ -709,7 +709,11 @@ def start_job(name, argv, tag="", cwd=None, directory=None, timeout=DEFAULT_TIME
                 stdout=log_handle, stderr=subprocess.STDOUT, cwd=cwd, start_new_session=True, env=env,
                 close_fds=True)
         info = read_proc(child.pid)
-        rec = JobRecord(name, tag, child.pid, child.pid, child.pid, info.start_ticks if info else 0,
+        if info is None:  # a record with start_ticks 0 would read as "lost" while the job runs
+            child.stdin.close()  # the wrapper then ends without running the command
+            child.wait()
+            raise ProcError(f"cannot read the start time of the wrapper for job {name} (pid {child.pid}); not started", EX_FAILED)
+        rec = JobRecord(name, tag, child.pid, child.pid, child.pid, info.start_ticks,
                         os.path.realpath(cwd or os.getcwd()), list(argv), log, time.time(), user_name(os.getuid()),
                         timeout=timeout, mem_max=mem_max)
         write_record(rec, directory)
