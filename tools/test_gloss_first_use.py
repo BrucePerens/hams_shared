@@ -2,6 +2,7 @@
 """Tests [@ANCHOR: gloss_first_use:find_missing] [@ANCHOR: gloss_first_use:apply_glosses]"""
 
 import os
+import re
 import tempfile
 import unittest
 
@@ -67,6 +68,17 @@ class FindMissingTests(unittest.TestCase):
         self.assertEqual(glossed(once), once)
         self.assertEqual(once.replace(" (continuous wave)", "").replace(" (Transport Layer Security)", "")
                          .replace(" (software-defined radio)", ""), text)
+
+
+class DictionaryTests(unittest.TestCase):
+    def test_no_expansion_contains_another_term(self):
+        # Tests [@ANCHOR: gloss_first_use:apply_glosses]
+        terms = gloss_first_use.load_terms(gloss_first_use.DEFAULT_TERMS)
+        self.assertGreater(len(terms), 30)
+        for term, expansion in terms.items():
+            for other in terms:
+                self.assertIsNone(re.search(r"(?<![\w-])%s(?![\w-])" % re.escape(other), expansion),
+                                  "%s expansion contains %s, which would need its own gloss" % (term, other))
 
 
 class CommandLineTests(unittest.TestCase):
