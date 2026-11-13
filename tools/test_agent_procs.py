@@ -37,6 +37,9 @@ Tests [@ANCHOR: agent_procs:signal_same_process]
 Tests [@ANCHOR: agent_procs:job_state]
 Tests [@ANCHOR: agent_procs:forward_signal]
 Tests [@ANCHOR: agent_procs:wrapper_main]
+Tests [@ANCHOR: agent_procs:parse_size]
+Tests [@ANCHOR: agent_procs:limit_argv]
+Tests [@ANCHOR: agent_procs:stop_group]
 Tests [@ANCHOR: agent_procs:start_job]
 Tests [@ANCHOR: agent_procs:wait_pid]
 Tests [@ANCHOR: agent_procs:wait_matching]
@@ -1021,6 +1024,74 @@ class JobTests(ProcTestCase):
                 os.waitpid(rec.pid, os.WNOHANG)
             except ChildProcessError:
                 pass
+
+
+class LimitTests(ProcTestCase):
+    """run --timeout / --mem-max / --nice, the parent-death rule and the limits shown by jobs."""
+
+    def group_gone(self, rec):
+        return not ap.group_members(ap.snapshot(), rec.pgid, rec.sid)
+
+    def test_a_job_that_sleeps_past_its_timeout_is_stopped_and_recorded(self):
+        done = cli("run", "slow", "--timeout", "2", "--mem-max", "none", "--", "sh", "-c", "sleep 60; sleep 61", env=self.env)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(cli("wait", "--job", "slow", "--timeout", "30", env=self.env).returncode, 1)
+        rec = ap.read_record("slow", self.jobs)
+        self.assertEqual(rec.exit_reason, "timeout")
+        self.assertEqual(rec.timeout, 2)
+        self.until(lambda: self.group_gone(rec))
+
+    def test_a_job_that_ignores_sigterm_is_killed_after_the_grace(self):
+        rec = ap.start_job("stubborn", ["sh", "-c", "trap '' TERM; while :; do sleep 1; done"], timeout=1, mem_max=None,
+                           directory=self.jobs, kill_grace=1)
+        self.until(lambda: ap.read_record("stubborn", self.jobs).exit_reason == "timeout", 30)
+        self.until(lambda: self.group_gone(rec))
+
+    def test_a_job_over_its_memory_cap_is_stopped(self):
+        code = "import time\nx = []\nwhile True:\n    x.append(b'x' * 50_000_000)\n    time.sleep(0.01)\n"
+        done = cli("run", "hog", "--timeout", "60", "--mem-max", "200M", "--", sys.executable, "-c", code, env=self.env)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(cli("wait", "--job", "hog", "--timeout", "50", env=self.env).returncode, 1)
+        rec = ap.read_record("hog", self.jobs)
+        self.assertNotEqual(rec.exit_code, 0)
+        self.assertNotEqual(rec.exit_reason, "timeout")
+        self.until(lambda: self.group_gone(rec))
+
+    def test_defaults_and_opt_outs_are_recorded_and_shown_by_jobs(self):
+        cli("run", "dflt", "--", "true", env=self.env)
+        out = cli("run", "optout", "--timeout", "0", "--mem-max", "none", "--", "true", env=self.env).stdout
+        self.assertIn("NO TIMEOUT", out)
+        self.assertIn("NO MEMORY CAP", out)
+        for name in ("dflt", "optout"):
+            cli("wait", "--job", name, "--timeout", "30", env=self.env)
+        dflt, optout = ap.read_record("dflt", self.jobs), ap.read_record("optout", self.jobs)
+        self.assertEqual((dflt.timeout, dflt.mem_max), (1800, "6G"))
+        self.assertEqual((optout.timeout, optout.mem_max), (0, None))
+        listing = cli("jobs", env=self.env).stdout
+        self.assertIn("timeout=1800s mem=6G", listing)
+        self.assertIn("timeout=none mem=none", listing)
+
+    def test_the_command_ends_when_its_wrapper_dies(self):
+        rec = ap.start_job("orphan", ["sleep", "61.5"], mem_max=None, directory=self.jobs)
+        mine = lambda: [i for i in ap.snapshot().values() if i.argv[:2] == ("sleep", "61.5")]  # noqa: E731
+        self.until(lambda: mine())
+        os.kill(rec.pid, signal.SIGKILL)  # the wrapper of our own job
+        self.until(lambda: not mine(), 20)
+
+    def test_parse_size_and_limit_argv(self):
+        self.assertEqual(ap.parse_size("6G"), 6 * 1024 ** 3)
+        self.assertEqual(ap.parse_size("512M"), 512 * 1024 ** 2)
+        with self.assertRaises(ap.ProcError):
+            ap.parse_size("lots")
+        self.assertEqual(ap.limit_argv(["x"], None, 0), ["x"])
+        self.assertEqual(ap.limit_argv(["x"], None, 5), ["nice", "-n", "5", "x"])
+        capped = ap.limit_argv(["x"], "1G", 0, have_systemd=True)
+        self.assertEqual(capped[:3], ["systemd-run", "--user", "--scope"])
+        self.assertIn("MemoryMax=1G", capped)
+        self.assertIn("MemorySwapMax=0", capped)
+        fallback = ap.limit_argv(["x"], "1G", 0, have_systemd=False)
+        self.assertEqual(fallback[0], "sh")
+        self.assertIn("ulimit -v 1048576", fallback[2])
 
 
 class KillPidTests(ProcTestCase):

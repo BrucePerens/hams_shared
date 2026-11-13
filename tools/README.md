@@ -3609,6 +3609,18 @@ Purpose: classify a job. Returns `"exited"` (an exit code was recorded; it has p
 
 Purpose: the wrapper's signal handler (installed with `functools.partial(forward_signal, holder)` for every signal in `ALLOWED_SIGNALS`: TERM, INT, HUP, QUIT, USR1, USR2). `holder[0]` is the `Popen` of the command or `None`; the signal is passed to the command if it still runs, errors from a command that just ended are ignored. The wrapper itself keeps running, so it always records the exit code. Runs in signal-handler context; touches no lock.
 
+### `[@ANCHOR: agent_procs:parse_size]` `parse_size(text)`
+
+Purpose: bytes in a size such as `6G`, `512M`, `100K` or a plain number (binary units, case-insensitive). Raises `ProcError` for anything else. Test: `test_agent_procs.py`.
+
+### `[@ANCHOR: agent_procs:limit_argv]` `limit_argv(argv, mem_max, nice, have_systemd=None)`
+
+Purpose: the command line a job really runs. `nice -n N` first when `nice` is non-zero; the cap `mem_max` (`None`: none) as `systemd-run --user --scope -p MemoryMax=... -p MemorySwapMax=0`, or `ulimit -v` in `sh -c` when `systemd-run --user` does not work here (`have_systemd`, default probed once). Test: `test_agent_procs.py`.
+
+### `[@ANCHOR: agent_procs:stop_group]` `stop_group(pgid, sid, grace, sleep, clock)`
+
+Purpose: the wrapper stops its own job's group on timeout: SIGTERM to the group (the wrapper survives, its handler forwards it), wait up to `grace`, then SIGKILL each remaining member one by one with its start time checked (never the whole group, which holds the wrapper). Test: `test_agent_procs.py` (timeout and ignores-SIGTERM jobs).
+
 ### `[@ANCHOR: agent_procs:wrapper_main]` `wrapper_main(name, argv, directory=None)`
 
 Purpose: the tiny process that leads a job's session (`agent_procs.py _wrap NAME -- COMMAND...`, started only by `start_job`). Waits for the line `go` on standard input (so the record exists before the command runs; EOF or anything else returns 126 without running it), runs `argv` with standard input from `/dev/null` and its output inherited (the log), waits, writes `exit_code` and `ended_at` into the record if the record still names this process, and returns the code (128+N after signal N, 127 when the program cannot be run, the reason on standard error). A job killed with SIGKILL leaves no exit code (`lost`).
@@ -3668,7 +3680,7 @@ Purpose: the `wait` subcommand: exactly one of `--pid [--start-time]`, `--job`, 
 
 ### `[@ANCHOR: agent_procs:cmd_run]` `cmd_run(args, out=sys.stdout)`
 
-Purpose: the `run` subcommand: `run NAME [--tag AGENT] [--cwd DIR] -- COMMAND...`. Prints the job's pid, process group, log path and the wait and stop commands. Returns 0.
+Purpose: the `run` subcommand: `run NAME [--tag AGENT] [--cwd DIR] [--timeout S] [--mem-max SIZE] [--nice N] -- COMMAND...`. Defaults: timeout 1800 s, memory cap 6G; `--timeout 0` / `--mem-max none` opt out and print a loud WARNING; without `systemd-run --user` the cap is `ulimit -v` and the output says so. A timeout stops the whole process group (exit 124, `exit_reason` `timeout` in the record) and the command dies when its wrapper dies. `jobs` shows `timeout=` and `mem=`. Prints the job's pid, process group, log path and the wait and stop commands. Returns 0.
 
 | Argument | Type | Meaning |
 |---|---|---|
