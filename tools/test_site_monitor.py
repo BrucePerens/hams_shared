@@ -673,3 +673,6 @@ class ManifestUnitTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: site_monitor:site_monitor__no_redirects_class]

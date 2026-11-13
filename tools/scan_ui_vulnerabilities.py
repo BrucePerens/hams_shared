@@ -72,6 +72,7 @@ def scan_file(filepath):
 
     vulnerabilities = []
 
+    # [@ANCHOR: scan_ui_vulnerabilities:scan_ui_vulnerabilities_string_scanner_class]
     class StringScanner(ast.NodeVisitor):
         def check_string(self, s, lineno):
             # 1. Look for raw un-escaped HTML/XML tags (e.g., <record>, <group>)

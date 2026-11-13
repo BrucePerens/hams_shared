@@ -431,3 +431,6 @@ class TestSlotRefusals(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: runner_slots:runner_slots_slot_config_error_class]

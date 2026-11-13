@@ -211,3 +211,7 @@ class OutputTests(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: static_site_ctl:static_site_ctl_no_redirect_class]
+# Tests [@ANCHOR: static_site_ctl:static_site_ctl_static_paths_class]

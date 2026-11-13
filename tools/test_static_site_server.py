@@ -214,3 +214,7 @@ class ConfigTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: static_site_server:static_site_server_server_class]
+# Tests [@ANCHOR: static_site_server:static_site_server_handler_class]

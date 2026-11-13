@@ -6939,3 +6939,246 @@ Every class of the tools that is not a function, with its fields, who creates it
 
 **Notes.** Threads start in the constructor and poll with a 0.5 s timeout. `close()` stops them, waits up to 2 s each and closes the TCP socket. Listens on all interfaces, so run it only while verifying.
 
+
+### `SlotConfigError` [@ANCHOR: runner_slots:runner_slots_slot_config_error_class]
+
+**Purpose.** A slot count or a slot-derived name that cannot be used.
+**Definition.** `class SlotConfigError(ValueError)` in `tools/runner_slots.py`.
+
+**Notes.** `parse_slot_count(text, source)` raises it with the source (environment variable or file) named in the message, so a bad setting is found and fixed, not silently replaced by a default.
+
+### `StringScanner` [@ANCHOR: scan_ui_vulnerabilities:scan_ui_vulnerabilities_string_scanner_class]
+
+**Purpose.** AST visitor defined inside `scan_file` of scan_ui_vulnerabilities. It looks at every string constant and f-string of a Python file for raw XML or HTML tags that a UI-stripping step would remove, and for the telltale of a stripped comment or tag (an empty string after `using` and `if`, or `() and templates`).
+**Definition.** `class StringScanner(ast.NodeVisitor)` in `tools/scan_ui_vulnerabilities.py`.
+
+**Methods.** `check_string(self, s, lineno)`; `visit_Constant(self, node)`; `visit_JoinedStr(self, node)`.
+
+**Notes.** No fields of its own; it appends (line, kind, text) tuples to the enclosing function's `vulnerabilities` list. `check_string(s, lineno)` applies two regular expressions; `visit_Constant` checks string constants; `visit_JoinedStr` joins the literal parts of an f-string (formatted parts become `{...}`) and checks the result. Exists only during one `scan_file` call.
+
+### `_Page` [@ANCHOR: site_compare:site_compare__page_class]
+
+**Purpose.** Collects the parts of an Odoo page that matter for a content comparison.
+**Definition.** `class _Page(HTMLParser)` in `tools/site_compare.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `title` | `''` | Text of the `<title>` element. |
+| `meta` | `{}` | Dictionary meta name or property (lower case) to its content. |
+| `stack` | `[]` | Stack of open tags used while parsing. |
+| `text` | `{'main': [], 'nav': [], 'footer': []}` | Dictionary with lists of text pieces for the regions "main", "nav" and "footer". |
+| `nav_items` | `[]` | Hrefs of the links inside the main or mobile navigation. |
+| `_in_title` | `False` | True while inside `<title>`. |
+| `_skip` | `0` | Depth counter of tags in `SKIP_TAGS` (script, style and so on) whose text is ignored. |
+| `_region` | `None` | Name of the region being read ("main", "footer", "nav") or None. |
+| `_region_depth` | `0` | Tag nesting depth inside the current region, so its end is found. |
+
+**Methods.** `__init__(self)`; `handle_starttag(self, tag, attrs)`; `handle_endtag(self, tag)`; `_add_text(self, data)`; `handle_data(self, data)`.
+
+**Notes.** Also public: `images` (src of images in main) and `links` (href of links in main). Text is read only inside a region; block tags add line breaks. Feed it with `feed(html)` once, then read the fields.
+
+### `Fetcher` [@ANCHOR: site_compare:site_compare_fetcher_class]
+
+**Purpose.** Polite HTTP fetcher of site_compare for one site: it spaces its requests at least `interval` seconds apart, sends a fixed User-Agent and an optional Host header, does not follow redirects and gives status, body and headers.
+**Definition.** `class Fetcher` in `tools/site_compare.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `_opener` | `opener or urllib.request.build_opener(_NoRedirect(` | The urllib opener, one that refuses redirects unless a test supplies another. |
+| `_last` | `0.0` | Monotonic time of the previous request, 0.0 before the first. |
+
+**Methods.** `__init__(self, base, host=None, interval=1.0, sleep=time.sleep, opener=None)`; `get(self, path, method='GET')`.
+
+**Notes.** Constructor `Fetcher(base, host=None, interval=1.0, sleep=time.sleep, opener=None)`; `base` loses a trailing slash; `host` is sent as the Host header for a site reached by address. `get(path, method="GET")` waits out the interval, then returns (status, body, headers) with an empty body for HEAD; an HTTP error status is returned as a result. Timeout 30 s. Not thread-safe.
+
+### `_NoRedirect` [@ANCHOR: site_compare:site_compare__no_redirect_class]
+
+**Purpose.** urllib redirect handler of site_compare that refuses every redirect, so the comparison reports a redirecting page as a redirect instead of reading the page it leads to.
+**Definition.** `class _NoRedirect(urllib.request.HTTPRedirectHandler)` in `tools/site_compare.py`.
+
+**Methods.** `redirect_request(self, *args, **kwargs)`.
+
+**Notes.** `redirect_request` returns None; the 3xx answer is then reported as it came. No state.
+
+### `_NoRedirects` [@ANCHOR: site_monitor:site_monitor__no_redirects_class]
+
+**Purpose.** Hand a 3xx back as an answer instead of following it: a front page that redirects is not the front page.
+**Definition.** `class _NoRedirects(urllib.request.HTTPRedirectHandler)` in `tools/site_monitor.py`.
+
+**Methods.** `redirect_request(self, req, fp, code, msg, headers, newurl)`.
+
+**Notes.** `redirect_request` returns None so the status of the redirect is what the monitor checks. No state.
+
+### `ThrowawayKms` [@ANCHOR: smoketest_relay_signer:smoketest_relay_signer_throwaway_kms_class]
+
+**Purpose.** The two Cloud KMS calls relay_signer makes, answered by a random software key made at start.
+**Definition.** `class ThrowawayKms` in `tools/smoketest_relay_signer.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `key` | `ec.generate_private_key(ec.SECP256R1())` | The `ec` private key (SECP256R1) generated in the constructor. |
+
+**Methods.** `__init__(self)`; `get_public_key(self, request, timeout=None)`; `asymmetric_sign(self, request, timeout=None)`.
+
+**Notes.** `get_public_key(request, timeout=None)` returns an object with the key's PEM and its CRC32C. `asymmetric_sign(request, timeout=None)` signs the supplied SHA-256 digest (prehashed ECDSA) and returns the name, signature and CRC32C with `verified_digest_crc32c` true. Passed to the daemon's `main` as `kms_client`; no network or key storage.
+
+### `StaticPaths` [@ANCHOR: static_site_ctl:static_site_ctl_static_paths_class]
+
+**Purpose.** Every filesystem location static_site_ctl touches, as a frozen dataclass so tests can point the tool at a temporary directory instead of the real system paths.
+**Definition.** `class StaticPaths` in `tools/static_site_ctl.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `data_root` | `str = '/var/lib/hams-static'` | Root of the site data, default `/var/lib/hams-static`; one subdirectory per site. |
+| `conf_root` | `str = '/etc/hams-static'` | Directory of per-site JSON configuration, default `/etc/hams-static`. |
+| `lib_root` | `str = '/usr/local/lib/hams-static'` | Directory holding the installed copy of `static_site_server.py`, default `/usr/local/lib/hams-static`. |
+| `systemd_dir` | `str = '/etc/systemd/system'` | systemd unit directory, default `/etc/systemd/system`. |
+
+**Methods.** `site_dir(self, name)`; `conf_file(self, name)`; `server_copy(self)`; `dropin_dir(self, name)`.
+
+**Notes.** Methods derive paths: `site_dir(name)`, `conf_file(name)` (`<conf_root>/<name>.json`), `server_copy()` and `dropin_dir(name)` (`hams-static@<name>.service.d` in the systemd directory). Frozen and hashable; no file access.
+
+### `NoRedirect` [@ANCHOR: static_site_ctl:static_site_ctl_no_redirect_class]
+
+**Purpose.** urllib redirect handler defined inside the function of static_site_ctl that checks a served site over HTTP: it refuses every redirect so the check sees the status the site itself gave.
+**Definition.** `class NoRedirect(urllib.request.HTTPRedirectHandler)` in `tools/static_site_ctl.py`.
+
+**Methods.** `redirect_request(self, *args, **kwargs)`.
+
+**Notes.** `redirect_request` returns None; exists only for the duration of that call.
+
+### `Handler` [@ANCHOR: static_site_server:static_site_server_handler_class]
+
+**Purpose.** Request handler of static_site_server for the static sites (GET and HEAD only). It resolves the request path under the site root without ever leaving it, serves files and directory indexes or a redirect, and answers every other method with 405. It keeps no access log, since journald would hold a record of every visitor.
+**Definition.** `class Handler(http.server.BaseHTTPRequestHandler)` in `tools/static_site_server.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `protocol_version` | `'HTTP/1.1'` | Class attribute "HTTP/1.1". |
+| `server_version` | `SERVER_NAME` | Class attribute, the name `SERVER_NAME` ("hams-static"); `version_string` returns it too. |
+| `sys_version` | `''` | Class attribute, empty, so no Python version is announced. |
+| `timeout` | `SOCKET_TIMEOUT` | Class attribute, the socket timeout `SOCKET_TIMEOUT` (60 s). |
+| `do_POST` | `do_OPTIONS` | Alias of `do_OPTIONS`, which answers 405 with `Allow: GET, HEAD`. |
+| `do_PUT` | `do_OPTIONS` | Same alias. |
+| `do_DELETE` | `do_OPTIONS` | Same alias. |
+| `do_PATCH` | `do_OPTIONS` | Same alias. |
+
+**Methods.** `version_string(self)`; `log_message(self, fmt, *args)`; `send_common(self)`; `send_plain(self, status, text='', extra=())`; `do_OPTIONS(self)`; `do_HEAD(self)`; `do_GET(self)`.
+
+**Notes.** `send_common` adds `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer` to every answer; `send_plain(status, text, extra)` sends a plain-text answer; `do_HEAD` runs `do_GET` without a body; a request line over 2048 characters gets 414. Path mapping is done by `resolve(root, prefix, path)`, which returns missing for NUL, backslash or double-slash paths.
+
+### `Server` [@ANCHOR: static_site_server:static_site_server_server_class]
+
+**Purpose.** The threaded HTTP server of static_site_server: one thread per connection, daemon threads, address reuse and a request queue of 64, serving a site described by its configuration with the `Handler` class.
+**Definition.** `class Server(socketserver.ThreadingMixIn, http.server.HTTPServer)` in `tools/static_site_server.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `daemon_threads` | `True` | Class attribute True; handler threads do not keep the process alive. |
+| `allow_reuse_address` | `True` | Class attribute True; the port can be rebound at once. |
+| `request_queue_size` | `64` | Class attribute 64, the listen backlog. |
+| `config` | `config` | The site configuration dictionary (`root`, `prefix` and the other keys the handler reads), kept for the handler as `self.server.config`. |
+
+**Methods.** `__init__(self, address, config)`.
+
+**Notes.** Constructor `Server(address, config)`. Subclass of `ThreadingMixIn` and `HTTPServer`. The service binds a loopback address and sits behind the front proxy.
+
+### `_NoRedirect` [@ANCHOR: tenant_cloudflare:tenant_cloudflare__no_redirect_class]
+
+**Purpose.** Refuses every redirect. urllib copies all request headers, the credential included, to wherever a 3xx answer points; a refused redirect surfaces as the HTTPError of the 3xx status.
+**Definition.** `class _NoRedirect(urllib.request.HTTPRedirectHandler)` in `tools/tenant_cloudflare.py`.
+
+**Methods.** `redirect_request(self, req, fp, code, msg, headers, newurl)`.
+
+**Notes.** `redirect_request` returns None. No state.
+
+### `Api` [@ANCHOR: tenant_cloudflare:tenant_cloudflare_api_class]
+
+**Purpose.** Minimal Cloudflare API client of tenant_cloudflare: one call function with a bearer token, JSON in and out, a 30 second timeout and no redirects followed (so the token is never sent elsewhere).
+**Definition.** `class Api` in `tools/tenant_cloudflare.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `_token` | `token` | The API token, used in the `Authorization: Bearer` header; never printed. |
+| `_open` | `opener or _OPENER.open` | Function that opens a request, the module's no-redirect opener unless a test passes another. |
+
+**Methods.** `__init__(self, token, opener=None)`; `call(self, method, path, body=None)`.
+
+**Notes.** `call(method, path, body=None)` returns the decoded payload. An HTTP error or a reply with `success` false ends the program through SystemExit with a message naming the method and path (and the API's error messages). Changes DNS or settings at Cloudflare when the call is a write.
+
+### `NoRedirect` [@ANCHOR: tenant_ctl:tenant_ctl_no_redirect_class]
+
+**Purpose.** urllib redirect handler defined inside the function of tenant_ctl that probes a tenant over HTTP: it refuses redirects so the probe sees the tenant's own status.
+**Definition.** `class NoRedirect(urllib.request.HTTPRedirectHandler)` in `tools/tenant_ctl.py`.
+
+**Methods.** `redirect_request(self, *args, **kwargs)`.
+
+**Notes.** `redirect_request` returns None; exists only during that call.
+
+### `SpecError` [@ANCHOR: tenant_lib:tenant_lib_spec_error_class]
+
+**Purpose.** A tenant spec is invalid. Raised, never papered over (fail fast).
+**Definition.** `class SpecError(ValueError)` in `tools/tenant_lib.py`.
+
+**Notes.** The command line prints the message and exits non-zero before anything on the system is changed.
+
+### `Paths` [@ANCHOR: tenant_lib:tenant_lib_paths_class]
+
+**Purpose.** Every filesystem location the tool touches, so tests can point it at a temp directory.
+**Definition.** `class Paths` in `tools/tenant_lib.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `conf_root` | `str = '/etc/hams-tenants'` | Directory of per-tenant Odoo configuration, default `/etc/hams-tenants`. |
+| `secret_root` | `str = '/opt/hams/etc/tenants'` | Directory of per-tenant secrets, default `/opt/hams/etc/tenants`. |
+| `spec_dir` | `str = '/opt/hams/etc/tenants.d'` | Directory of the tenant spec files, default `/opt/hams/etc/tenants.d`. |
+| `data_root` | `str = '/var/lib/hams-tenants'` | Root of tenant data, default `/var/lib/hams-tenants`. |
+| `backup_root` | `str = '/opt/hams/backups/tenants'` | Root of tenant backups, default `/opt/hams/backups/tenants`. |
+| `addons_root` | `str = '/usr/local/lib/hams-tenant-addons'` | Root of per-tenant addon copies, default `/usr/local/lib/hams-tenant-addons`. |
+| `systemd_dir` | `str = '/etc/systemd/system'` | systemd unit directory, default `/etc/systemd/system`. |
+| `nft_file` | `str = '/etc/hams-tenants/firewall.nft'` | Firewall rules file, default `/etc/hams-tenants/firewall.nft`. |
+| `odoo_bin` | `str = '/usr/bin/odoo'` | Odoo executable, default `/usr/bin/odoo`. |
+| `stock_addons` | `str = '/usr/lib/python3/dist-packages/odoo/addons'` | Directory of the stock Odoo addons, default `/usr/lib/python3/dist-packages/odoo/addons`. |
+| `hams_open_src` | `str = '/opt/hams/src/hams_open'` | Source checkout of hams_open on the host, default `/opt/hams/src/hams_open`. |
+| `pg_hba_include_name` | `str = 'hams-tenants.d'` | Name of the PostgreSQL access-rules include directory, default `hams-tenants.d`. |
+
+**Methods.** `conf_dir(self, name)`; `conf_file(self, name)`; `secret_dir(self, name)`; `data_dir(self, name)`; `backup_dir(self, name)`; `addons_dir(self, name)`; `dropin_dir(self, name)`.
+
+**Notes.** Methods such as `conf_dir(name)`, `conf_file(name)` (`odoo.conf`), `secret_dir`, `data_dir`, `backup_dir`, `addons_dir` and `dropin_dir` join a tenant name to these roots. Frozen; no file access.
+
+### `Result` [@ANCHOR: tenant_lib:tenant_lib_result_class]
+
+**Purpose.** Outcome of one command run through `System.run` in tenant_lib: exit status and the captured output.
+**Definition.** `class Result` in `tools/tenant_lib.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `returncode` | `int = -` | Exit status of the command. |
+| `stdout` | `str = ''` | Captured standard output text; default empty. |
+| `stderr` | `str = ''` | Captured standard error text; default empty. |
+
+**Notes.** Dataclass; the test double `FakeSystem` returns the same type.
+
+### `System` [@ANCHOR: tenant_lib:tenant_lib_system_class]
+
+**Purpose.** The real system. Tests substitute FakeSystem (test_tenant_lib.py).
+**Definition.** `class System` in `tools/tenant_lib.py`.
+
+**Methods.** `run(self, argv, input_text=None, check=True)`; `exists(self, path)`; `read_text(self, path)`; `write_text(self, path, text, mode, owner)`; `makedirs(self, path, mode, owner)`; `_chown(self, path, owner)`; `user_exists(self, user)`; `copy_tree(self, src, dst)`; `run_to_file(self, argv, path)`; `run_from_file(self, argv, path)`; `listdir(self, path)`; `remove_tree(self, path)`; `remove_file(self, path)`; `now(self)`.
+
+**Notes.** No fields. `run(argv, input_text, check)` runs a subprocess and raises RuntimeError (with the argv passed through `redact`) for a non-zero exit when `check`; `exists`, `read_text` (None when missing); `write_text(path, text, mode, owner)` writes through a temporary file with the mode set and `chown` to `user:group`, then `os.replace`; `makedirs(path, mode, owner)`; `user_exists(user)` through `getent`. Changes the machine; needs the rights of the caller.
+
+### `Step` [@ANCHOR: tenant_lib:tenant_lib_step_class]
+
+**Purpose.** One idempotent provisioning step of a tenant in tenant_lib: a key, a description, the action that does it and an optional read-only check that it is already done. The runner lists the steps for a dry run and runs those whose check says they are not yet done.
+**Definition.** `class Step` in `tools/tenant_lib.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `key` | `str = -` | Short unique name of the step. |
+| `description` | `str = -` | Text shown in the plan. |
+| `action` | `object = -` | Callable that performs the step. |
+| `done` | `object = None` | Optional callable returning True when the step's result already exists, so it is skipped; default None, meaning always run. |
+
+**Notes.** Dataclass, built by the step builders of the module and only read.
+

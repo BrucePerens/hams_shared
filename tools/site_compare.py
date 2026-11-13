@@ -39,6 +39,7 @@ def name_for_path(path):
     return name or "ROOT"
 
 
+# [@ANCHOR: site_compare:site_compare__page_class]
 class _Page(HTMLParser):
     """Collects the parts of an Odoo page that matter for a content comparison."""
 
@@ -173,6 +174,7 @@ def compare_pages(old_html, new_html, hosts=()):
     return result
 
 
+# [@ANCHOR: site_compare:site_compare_fetcher_class]
 class Fetcher:
     def __init__(self, base, host=None, interval=1.0, sleep=time.sleep, opener=None):
         self.base, self.host, self.interval, self._sleep = base.rstrip("/"), host, interval, sleep
@@ -195,6 +197,7 @@ class Fetcher:
             return exc.code, exc.read() if method == "GET" else b"", dict(exc.headers)
 
 
+# [@ANCHOR: site_compare:site_compare__no_redirect_class]
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):
         return None

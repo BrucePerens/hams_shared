@@ -135,6 +135,7 @@ def check_odoo(url, http_get=_http_get):
     return True, "health endpoint passes"
 
 
+# [@ANCHOR: site_monitor:site_monitor__no_redirects_class]
 class _NoRedirects(urllib.request.HTTPRedirectHandler):
     """Hand a 3xx back as an answer instead of following it: a front page that redirects is not the front page."""
 

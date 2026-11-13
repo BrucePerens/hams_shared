@@ -162,6 +162,7 @@ def parse_range(header, size):
     return start, min(end, size - 1)
 
 
+# [@ANCHOR: static_site_server:static_site_server_handler_class]
 class Handler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = SERVER_NAME
@@ -264,6 +265,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.close_connection = True
 
 
+# [@ANCHOR: static_site_server:static_site_server_server_class]
 class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
     allow_reuse_address = True

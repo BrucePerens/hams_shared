@@ -92,10 +92,12 @@ DEFAULTS = {
 }
 
 
+# [@ANCHOR: tenant_lib:tenant_lib_spec_error_class]
 class SpecError(ValueError):
     """A tenant spec is invalid. Raised, never papered over (fail fast)."""
 
 
+# [@ANCHOR: tenant_lib:tenant_lib_paths_class]
 @dataclasses.dataclass(frozen=True)
 class Paths:
     """Every filesystem location the tool touches, so tests can point it at a temp directory."""
@@ -509,6 +511,7 @@ def generate_password(length=32):
 # --------------------------------------------------------------------------------------------
 
 
+# [@ANCHOR: tenant_lib:tenant_lib_result_class]
 @dataclasses.dataclass
 class Result:
     returncode: int
@@ -516,6 +519,7 @@ class Result:
     stderr: str = ""
 
 
+# [@ANCHOR: tenant_lib:tenant_lib_system_class]
 class System:
     """The real system. Tests substitute FakeSystem (test_tenant_lib.py)."""
 
@@ -617,6 +621,7 @@ def redact(argv):
 # --------------------------------------------------------------------------------------------
 
 
+# [@ANCHOR: tenant_lib:tenant_lib_step_class]
 @dataclasses.dataclass
 class Step:
     key: str

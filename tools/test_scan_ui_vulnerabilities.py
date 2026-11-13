@@ -298,3 +298,6 @@ class MainIntegrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: scan_ui_vulnerabilities:scan_ui_vulnerabilities_string_scanner_class]
