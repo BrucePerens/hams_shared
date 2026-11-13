@@ -619,7 +619,10 @@ def dirty_files(repo):
             continue
         status, path = entry[:2], entry[3:]
         if status[0] in "RC":
+            source = out[index].decode(errors="replace") if index < len(out) else ""
             index += 1  # the rename's source follows as its own field
+            if status[0] == "R" and source and not excluded(source) and not os.path.lexists(os.path.join(repo, source)):
+                deleted.append(source)  # the old name is gone from the working tree; the mirror still has it at HEAD
         if excluded(path):
             continue
         full = os.path.join(repo, path)
