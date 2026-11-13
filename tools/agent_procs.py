@@ -659,10 +659,10 @@ def wrapper_main(name, argv, directory=None, timeout=0, kill_grace=KILL_GRACE, m
         signal.signal(signum, functools.partial(forward_signal, holder))
     reason = None
     try:
-        full = limit_argv(argv, mem_max, nice) if shutil.which(argv[0]) else list(argv)  # a missing program stays 127
         held = set(ALLOWED_SIGNALS.values())
         signal.pthread_sigmask(signal.SIG_BLOCK, held)  # a signal during the start is delivered after it, not lost
-        try:
+        try:  # (the block covers `limit_argv` too: its probe can be slow under load, and a handler run before the command exists has nothing to forward to)
+            full = limit_argv(argv, mem_max, nice) if shutil.which(argv[0]) else list(argv)  # a missing program stays 127
             holder[0] = subprocess.Popen(full, stdin=subprocess.DEVNULL, preexec_fn=_die_with_parent)
         finally:
             signal.pthread_sigmask(signal.SIG_UNBLOCK, held)

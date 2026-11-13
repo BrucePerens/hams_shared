@@ -1044,6 +1044,26 @@ class JobTests(ProcTestCase):
         wrapper.send_signal(signal.SIGUSR1)
         self.assertEqual(wrapper.wait(timeout=30), 128 + int(signal.SIGUSR1))
 
+    def test_wrapper_holds_a_signal_that_arrives_while_the_command_line_is_being_built(self):
+        """Tests [@ANCHOR: agent_procs:wrapper_main]: a signal sent to the wrapper while `limit_argv` is still working (slow
+        under load; the command does not exist yet) is not lost: it reaches the command once started (found 2026-11-13: `stop`
+        right after `run` sometimes reported the job still running)."""
+        building = os.path.join(self.tmp, "building")
+        script = (
+            "import sys, time, pathlib, agent_procs as ap\n"
+            "orig = ap.limit_argv\n"
+            f"def slow(*a):\n    pathlib.Path({building!r}).touch()\n    time.sleep(1)\n    return orig(*a)\n"
+            "ap.limit_argv = slow\n"
+            "sys.exit(ap.wrapper_main('building', ['sleep', '60'], None))\n")
+        wrapper = subprocess.Popen([sys.executable, "-c", script], cwd=os.path.dirname(TOOL), stdin=subprocess.PIPE, text=True,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        self.spawned.append(wrapper)
+        wrapper.stdin.write("go\n")
+        wrapper.stdin.flush()
+        self.until(lambda: os.path.exists(building), 30)
+        wrapper.send_signal(signal.SIGUSR1)
+        self.assertEqual(wrapper.wait(timeout=30), 128 + int(signal.SIGUSR1))
+
     def test_wrapper_main_refuses_to_run_without_the_go_line(self):
         code = subprocess.run([sys.executable, TOOL, "_wrap", "never", "--", "touch", os.path.join(self.tmp, "ran")],
                               input="", text=True, env=dict(os.environ, **self.env)).returncode
