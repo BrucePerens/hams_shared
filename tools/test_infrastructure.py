@@ -4594,6 +4594,14 @@ class HostClassTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 infra.record_host_class("ca_signr", path)
 
+    def test_recording_a_class_after_a_hand_edited_file_without_a_final_newline_keeps_both_names(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "host_classes")
+            with open(path, "w") as f:
+                f.write("ca_signer")
+            self.assertTrue(infra.record_host_class("b2_backup", path))
+            self.assertEqual(infra.host_classes(environ={}, path=path), {"ca_signer", "b2_backup"})
+
     def test_a_plain_host_creates_no_signer_account_directory_file_or_unit(self):
         calls = []
         with patch.object(infra, "host_classes", return_value=set()), \
