@@ -64,6 +64,7 @@ _ODOO_RESULT = re.compile(
 _TEST_ID = re.compile(r"^/?(?P<module>[A-Za-z0-9_]+):(?P<cls>[A-Za-z_]\w*)\.(?P<method>\w+)$")
 
 
+# [@ANCHOR: known_red:known_red_baseline_error_class]
 class BaselineError(ValueError):
     """A baseline or flake file that cannot be trusted; the run stops rather than guess."""
 

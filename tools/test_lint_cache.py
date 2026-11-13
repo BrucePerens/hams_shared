@@ -647,3 +647,6 @@ class ResultCacheTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: lint_cache:lint_cache_result_cache_class]

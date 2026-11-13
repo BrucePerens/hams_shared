@@ -634,3 +634,9 @@ class DispatchTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: claim_normalizers:claim_normalizers_python_tokens_class]
+# Tests [@ANCHOR: claim_normalizers:claim_normalizers__xnode_class]
+# Tests [@ANCHOR: claim_normalizers:claim_normalizers_tok_class]
+# Tests [@ANCHOR: claim_normalizers:claim_normalizers_normalize_error_class]

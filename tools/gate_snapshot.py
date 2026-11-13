@@ -49,6 +49,7 @@ RELAY_BIN_ENV = "HAMS_CONSOLE_TEST_RELAY_BIN"
 OPEN_TREE_ENV = "HAMS_OPEN_TREE"
 
 
+# [@ANCHOR: gate_snapshot:gate_snapshot_snapshot_error_class]
 class SnapshotError(RuntimeError):
     """The snapshot cannot be built or trusted; the message names the cause."""
 
@@ -94,6 +95,7 @@ def recorded_shared_commit(open_repo, open_commit):
     return found.group(1)
 
 
+# [@ANCHOR: gate_snapshot:gate_snapshot_trees_class]
 @dataclasses.dataclass(frozen=True)
 class Trees:
     """Where the three checkouts of a gate tree are: `parent`, `com`, `open`, `shared` (paths), and the commits
@@ -145,6 +147,7 @@ def create_trees(workspace, parent, com_commit, open_commit, shared_commit):
     return Trees(gate, com, open_, shared, com_commit, open_commit, shared_commit)
 
 
+# [@ANCHOR: gate_snapshot:gate_snapshot_artifact_class]
 @dataclasses.dataclass(frozen=True)
 class Artifact:
     """A build output the tests load: `name` (`cloudflared_ffi` or `relay_test_hooks`), `tree` (`com` or `open`: the
@@ -393,6 +396,7 @@ def shard_command(trees, shard, log_directory, relay_binary, extra_env=None, tag
     )
 
 
+# [@ANCHOR: gate_snapshot:gate_snapshot_snapshot_behind_class]
 class SnapshotBehind(SnapshotError):
     """The snapshot is complete but origin/main moved past it while it was built; `manifest` is that snapshot."""
 

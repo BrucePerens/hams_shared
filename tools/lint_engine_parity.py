@@ -51,6 +51,7 @@ EXIT_NOT_COMPARED = 2
 MULTI_ROOT_KINDS = ("multi", "multi_shared_parent")
 
 
+# [@ANCHOR: lint_engine_parity:lint_engine_parity_not_compared_class]
 class NotCompared(Exception):
     """The comparison could not be made (exit 2)."""
 
@@ -68,6 +69,7 @@ def load_checks(rules_path, names=()):
     return checks
 
 
+# [@ANCHOR: lint_engine_parity:lint_engine_parity_runner_class]
 class Runner:
     """Runs one check both ways with the same arguments, environment and working directory."""
 

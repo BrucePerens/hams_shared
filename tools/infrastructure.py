@@ -309,6 +309,7 @@ def print_hook_failure_summary():
 _PLAN = None
 
 
+# [@ANCHOR: infrastructure:infrastructure_provision_plan_class]
 class ProvisionPlan:
     def __init__(self):
         self.actions = []

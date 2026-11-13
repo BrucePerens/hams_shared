@@ -120,6 +120,7 @@ def with_xdist(step, workers):
     return argv[:3] + ["-n", str(workers), "--dist", "loadfile"] + argv[3:]
 
 
+# [@ANCHOR: lint_exec:lint_exec_step_class]
 @dataclasses.dataclass
 class Step:
     """One independently runnable check.
@@ -162,6 +163,7 @@ class Step:
     needs: tuple = ()  # names of steps that must have ended before this one starts (ignored when not in the run); see `execute`
 
 
+# [@ANCHOR: lint_exec:lint_exec_result_class]
 @dataclasses.dataclass
 class Result:
     name: str
@@ -564,6 +566,7 @@ def tool_versions():
     return "|".join(versions)
 
 
+# [@ANCHOR: lint_exec:lint_exec_input_fingerprints_class]
 class InputFingerprints:
     """Memoised fingerprint of (root, suffix-set) pairs, shared by all steps of one run."""
 
@@ -606,6 +609,7 @@ class InputFingerprints:
         return digest.hexdigest()
 
 
+# [@ANCHOR: lint_exec:lint_exec_cache_class]
 class Cache:
     """JSON file of step name -> key + stored output of the last PASSING run."""
 
@@ -747,6 +751,7 @@ def critical_paths(steps, estimates):
     return paths, needs
 
 
+# [@ANCHOR: lint_exec:lint_exec__scheduler_class]
 class _Scheduler:
     """Hands steps to workers as a dependency graph: a step is READY when every step it `needs` has ended and its `lock` is free; of the
     ready steps the one with the longest remaining critical path goes first (for a locked step, at least the estimated work still waiting
@@ -834,6 +839,7 @@ def elastic_jobs(jobs, environ=None, cpus=None):
     return max(0, min(wanted, cpus // 2 - jobs))
 
 
+# [@ANCHOR: lint_exec:lint_exec__admission_class]
 class _Admission:
     """Admits one extra worker at a time: at least `spacing` seconds after the previous admission (a step that has just started has not
     loaded the processors yet) and only while `headroom()` holds (lint_lock's burst test: processors under 60 % busy, CPU stall under 10 %,

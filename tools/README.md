@@ -5857,3 +5857,316 @@ Every class of the tools that is not a function, with its fields, who creates it
 
 **Notes.** `install(common_module)` makes `ChromeBrowser` start Chrome in its own session with this class (idempotent). `terminate()` calls `terminate_group(self, cap=...)`, which sends SIGTERM to the process, its group and every descendant it has at that moment, waits up to the cap for them to be gone, and force-kills and reports any that remain.
 
+
+### `NormalizeError` [@ANCHOR: claim_normalizers:claim_normalizers_normalize_error_class]
+
+**Purpose.** The text cannot be tokenized (unterminated string or comment, malformed XML).
+**Definition.** `class NormalizeError(ValueError)` in `tools/claim_normalizers.py`.
+
+**Notes.** The callers treat it as "this file cannot be hashed by the structural normalizer" and fall back or report; the message names the problem. No other state.
+
+### `Tok` [@ANCHOR: claim_normalizers:claim_normalizers_tok_class]
+
+**Purpose.** One lexical token. `kind` is comment, ident, num, str, char, life, regex, punct, tpl*, word, nl, heredoc. `nl` is true when a line break separates it from the previous token.
+**Definition.** `class Tok` in `tools/claim_normalizers.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `__slots__` | `('kind', 'text', 'start', 'end', 'nl')` | Tuple of the five attribute names; the class has no instance dictionary, which keeps large token lists small. |
+| `kind` | `kind` | Token class: comment, ident, num, str, char, life, regex, punct, template parts (`tpl*`), word, nl or heredoc. |
+| `text` | `text` | The exact source text of the token. |
+| `start` | `start` | Offset of its first character in the source. |
+| `end` | `end` | Offset one past its last character. |
+| `nl` | `nl` | True when a line break separates it from the previous token; default False. |
+
+**Methods.** `__init__(self, kind, text, start, end, nl=False)`; `__repr__(self)`; `is_p(self, *texts)`.
+
+**Notes.** `is_p(*texts)` tests for a punctuation token with one of the given texts; `repr` shows kind and text. Created by the tokenizer and then only read.
+
+### `_XNode` [@ANCHOR: claim_normalizers:claim_normalizers__xnode_class]
+
+**Purpose.** Minimal XML element node used inside claim_normalizers to normalize XML and XML-like sources: tag name, attribute dictionary and child list, built by its own small parser instead of an XML library so malformed input is still hashable.
+**Definition.** `class _XNode` in `tools/claim_normalizers.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `__slots__` | `('tag', 'attrs', 'children')` | Tuple ("tag", "attrs", "children"): no instance dictionary. |
+| `tag` | `tag` | Element tag name. |
+| `attrs` | `attrs` | Attributes of the element, in a form the normalizer sorts when it writes the canonical text. |
+| `children` | `[]` | Child nodes and text pieces in document order, filled by the parser. |
+
+**Methods.** `__init__(self, tag, attrs)`.
+
+**Notes.** Private to the module; created by the parser, then walked once to emit the canonical form.
+
+### `PythonTokens` [@ANCHOR: claim_normalizers:claim_normalizers_python_tokens_class]
+
+**Purpose.** Tokens of one Python source text, with f-strings merged into single STRING tokens (so the token stream is the same on Python 3.8 and 3.14) and docstrings marked.
+**Definition.** `class PythonTokens` in `tools/claim_normalizers.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `text` | `text` | The full source text that was tokenized. |
+| `_starts` | `[0]` | Character offset of the start of each line plus a final end offset, used to turn a (line, column) position into an offset. |
+| `toks` | `self._merge_fstrings(raw)` | The merged token list (`tokenize.TokenInfo` objects). |
+| `docs` | `self._docstring_indexes()` | Set of token indexes that are docstrings. |
+
+**Methods.** `__init__(self, text)`; `_offset(self, pos)`; `_merge_fstrings(self, raw)`; `_docstring_indexes(self)`; `normalize(self, start_row=None, end_row=None)`.
+
+**Notes.** Raises `NormalizeError` when the text cannot be tokenized (token error, bad indentation or syntax). Built once per file and then only read. Pure computation; no file or process access.
+
+### `CanaryError` [@ANCHOR: gate_canary:gate_canary_canary_error_class]
+
+**Purpose.** The canary cannot run (another run holds the lock, or a step failed); the message names the cause.
+**Definition.** `class CanaryError(RuntimeError)` in `tools/gate_canary.py`.
+
+**Notes.** The command line catches it, prints the message and exits non-zero, so a broken canary is a visible failure and not a green one.
+
+### `SnapshotError` [@ANCHOR: gate_snapshot:gate_snapshot_snapshot_error_class]
+
+**Purpose.** The snapshot cannot be built or trusted; the message names the cause.
+**Definition.** `class SnapshotError(RuntimeError)` in `tools/gate_snapshot.py`.
+
+**Notes.** Parent of `SnapshotBehind`. The caller prints the message and stops the gate; nothing is half-published.
+
+### `Trees` [@ANCHOR: gate_snapshot:gate_snapshot_trees_class]
+
+**Purpose.** Where the three checkouts of a gate tree are: `parent`, `com`, `open`, `shared` (paths), and the commits `com_commit`, `open_commit`, `shared_commit` they are at.
+**Definition.** `class Trees` in `tools/gate_snapshot.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `parent` | `str = -` | Directory holding the three checkouts side by side. |
+| `com` | `str = -` | Path of the hams_com checkout. |
+| `open` | `str = -` | Path of the hams_open checkout. |
+| `shared` | `str = -` | Path of the hams_shared checkout. |
+| `com_commit` | `str = -` | Commit hash hams_com is at. |
+| `open_commit` | `str = -` | Commit hash hams_open is at. |
+| `shared_commit` | `str = -` | Commit hash hams_shared is at. |
+
+**Notes.** Frozen dataclass: hashable, never changed after creation, so one `Trees` identifies a snapshot.
+
+### `Artifact` [@ANCHOR: gate_snapshot:gate_snapshot_artifact_class]
+
+**Purpose.** A build output the tests load: `name` (`cloudflared_ffi` or `relay_test_hooks`), `tree` (`com` or `open`: the checkout it is built from) and `sources` (tree-relative directories whose git tree ids are stamped beside the output).
+**Definition.** `class Artifact` in `tools/gate_snapshot.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `name` | `str = -` | Artifact name, such as `cloudflared_ffi` or `relay_test_hooks`. |
+| `tree` | `str = -` | Which checkout it is built from: `com` or `open`. |
+| `sources` | `tuple = -` | Tree-relative directories whose git tree ids are recorded next to the built output; a change in any of them makes the output stale. |
+
+**Notes.** Declared once in a table of the module and only read.
+
+### `SnapshotBehind` [@ANCHOR: gate_snapshot:gate_snapshot_snapshot_behind_class]
+
+**Purpose.** The snapshot is complete but origin/main moved past it while it was built; `manifest` is that snapshot.
+**Definition.** `class SnapshotBehind(SnapshotError)` in `tools/gate_snapshot.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `manifest` | `None` | The manifest of the complete snapshot that is now behind origin/main. |
+
+**Notes.** Subclass of `SnapshotError`; catch it before the parent when behind-ness is to be handled differently. Introduced so that moving main never invalidates a snapshot silently.
+
+### `ProvisionPlan` [@ANCHOR: infrastructure:infrastructure_provision_plan_class]
+
+**Purpose.** Recorder used by infrastructure when provisioning is run in plan mode: instead of changing the machine, each step records its kind and a detail text, so the plan can be printed or checked by a test.
+**Definition.** `class ProvisionPlan` in `tools/infrastructure.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `actions` | `[]` | List of (kind, detail) tuples in the order recorded. |
+
+**Methods.** `__init__(self)`; `record(self, kind, detail)`.
+
+**Notes.** `record(kind, detail)` appends one tuple. One instance is installed as the module's current plan inside a context manager and removed afterwards, so plans do not nest across threads. No file or system access.
+
+### `BaselineError` [@ANCHOR: known_red:known_red_baseline_error_class]
+
+**Purpose.** A baseline or flake file that cannot be trusted; the run stops rather than guess.
+**Definition.** `class BaselineError(ValueError)` in `tools/known_red.py`.
+
+**Notes.** The command line reports the message and fails, since guessing a baseline could hide new failures.
+
+### `ResultCache` [@ANCHOR: lint_cache:lint_cache_result_cache_class]
+
+**Purpose.** Per-file results for a checker, keyed by the file's content hash, valid for one checker version. `get(path)` returns the stored result (any JSON value) or None on a miss; `put(path, result)` stores it. A changed file has a different content hash, so it can never read another content's entry. `enabled` False (`--no-cache`, HAMS_LINT_NO_CACHE=1) makes every `get` a miss and `put` a no-op. `save()` m
+**Definition.** `class ResultCache` in `tools/lint_cache.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `enabled` | `environ.get('HAMS_LINT_NO_CACHE') != '1' if enable` | False (from `--no-cache` or HAMS_LINT_NO_CACHE=1) makes every `get` a miss and every `put` a no-op. |
+| `path` | `os.path.join(results_base(environ), checker, f'{ve` | JSON file `<results base>/<checker>/<version>.json`. |
+| `base` | `results_base(environ)` | The results base directory. |
+| `max_bytes` | `int(budgets(environ)['results_mb'] * MB)` | Size budget of the results cache in bytes (the `results_mb` budget times one MB). |
+| `entries` | `{}` | Loaded digest to `{"r": result}` entries; empty when disabled or when the file is missing or invalid. |
+| `new` | `{}` | Entries added in this run, merged into the file by `save`. |
+| `hits` | `0` | Count of `get` calls answered from the cache. |
+| `misses` | `0` | Count of `get` calls that found nothing (including unreadable files). |
+
+**Methods.** `__init__(self, checker, version, environ=None, enabled=None)`; `_load(self)`; `get(self, path)`; `put(self, path, result)`; `save(self)`.
+
+**Notes.** `get(path)` returns the stored JSON value or None; `put(path, result)` stores one; `save()` merges with what other runs wrote meanwhile under an flock and writes atomically.
+
+### `NotCompared` [@ANCHOR: lint_engine_parity:lint_engine_parity_not_compared_class]
+
+**Purpose.** The comparison could not be made (exit 2).
+**Definition.** `class NotCompared(Exception)` in `tools/lint_engine_parity.py`.
+
+**Notes.** The parity run reports it as "not compared" instead of as a mismatch, since there is nothing to compare.
+
+### `Runner` [@ANCHOR: lint_engine_parity:lint_engine_parity_runner_class]
+
+**Purpose.** Runs one check both ways with the same arguments, environment and working directory.
+**Definition.** `class Runner` in `tools/lint_engine_parity.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `binary` | `binary` | Path of the Rust engine executable. |
+| `rules_path` | `rules_path` | Path of the rules file given to the engine with `--rules`. |
+| `env` | `dict(os.environ if environ is None else environ)` | Copy of the environment (the process environment unless one is passed) used for both runs. |
+
+**Methods.** `__init__(self, binary, rules_path, environ=None)`; `legacy(self, check, args)`; `engine(self, check, args)`; `_run(self, command)`.
+
+**Notes.** `legacy(check, args)` runs `python3 tools/<check['legacy']> args`; `engine(check, args)` runs `<binary> --rules <rules_path> check <name> args`. Both go through `_run`, which records output, exit code and duration. Each call starts a subprocess and waits for it; raises `NotCompared` when the legacy script is missing.
+
+### `Step` [@ANCHOR: lint_exec:lint_exec_step_class]
+
+**Purpose.** One independently runnable check. argv command line; None for a step whose outcome is known at build time (`static_output` is printed and the step counts as failed). lock name of a shared resource the step must hold while it runs (steps with the same lock never overlap: one cargo build directory, one Chrome profile). fail_header printed before the output of a failing run. print_ok print stdout of 
+**Definition.** `class Step` in `tools/lint_exec.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `name` | `str = -` | Step name; unique in a run and used by `--only`. |
+| `argv` | `list = None` | Command line; None for a step whose outcome is known at build time (then `static_output` is printed and the step counts as failed). |
+| `cwd` | `str = None` | Working directory of the command. |
+| `env` | `dict = None` | Environment overrides for the command. |
+| `lock` | `str = None` | Name of a shared resource the step holds while it runs; steps with the same lock never overlap (one cargo build directory, one Chrome profile). |
+| `fail_header` | `str = None` | Text printed before the output of a failing run. |
+| `print_ok` | `bool = True` | Print the stdout of a passing run when it is not empty; default True. |
+| `missing_msg` | `str = None` | Message printed, and the step fails, when `argv[0]` does not exist. |
+| `static_output` | `str = None` | Text printed by a step with no argv, which always fails. |
+| `roots` | `tuple = ()` | Directories whose files are the step's inputs, for the cache key and `--changed`. |
+| `suffixes` | `frozenset = None` | Lower-case file suffixes with dot that count as inputs; None means every file. |
+| `cacheable` | `bool = True` | False for steps that read the network or toolchain state; default True. |
+| `always` | `bool = False` | Run in `--changed` mode whatever changed; default False. |
+| `gated` | `bool = False` | A step without argv that `--changed` runs only when one of its inputs changed. |
+| `aliases` | `tuple = ()` | Names this step answered to before steps were merged; `--only` accepts them. |
+| `needs` | `tuple = ()` | Names of steps that must have ended (passed or failed) before this one starts; names not in the run are ignored. |
+
+**Notes.** Created by the step builders, then read by the scheduler, cache and runner. The checker script's own code is always an input.
+
+### `Result` [@ANCHOR: lint_exec:lint_exec_result_class]
+
+**Purpose.** Outcome of one lint step: exit code, captured output, duration and how it came about. The runner collects one per step, prints the failures and stores passes in the cache.
+**Definition.** `class Result` in `tools/lint_exec.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `name` | `str = -` | Step name. |
+| `returncode` | `int = -` | Exit status; 0 means pass. |
+| `output` | `str = -` | Captured stdout and stderr text. |
+| `seconds` | `float = -` | Wall-clock duration in seconds. |
+| `cached` | `bool = False` | True when the output was replayed from the cache and nothing ran; default False. |
+| `skipped` | `str = None` | Reason text when the step was not run, `None` otherwise. |
+| `saturated` | `str = ''` | Why the machine was saturated when a failed step ended, empty when it was not or the step passed. |
+| `timed_out` | `bool = False` | True when the step hit its wall-clock limit and was stopped. |
+
+**Notes.** Not changed after the step ends. `Cache.record` ignores skipped and cached results.
+
+### `InputFingerprints` [@ANCHOR: lint_exec:lint_exec_input_fingerprints_class]
+
+**Purpose.** Memoised fingerprint of (root, suffix-set) pairs, shared by all steps of one run.
+**Definition.** `class InputFingerprints` in `tools/lint_exec.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `tools_dir` | `tools_dir` | Directory of the checker tooling whose files are also inputs of every step. |
+| `_memo` | `{}` | Map from (root, suffix tuple) to the hex digest. |
+| `_lock` | `threading.Lock()` | Mutex making the memo thread-safe. |
+| `_versions` | `None` | Cached external tool versions text, `None` until first needed. |
+
+**Methods.** `__init__(self, tools_dir)`; `of_root(self, root, suffixes)`; `versions(self)`; `step_key(self, step)`.
+
+**Notes.** The key covers the argv, cwd, the size and mtime of every input file, every file of the tooling (`.py .cjs .js .json .sh .rs .toml .lock`) and the external tool versions; anything else is by construction not an input. Fingerprints use stat data, not file contents.
+
+### `Cache` [@ANCHOR: lint_exec:lint_exec_cache_class]
+
+**Purpose.** JSON file of step name -> key + stored output of the last PASSING run.
+**Definition.** `class Cache` in `tools/lint_exec.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `path` | `path` | JSON file the cache is read from and saved to. |
+| `data` | `{'version': CACHE_VERSION, 'ok': {}, 'seconds': {}` | Dictionary with `version` (`CACHE_VERSION`), `ok` (name to key and output), `seconds` (name to duration) and `recent` (recent durations for the hang guard). |
+| `_lock` | `threading.Lock()` | Mutex making `hit`, `record` and `recent_seconds` thread-safe. |
+
+**Methods.** `__init__(self, path)`; `hit(self, name, key)`; `record(self, result, key)`; `recent_seconds(self, name)`; `known_seconds(self, name)`; `save(self)`.
+
+**Notes.** A file with another version, or an unreadable one, is ignored. `hit(name, key)` returns the stored output when the key matches; `record(result, key)` stores a passing run, forgets a failing one and ignores skipped or cached results; `save()` writes the file.
+
+### `_Scheduler` [@ANCHOR: lint_exec:lint_exec__scheduler_class]
+
+**Purpose.** Hands steps to workers as a dependency graph: a step is READY when every step it `needs` has ended and its `lock` is free; of the ready steps the one with the longest remaining critical path goes first (for a locked step, at least the estimated work still waiting on that lock, since those steps cannot overlap). A worker never sits blocked on a lock another step holds: it takes the next ready step 
+**Definition.** `class _Scheduler` in `tools/lint_exec.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `steps` | `steps` | The list of `Step` objects of the run. |
+| `estimates` | `estimates` | Expected seconds per step, by index, from earlier runs. |
+| `waiting` | `set(range(len(steps)))` | Set of step indexes not yet handed out. |
+| `ended` | `set()` | Set of step indexes that have finished, pass or fail. |
+| `held` | `set()` | Set of lock names currently held by running steps. |
+| `lock_left` | `{}` | Estimated seconds of work still waiting for each lock, used to rank locked steps. |
+| `cond` | `threading.Condition()` | Condition variable guarding all of the above. |
+
+**Methods.** `__init__(self, steps, estimates)`; `_priority(self, index)`; `_ready(self, index)`; `take(self, block=True)`; `has_waiting(self)`; `done(self, index)`; `pause(self, seconds)`.
+
+**Notes.** `take(block=True)` returns the next index, or None when all are handed out; it blocks while only running steps stand in the way; `has_waiting` tells the two Nones apart; finishing a step releases its lock and wakes the waiters.
+
+### `_Admission` [@ANCHOR: lint_exec:lint_exec__admission_class]
+
+**Purpose.** Admits one extra worker at a time: at least `spacing` seconds after the previous admission (a step that has just started has not loaded the processors yet) and only while `headroom()` holds (lint_lock's burst test: processors under 60 % busy, CPU stall under 10 %, 24 GiB free, the same numbers that open a burst slot).
+**Definition.** `class _Admission` in `tools/lint_exec.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `headroom` | `headroom` | Callable returning true while the processors are under 60 percent busy, CPU stall is low and memory is free. |
+| `spacing` | `spacing` | Minimum seconds between two admissions. |
+| `clock` | `clock` | Monotonic clock function, injectable for tests. |
+| `last` | `None` | Time of the last admission, `None` before the first. |
+| `lock` | `threading.Lock()` | Mutex that makes `admit` safe for many threads. |
+
+**Methods.** `__init__(self, headroom, spacing, clock=time.monotonic)`; `admit(self)`.
+
+**Notes.** `admit()` returns True and records the time, or False when too soon or when there is no headroom.
+
+### `LayoutError` [@ANCHOR: lint_layout:lint_layout_layout_error_class]
+
+**Purpose.** The layout could not be built. The lint run must stop: falling back to the main checkouts would silently bring back the bug this module exists to remove.
+**Definition.** `class LayoutError(RuntimeError)` in `tools/lint_layout.py`.
+
+**Notes.** The message says which link or checkout failed; the command line prints it and exits non-zero.
+
+### `RunLock` [@ANCHOR: lint_lock:lint_lock_run_lock_class]
+
+**Purpose.** The machine-wide run lock. `acquire` returns True when held, False on timeout. With `slots` > 1 (see `slot_count`) that many runs hold one lock file each at the same time; `slot` is the number taken (1 when there is one slot).
+**Definition.** `class RunLock` in `tools/lint_lock.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `environ` | `os.environ if environ is None else environ` | Environment mapping used to find the lock, queue and cache directories; `os.environ` by default. |
+| `path` | `lock_path(self.environ)` | The lock file path from `lock_path`. |
+| `qdir` | `queue_dir(self.environ)` | The queue directory used to order waiting runs. |
+| `slots` | `total_slot_count(self.environ) if slots is None el` | Total number of slots including burst slots; the `slots` argument, or `total_slot_count`. |
+| `base` | `slot_count(self.environ) if slots is None else slo` | Number of normal slots, 1 to `base` always start; a caller that names `slots` has no burst. |
+| `fd` | `None` | Open file descriptor holding the flock, `None` when nothing is held. |
+| `slot` | `None` | Slot number taken, `None` before acquire. |
+| `ticket` | `None` | FIFO queue ticket from `lock_queue`, `None` until `acquire` has queued. |
+
+**Methods.** `__init__(self, environ=None, slots=None)`; `_lock_slot(self, slot)`; `_try_flock(self)`; `_try_burst(self, headroom=None, now=time.time)`; `acquire(self, info, timeout=None, out=print, report_every=30.0, poll=1.5, sleep=`; `release(self)`.
+
+**Notes.** Slot files are opened non-inheritable, so lint steps never hold the lock. A crashed run releases its flock when the process ends. Waiters poll; burst admission is spaced under its own flock.
+

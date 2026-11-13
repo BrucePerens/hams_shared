@@ -126,3 +126,7 @@ class ParityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: lint_engine_parity:lint_engine_parity_runner_class]
+# Tests [@ANCHOR: lint_engine_parity:lint_engine_parity_not_compared_class]
