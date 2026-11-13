@@ -175,12 +175,12 @@ def format_start(start_ticks):
         return "unknown"  # a record file with a corrupt start time must not stop `agent_procs find`/`wait`
 
 
-# [@ANCHOR: agent_procs:parse_start_time]
 START_TIME_FORMAT = ("the `ticks=` number that `agent_procs.py find` prints for the process (field 22 of /proc/PID/stat, clock "
                      "ticks since boot, e.g. 6209871), written `6209871` or `ticks=6209871`; the `start=` timestamp of the same "
                      "line (e.g. 2026-11-09T09:37:10) is accepted too")
 
 
+# [@ANCHOR: agent_procs:parse_start_time]
 def parse_start_time(value):
     """A process start time as given by a person, as a half-open range `(low, high)` of /proc clock ticks.
 
@@ -761,13 +761,13 @@ def wait_pid(pid, start_ticks=None, timeout=DEFAULT_WAIT_TIMEOUT, interval=POLL_
     return WaitResult(EX_OK, f"pid {pid} ended")
 
 
-# [@ANCHOR: agent_procs:wait_matching]
 def short_command(info, width=100):
     """The command line of `info`, cut to `width` characters with `...` when longer."""
     text = " ".join(info.argv)
     return text if len(text) <= width else text[:width - 3] + "..."
 
 
+# [@ANCHOR: agent_procs:wait_matching]
 def wait_matching(found, wait_all=False, allow_missing=False, timeout=DEFAULT_WAIT_TIMEOUT, interval=POLL_INTERVAL,
                   sleep=time.sleep, clock=time.monotonic):
     """Wait for the processes a selector matched (`found` is `find_procs`' result, taken once, at the start).
