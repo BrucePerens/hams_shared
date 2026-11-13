@@ -12323,14 +12323,15 @@ def record_host_class(name, path=None):
     path = path or HOST_CLASSES_FILE
     try:
         with open(path, "r", encoding="utf-8") as f:  # audit-ignore-path
-            existing = f.read().splitlines()
+            text = f.read()
     except FileNotFoundError:
-        existing = []
-    if name in existing:
+        text = ""
+    if name in text.splitlines():
         return False
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "a", encoding="utf-8") as f:  # audit-ignore-path
-        f.write(name + "\n")
+        # A hand-edited file may lack its final newline; appending bare would fuse two names into an unknown class.
+        f.write(("\n" if text and not text.endswith("\n") else "") + name + "\n")
     return True
 
 
