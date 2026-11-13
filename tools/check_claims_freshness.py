@@ -104,7 +104,8 @@ def parse_claim_frontmatter(content):
         return None
     fields = {}
     for fm in FIELD_RE.finditer(m.group(1)):
-        fields[fm.group(1)] = fm.group(2).strip().strip('"').strip("'")
+        value = re.sub(r"\s+#.*$", "", fm.group(2))  # a trailing YAML comment (the retirement example in check_retirement uses one)
+        fields[fm.group(1)] = value.strip().strip('"').strip("'")
     return fields
 
 
