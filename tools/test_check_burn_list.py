@@ -1102,6 +1102,14 @@ def test_hams_com_manifest_with_the_real_required_license_is_not_flagged():
     assert not any("LICENSING" in e for e in errors)
 
 
+def test_repo_of_path_uses_the_nearest_exact_repo_name_not_a_substring():
+    # Tests [@ANCHOR: check_burn_list:repo_of_path]
+    assert check_burn_list._repo_of_path("/w/hams_com-fix-x/hams_open/pager_duty/__manifest__.py") == "hams_open"
+    assert check_burn_list._repo_of_path("/w/hams_com/hams_shared/tools/__manifest__.py") == "hams_shared"
+    assert check_burn_list._repo_of_path("/w/hams_com/ham_base/__manifest__.py") == "hams_com"
+    assert check_burn_list._repo_of_path("/w/hams_com-fix-x/mod/__manifest__.py") is None
+
+
 def test_hams_open_manifest_must_declare_agpl3_license():
     source = "{'license': 'Other proprietary'}\n"
     errors, _warnings = _dict_findings(source, filepath="/tmp/workspace/hams_open/zero_sudo/__manifest__.py")
