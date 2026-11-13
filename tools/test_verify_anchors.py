@@ -232,6 +232,17 @@ class FindAnchorsInCodeTests(unittest.TestCase):
         self.assertIn("mod_a:COMM_x", code_anchors)
         self.assertIn("mod_a:COMM_x", anchor_locations)
 
+    def test_the_relay_tools_island_scans_python_and_rust_files(self):
+        # hams_local_relay/tools (rig simulators, audio_enum_probe, xrun_loopback) carries anchored Python and Rust; the
+        # `tools` pruning hid both. Another daemon's tools directory stays hidden.
+        _write(os.path.join(self.tmp, "daemons", "hams_local_relay", "tools", "sim.py"), "# [@ANCHOR: relay_tool_py]\n")
+        _write(os.path.join(self.tmp, "daemons", "hams_local_relay", "tools", "probe", "src", "main.rs"), "// [@ANCHOR: relay_tool_rs]\n")
+        _write(os.path.join(self.tmp, "daemons", "other", "tools", "x.py"), "# [@ANCHOR: other_tool]\n")
+        code_anchors, *_rest = self._scan()
+        self.assertIn("hams_local_relay:relay_tool_py", code_anchors)
+        self.assertIn("hams_local_relay:relay_tool_rs", code_anchors)
+        self.assertNotIn("other:other_tool", code_anchors)
+
     def test_a_code_islands_py_file_under_docs_is_scanned_as_real_code(self):
         # Companion to FindAnchorsInDocsTests' matching case above -- the
         # same fixture must resolve as real code here, not just "not doc
