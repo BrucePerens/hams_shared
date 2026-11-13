@@ -611,6 +611,11 @@ class RemoteTestBatch(OdooTestBatch):
                 same_on_main = ids & failing_tests(outcome.get("baseline_filtered") or "") \
                     if outcome.get("baseline_exit") not in (None, 0) else set()
                 environmental |= same_on_main
+                counted = odoo_failure_count(text)
+                if counted is not None and counted > len(ids):
+                    # Odoo counted more failures than the report names: the rest belong to nobody we can name (as in `collect`).
+                    failures["%s test.py" % machine] = text[-20000:]
+                    exit_code = exit_code or code
                 for test_id in sorted(ids - same_on_main):
                     module, name = test_id.split(":", 1)
                     method = name.split(".")[-1]
