@@ -49,12 +49,12 @@ import time
 _SHELLS = ("bash", "sh", "dash", "zsh", "ksh", "fish")
 
 
-# [@ANCHOR: worktree_hygiene:git]
 # A fetch to a hung GitHub must not hang the half-hourly timer unit that runs this module.
 GIT_TIMEOUT_SECONDS = 300
 GH_TIMEOUT_SECONDS = 120
 
 
+# [@ANCHOR: worktree_hygiene:git]
 def git(repo, *args, check=True):
     try:
         result = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, timeout=GIT_TIMEOUT_SECONDS)
