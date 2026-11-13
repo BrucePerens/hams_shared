@@ -6170,3 +6170,446 @@ Every class of the tools that is not a function, with its fields, who creates it
 
 **Notes.** Slot files are opened non-inheritable, so lint steps never hold the lock. A crashed run releases its flock when the process ends. Waiters poll; burst admission is spaced under its own flock.
 
+
+### `Probe` [@ANCHOR: lint_remote:lint_remote_probe_class]
+
+**Purpose.** Result of probing one remote lint machine over ssh: whether it can be reached and how busy it is. The lint router reads it to decide which steps may be sent away. Created by `parse_probe` from the probe command's output.
+**Definition.** `class Probe` in `tools/lint_remote.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `name` | `str = -` | Machine name from the machines table. |
+| `reachable` | `bool = -` | True when the probe command ran. |
+| `cores` | `int = 1` | Number of processor cores; default 1. |
+| `load1` | `float = 0.0` | One-minute load average; default 0.0. |
+| `queued` | `int = 0` | Number of lint runs waiting for the machine's lock; default 0. |
+| `caps` | `frozenset = frozenset()` | Frozen set of capability names the machine has (toolchains it can run); empty by default. |
+| `error` | `str = ''` | Error text when the probe failed, empty otherwise. |
+| `held` | `bool = False` | True when a lint run holds the machine's run lock right now. |
+| `sessions` | `int = 0` | Number of interactive login sessions on the machine (from `who`), so a person's machine is left alone. |
+
+**Notes.** Dataclass created once per probe and not changed afterwards.
+
+### `SshTransport` [@ANCHOR: lint_remote:lint_remote_ssh_transport_class]
+
+**Purpose.** One machine reached through ssh. Never prompts (BatchMode), never forwards agents.
+**Definition.** `class SshTransport` in `tools/lint_remote.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `name` | `name` | Machine name used in messages. |
+| `machine` | `machine` | The machine's table entry; its `ssh` section has the `target` and optional `args`. |
+| `timeout` | `timeout` | Connect timeout in seconds, default 30, also the default command timeout. |
+
+**Methods.** `__init__(self, name, machine, timeout=30)`; `argv(self, command)`; `run(self, command, data=None, timeout=None)`; `stream(self, command, on_line, timeout=None)`.
+
+**Notes.** `argv(command)` prefixes the command with `REMOTE_PATH_PREFIX` (a non-interactive ssh gets no login PATH, so the user toolchains in `~/.cargo/bin` and `~/.local/bin` are put in front) and adds the ssh options (ConnectTimeout, ServerAliveInterval 20, ServerAliveCountMax 6). `run` returns exit 255 with the error text for a timeout or OS error; `stream` kills the process when the deadline passes. Blocking calls.
+
+### `ShellTransport` [@ANCHOR: lint_remote:lint_remote_shell_transport_class]
+
+**Purpose.** A 'machine' that is a directory on this one (tests): commands run through `sh -c`.
+**Definition.** `class ShellTransport` in `tools/lint_remote.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `name` | `name` | Machine name, default "fake". |
+| `home` | `home` | Directory used as HOME of the fake machine, or None. |
+| `env` | `dict(os.environ, **env or {})` | Environment of the commands: the current environment plus overrides, with HOME set when `home` is given. |
+
+**Methods.** `__init__(self, name='fake', home=None, env=None)`; `run(self, command, data=None, timeout=None)`; `stream(self, command, on_line, timeout=None)`.
+
+**Notes.** `run` returns (exit code, stdout bytes, stderr bytes) with a 600 s default timeout; `stream` merges stderr into stdout and calls the callback per line. Runs real processes on this machine.
+
+### `Plan` [@ANCHOR: lint_remote:lint_remote_plan_class]
+
+**Purpose.** The routing decision of a lint run: which steps run here, which run on which remote machine, the reasoning notes and the estimated seconds per machine. Printed for the user and used to start the remote jobs.
+**Definition.** `class Plan` in `tools/lint_remote.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `local` | `list = -` | List of step names that run on this machine. |
+| `remote` | `dict = -` | Dictionary host to list of step names sent there. |
+| `notes` | `list = -` | List of text lines explaining the decisions. |
+| `seconds` | `dict = -` | Dictionary host to estimated seconds of work assigned. |
+| `skipped_hosts` | `dict = -` | Dictionary host to the reason it was not used (unreachable, busy, no capability). |
+
+**Notes.** Dataclass built by the router, not changed after it is returned.
+
+### `RemoteJob` [@ANCHOR: lint_remote:lint_remote_remote_job_class]
+
+**Purpose.** One machine's share of a run, in a thread. After `join()`: `.status` ('ok', 'failed', 'infra'), `.problems`, `.seconds` (step name -> seconds) and `.names`.
+**Definition.** `class RemoteJob` in `tools/lint_remote.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `claim` | `claim` | Open file holding the machine's claim from `lint_lock.try_claim`; closed when the job ends, `None` otherwise. |
+| `names` | `[item['name'] for item in bundle['steps']]` | Names of the steps in the bundle. |
+| `siblings` | `{}` | Dictionary role to `{'sha', 'dirty'}` of the commits the machine's mirrors were at, filled by `run_on_machine`. |
+| `thread` | `threading.Thread(target=self._run, daemon=True)` | The daemon thread that runs `_run`. |
+
+**Methods.** `__init__(self, host, machine, transport, repos, role, bundle, out, print_lock, c`; `_line(self, line)`; `_run(self)`; `start(self)`; `join(self)`.
+
+**Notes.** Also public: `host`, `machine`, `transport`, `repos`, `role`, `bundle`, `out`, `print_lock`, and results `status` ('ok', 'failed' or 'infra'), `problems` (list of text) and `seconds` (step name to seconds). `start()` starts the thread and returns the job; any exception of the machinery gives status 'infra', meaning "run it here instead". Output lines are printed under `print_lock` with a `[host]` prefix.
+
+### `Trace` [@ANCHOR: lint_trace_cache:lint_trace_cache_trace_class]
+
+**Purpose.** What one traced run touched: absolute paths read (`reads`), directories listed (`dirs`), looked for and absent (`absent`), written or created (`written`), programs executed (`execs`), Unix socket paths bound (`bound`), and network contacts (`contacts`, (kind, detail)).
+**Definition.** `class Trace` in `tools/lint_trace_cache.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `contacts` | `[]` | List of network contacts as (kind, detail) pairs, for example ("inet", (address, port)). |
+
+**Methods.** `__init__(self)`.
+
+**Notes.** Also public sets, created in the constructor: `reads` (absolute paths read), `dirs` (directories listed), `absent` (paths looked for and missing), `written` (paths created), `execs` (programs executed) and `bound` (Unix socket paths bound). Network contacts are always recorded; when strace is missing the step simply runs and nothing is stored. Filled by the strace parser, then read.
+
+### `Roots` [@ANCHOR: lint_trace_cache:lint_trace_cache_roots_class]
+
+**Purpose.** The repositories of this run: name -> real path (hams_com, hams_open, hams_shared), their git directories, and the fixed work copies of the Cargo builds (`lint_cache.work_checkout`: <cache>/hams-lint/work/<target>/<repo name>/...), which hold the same bytes.
+**Definition.** `class Roots` in `tools/lint_trace_cache.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `roots` | `{name: os.path.realpath(path) for name, path in ro` | Dictionary name to real path; entries that are empty or not directories are dropped. |
+| `ordered` | `sorted(self.roots.items(), key=lambda item: -len(i` | The roots sorted by path length, longest first, so the most specific match wins. |
+| `work_base` | `os.path.realpath(work_base) if work_base else None` | Real path of the Cargo work area (`<cache>/hams-lint/work/<target>/<repo>`), or None. |
+| `scratch` | `tuple((os.path.realpath(p).rstrip('/') + '/' for p` | Tuple of scratch directory prefixes (with trailing slash) whose files are ignored. |
+| `git_dirs` | `{}` | Dictionary of real git directory path to repository name (git dir and common git dir of each root). |
+
+**Methods.** `__init__(self, roots, work_base=None, scratch=())`; `locate(self, path)`; `git_repo(self, path)`; `is_scratch(self, path)`; `path_of(self, name, rel)`; `normalise(self, text)`.
+
+**Notes.** `locate(path)` gives (repo name, relative path) or None; `git_repo(path)`, `is_scratch(path)`, `path_of(name, rel)` and `normalise(text)` (every repository path replaced by `<name>`, longest first) are the lookups. Runs `git rev-parse` once per root in the constructor.
+
+### `Hasher` [@ANCHOR: lint_trace_cache:lint_trace_cache_hasher_class]
+
+**Purpose.** Git blob ids of files and listing digests of directories, memoised for the run by (device, inode, size, mtime). Thread-safe.
+**Definition.** `class Hasher` in `tools/lint_trace_cache.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `memo` | `{}` | Dictionary from the stat key to the digest (or None). |
+| `lock` | `threading.Lock()` | Mutex guarding the memo. |
+
+**Methods.** `__init__(self)`; `blob(self, path)`; `listing(path)`.
+
+**Notes.** `blob(path)` returns the sha1 of `blob <size>\0<content>` as git would, the listing digest for a directory, or None when the path cannot be read. `listing(path)` hashes the sorted entry names (directories marked with a slash), leaving out names that derive from the repository (`REPO_DERIVED_PARTS`).
+
+### `TraceCache` [@ANCHOR: lint_trace_cache:lint_trace_cache_trace_cache_class]
+
+**Purpose.** The store: <directory>/<first two hex digits>/<step key>.json, each holding the newest KEEP_ENTRIES passes of that key.
+**Definition.** `class TraceCache` in `tools/lint_trace_cache.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `directory` | `directory` | Root directory of the store. |
+| `roots` | `roots` | The `Roots` of this run, used to turn paths into repository-relative names. |
+| `versions` | `versions` | Text of external tool versions that is part of every key. |
+| `max_age` | `max_age_seconds(environ)` | Age limit in seconds for entries, from the environment. |
+| `hasher` | `Hasher()` | The run's `Hasher`. |
+| `git_memo` | `{}` | Memo for git queries during one run. |
+| `_names` | `{}` | Map from key to step name, for messages. |
+| `usable` | `strace_usable()` | True when `strace` works on this machine; without it nothing is traced and nothing is cached. |
+
+**Methods.** `__init__(self, directory, roots, versions='', environ=None)`; `traced(name)`; `step_key(self, step)`; `_path(self, key)`; `_load(self, key)`; `lookup(self, step, key, now=None)`; `store(self, key, step, result, manifest, started)`; `_marker(self, key, name=None)`; `untraceable(self, key, now=None)`; `mark_untraceable(self, key, step, reasons)`; `read_trace(self, trace_file)`; `record(self, step, key, result, trace, listening, started, started_ns)`; `_not_stored(self, step, reasons)`.
+
+**Notes.** `step_key(step)` hashes the schema version, step name, argv, working directory, environment (repository paths replaced by names, `ENV_IGNORED` variables dropped) and tool versions. `lookup(step, key, now)` returns the stored entry whose inputs are unchanged or None. Files are written atomically.
+
+### `_Interrupted` [@ANCHOR: lock_queue:lock_queue__interrupted_class]
+
+**Purpose.** Private exception of lock_queue raised from the SIGTERM and SIGHUP handler while a process waits in the queue. It derives from BaseException so no ordinary `except Exception` swallows it.
+**Definition.** `class _Interrupted(BaseException)` in `tools/lock_queue.py`.
+
+**Notes.** Carries the signal number. The wait loop catches it, gives up the queue ticket and exits with 128 plus the signal. Never leaves the module.
+
+### `DummyNotifier` [@ANCHOR: mcp_watchdog:mcp_watchdog_dummy_notifier_class]
+
+**Purpose.** Stand-in for the inotify notifier in mcp_watchdog when `pyinotify` is not installed: it offers `stop()` and does nothing, so the shutdown code does not need a special case.
+**Definition.** `class DummyNotifier` in `tools/mcp_watchdog.py`.
+
+**Methods.** `stop(self)`.
+
+**Notes.** No fields. `stop()` is a no-op because no watcher was ever started.
+
+### `WatchdogEventHandler` [@ANCHOR: mcp_watchdog:mcp_watchdog_watchdog_event_handler_class]
+
+**Purpose.** inotify event handler of mcp_watchdog (derives from `pyinotify.ProcessEvent`, or from `object` when pyinotify is missing): on a file creation or modification it sets an event and records which agent's transcript changed.
+**Definition.** `class WatchdogEventHandler(_BaseEventHandler)` in `tools/mcp_watchdog.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `file_changed_event` | `file_changed_event` | `threading.Event` set whenever a watched file changed, waking the main loop. |
+| `changed_agents_set` | `changed_agents_set` | Set filled with the agent ids whose `transcript.jsonl` changed. |
+| `expected_file` | `expected_file` | Path of one file whose change also sets the event, or None. |
+
+**Methods.** `__init__(self, file_changed_event, changed_agents_set, expected_file=None)`; `process_IN_MODIFY(self, event)`; `process_IN_CREATE(self, event)`; `_handle(self, event)`.
+
+**Notes.** `process_IN_MODIFY` and `process_IN_CREATE` call `_handle`. The agent id is the directory name above `.system_generated` in the event path; a path without that part is ignored. Called on the notifier's own thread, so the set is shared with the main thread.
+
+### `WatchdogClientTimeout` [@ANCHOR: mcp_watchdog_client:mcp_watchdog_client_watchdog_client_timeout_class]
+
+**Purpose.** The whole call exceeded its deadline before any single request did. Raised by the outer deadline in `_call_tool`, which exists because the per-request deadline cannot see the legs that come before a request: `sse_client()` only returns once the server has sent its `endpoint` event, so a server that accepts the TCP connection, returns a `text/event-stream` response, and then says nothing at all nev
+**Definition.** `class WatchdogClientTimeout(Exception)` in `tools/mcp_watchdog_client.py`.
+
+**Notes.** Plain Exception subclass with no fields; callers catch it to report an unresponsive watchdog server.
+
+### `OdooPlugin` [@ANCHOR: odoo_mypy_plugin:odoo_mypy_plugin_odoo_plugin_class]
+
+**Purpose.** The Odoo-aware mypy plugin (ODOO_AWARE_TYPE_CHECKING, Phase 2). mypy sees each `_inherit` class as unrelated; the plugin synthesizes a shared MRO across the classes that share a model name, using the registry of `odoo_registry_builder`, so attribute and call checks see the merged model. Loaded by mypy through its config.
+**Definition.** `class OdooPlugin(Plugin)` in `tools/odoo_mypy_plugin.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `_hams_roots` | `_repo_roots()` | Repository roots (hams_com, hams_open) scanned for models. |
+| `_core_addons_path` | `orb.find_odoo_core_addons_path()` | Path of Odoo's core addons, or None. |
+| `_registry` | `_build_real_registry()` | The merged model registry built once at start. |
+| `_class_siblings` | `{}` | Map from class full name to the full names of the other classes of the same model. |
+| `_module_siblings` | `{}` | Map from module dotted name to sibling modules; used by `get_additional_deps` so mypy's build graph treats them as dependent (mypy's analysis order is not otherwise reliable). |
+| `_model_class_fullnames` | `{}` | Map from model name to its contributor class full names. |
+| `_model_modules` | `{}` | Map from model name to contributor module names. |
+| `_file_comodel_targets` | `{}` | Map from module name to the model names its relational fields reference. |
+| `_file_env_targets` | `{}` | Map from module name to the model names used as `env['x']` literals. |
+
+**Methods.** `__init__(self, options)`; `_transitive_mixin_contributors(self, mixin_targets)`; `_compute_sibling_map(self)`; `_compute_comodel_targets(self)`; `_compute_env_targets(self)`; `_resolve_model_instance(self, api, model_name: str)`; `get_additional_deps(self, file: MypyFile)`; `get_function_hook(self, fullname: str)`; `get_method_hook(self, fullname: str)`; `get_customize_class_mro_hook(self, fullname: str)`.
+
+**Notes.** Hooks implemented: `get_additional_deps`, `get_function_hook`, `get_method_hook` and `get_customize_class_mro_hook`. The maps are computed once at start because the registry is static for one mypy run. Runs inside mypy's process; reads source files, writes none.
+
+### `FieldInfo` [@ANCHOR: odoo_registry_builder:odoo_registry_builder_field_info_class]
+
+**Purpose.** One field declaration found by `odoo_registry_builder` in an Odoo model class: its name, its Odoo field type, its target model and where it is declared. Used to merge the declarations of all `_inherit` classes and to find redeclarations.
+**Definition.** `class FieldInfo` in `tools/odoo_registry_builder.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `name` | `str = -` | Attribute name of the field. |
+| `field_type` | `str = -` | Field class name such as `Many2one` or `Char`. |
+| `comodel` | `Optional[str] = -` | Target model name for relational fields, else None. |
+| `module` | `str = -` | Odoo module name of the declaring file. |
+| `file` | `str = -` | Path of the declaring file. |
+| `lineno` | `int = -` | Line of the declaration. |
+| `class_name` | `str = ''` | Name of the declaring class; see the registry builder's comments for why it is needed. Defaults to empty. |
+
+**Notes.** Dataclass created by the registry scan and only read afterwards.
+
+### `MethodInfo` [@ANCHOR: odoo_registry_builder:odoo_registry_builder_method_info_class]
+
+**Purpose.** One method declaration found by `odoo_registry_builder` in an Odoo model class, with the shape of its parameter list, so calls with the wrong number of arguments and suspicious redeclarations can be found.
+**Definition.** `class MethodInfo` in `tools/odoo_registry_builder.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `name` | `str = -` | Method name. |
+| `arg_names` | `List[str] = -` | Names of the positional and keyword-or-positional parameters, including self or cls. |
+| `posonly_count` | `int = -` | How many of them are positional-only. |
+| `has_varargs` | `bool = -` | True when it takes `*args`. |
+| `has_varkw` | `bool = -` | True when it takes `**kwargs`. |
+| `kwonly_names` | `List[str] = -` | Names of the keyword-only parameters. |
+| `module` | `str = -` | Odoo module name of the declaring file. |
+| `file` | `str = -` | Path of the declaring file. |
+| `lineno` | `int = -` | Line of the declaration. |
+| `class_name` | `str = ''` | Name of the declaring class; defaults to empty. |
+| `calls_super` | `bool = False` | True when the body calls `super()`, which makes a redeclaration legitimate; default False. |
+
+**Methods.** `min_args(self)`; `max_args(self)`.
+
+**Notes.** `min_args()` is a first approximation the extractor refines with defaults; `max_args()` is None when `*args` is accepted. Dataclass, read-only after creation.
+
+### `MergedModel` [@ANCHOR: odoo_registry_builder:odoo_registry_builder_merged_model_class]
+
+**Purpose.** The registry's view of one Odoo model after all `_inherit` classes are combined: every field and method by name, plus every declaration that contributed to each, so conflicts can be reported.
+**Definition.** `class MergedModel` in `tools/odoo_registry_builder.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `name` | `str = -` | The model name, such as `res.partner`. |
+| `fields` | `Dict[str, FieldInfo] = field(default_factory=dict)` | Dictionary field name to the winning `FieldInfo`. |
+| `methods` | `Dict[str, MethodInfo] = field(default_factory=dict)` | Dictionary method name to the winning `MethodInfo`. |
+| `field_contributions` | `Dict[str, List[FieldInfo]] = field(default_factory=dict)` | Dictionary field name to every `FieldInfo` declared for it, in load order. |
+| `method_contributions` | `Dict[str, List[MethodInfo]] = field(default_factory=dict)` | Dictionary method name to every `MethodInfo` declared for it. |
+| `contributors` | `List[tuple] = field(default_factory=list)` | List of (module, file, line, class name, tuple of mixin targets) tuples, one per class that contributed, in load order. |
+
+**Notes.** Built by the registry merge and used by the mypy plugin; plain dataclass.
+
+### `_NoRedirect` [@ANCHOR: odoo_site_migrate:odoo_site_migrate__no_redirect_class]
+
+**Purpose.** Refuses every redirect. urllib copies all request headers, the credential included, to wherever a 3xx answer points; a refused redirect surfaces as the HTTPError of the 3xx status.
+**Definition.** `class _NoRedirect(urllib.request.HTTPRedirectHandler)` in `tools/odoo_site_migrate.py`.
+
+**Methods.** `redirect_request(self, req, fp, code, msg, headers, newurl)`.
+
+**Notes.** No state. `redirect_request` returns None for every redirect.
+
+### `MigrateError` [@ANCHOR: odoo_site_migrate:odoo_site_migrate_migrate_error_class]
+
+**Purpose.** Raised by odoo_site_migrate for a failure it can describe: a rejected login, a redirect that is not followed, a request cap reached (rerun with `--resume`), a network error after the retries, a missing website. Subclass of RuntimeError.
+**Definition.** `class MigrateError(RuntimeError)` in `tools/odoo_site_migrate.py`.
+
+**Notes.** The command line prints the message and exits non-zero; a rerun can continue from the saved state.
+
+### `Credentials` [@ANCHOR: odoo_site_migrate:odoo_site_migrate_credentials_class]
+
+**Purpose.** The address and login of one Odoo server for odoo_site_migrate: URL, database, login and secret (password or API key). The secret is kept out of every printed form.
+**Definition.** `class Credentials` in `tools/odoo_site_migrate.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `__str__` | `__repr__` | Same as `__repr__`, so `str()` also hides the secret. |
+
+**Methods.** `__init__(self, url, db, login, secret)`; `secret(self)`; `__repr__(self)`.
+
+**Notes.** Constructor `Credentials(url, db, login, secret)` strips a trailing slash from the URL. Attributes `url`, `db`, `login` are public; `secret` is a read-only property over `_secret`. `repr` shows `secret=<hidden>`. Built by `load_credentials` from an env file; the URL must be https or localhost.
+
+### `_UATransport` [@ANCHOR: odoo_site_migrate:odoo_site_migrate__uatransport_class]
+
+**Purpose.** XML-RPC transport for plain http (tests, localhost) that sends the tool's own `User-Agent`. Subclass of `xmlrpc.client.Transport`.
+**Definition.** `class _UATransport(xmlrpc.client.Transport)` in `tools/odoo_site_migrate.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `user_agent` | `USER_AGENT` | Class attribute, the tool's `USER_AGENT` string. |
+
+**Notes.** Used by `XmlRpcTransport` for http URLs; the https case uses `_UASafeTransport`.
+
+### `_UASafeTransport` [@ANCHOR: odoo_site_migrate:odoo_site_migrate__uasafe_transport_class]
+
+**Purpose.** XML-RPC transport for https that sends the tool's own `User-Agent`. Subclass of `xmlrpc.client.SafeTransport`.
+**Definition.** `class _UASafeTransport(xmlrpc.client.SafeTransport)` in `tools/odoo_site_migrate.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `user_agent` | `USER_AGENT` | Class attribute, the tool's `USER_AGENT` string. |
+
+**Notes.** Used by `XmlRpcTransport` when the URL starts with https.
+
+### `_ThrottledTransport` [@ANCHOR: odoo_site_migrate:odoo_site_migrate__throttled_transport_class]
+
+**Purpose.** Rate limit, request cap and retries shared by the two transports. A subclass raises xmlrpc.client.ProtocolError for an HTTP status worth retrying (429, 500, 502, 503, 504).
+**Definition.** `class _ThrottledTransport` in `tools/odoo_site_migrate.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `creds` | `creds` | The `Credentials` used. |
+| `min_interval` | `min_interval` | Minimum seconds between two requests; default 0.5. |
+| `max_requests` | `max_requests` | Request cap for the run, 0 for none; reaching it raises `MigrateError` ("rerun with --resume"). |
+| `requests` | `0` | Number of requests made so far. |
+| `_last` | `None` | Clock value of the last request, `None` before the first. |
+| `_retries` | `retries` | Number of retries per call; default 3. |
+| `_uid` | `None` | User id after login, `None` before. |
+
+**Methods.** `__init__(self, creds, min_interval=0.5, max_requests=0, sleep=time.sleep, clock=`; `_throttled(self, func, *args)`.
+
+**Notes.** `_throttled(func, *args)` sleeps to keep the interval, counts the request and retries with a pause of min(60, 2^attempt) seconds on a retryable status or a network error; at the end it raises `MigrateError`. The sleep and clock functions are injectable (`_sleep`, `_clock`). Not thread-safe.
+
+### `XmlRpcTransport` [@ANCHOR: odoo_site_migrate:odoo_site_migrate_xml_rpc_transport_class]
+
+**Purpose.** XML-RPC (/xmlrpc/2), which every Odoo from 8 to 19 serves (deprecated in 19). Rate limited with retries.
+**Definition.** `class XmlRpcTransport(_ThrottledTransport)` in `tools/odoo_site_migrate.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `_common` | `factory(f'{creds.url}/xmlrpc/2/common', allow_none` | XML-RPC proxy for `/xmlrpc/2/common` (version and authentication). |
+| `_object` | `factory(f'{creds.url}/xmlrpc/2/object', allow_none` | XML-RPC proxy for `/xmlrpc/2/object` (`execute_kw`). |
+
+**Methods.** `__init__(self, creds, min_interval=0.5, max_requests=0, sleep=time.sleep, clock=`; `version(self)`; `login(self)`; `call(self, model, method, args, kwargs=None)`.
+
+**Notes.** `version()`, `login()` (raises `MigrateError` for a wrong login, password or database) and `call(model, method, args, kwargs)`, which logs in on first use. A `proxy_factory` can replace the proxy for tests. Each call blocks on the network.
+
+### `Json2Transport` [@ANCHOR: odoo_site_migrate:odoo_site_migrate_json2_transport_class]
+
+**Purpose.** JSON-2 (Odoo 19+): `Authorization: bearer <API key>`, one POST per call. The secret of the credentials must be an API key (JSON-2 refuses a password). A server-side error is raised as xmlrpc.client.Fault, so callers written for XML-RPC keep working. Use it for a target Odoo 19 or later; an older source needs XML-RPC.
+**Definition.** `class Json2Transport(_ThrottledTransport)` in `tools/odoo_site_migrate.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `_http` | `post or _urllib_http` | Function `(url, headers, data)` returning (status, body bytes); the real urllib one, or a stub for tests. |
+
+**Methods.** `__init__(self, creds, min_interval=0.5, max_requests=0, sleep=time.sleep, clock=`; `_send(self, path, body=None)`; `version(self)`; `login(self)`; `call(self, model, method, args, kwargs=None)`.
+
+**Notes.** A redirect is refused with `MigrateError`, because the API key must not be sent to another address; status 401 raises `MigrateError`; 429, 502, 503, 504 (and a 500 without a JSON message) are retried through `ProtocolError`. The database goes in the `X-Odoo-Database` header. `version()` reads the unauthenticated `/web/version`.
+
+### `ReadOnlySource` [@ANCHOR: odoo_site_migrate:odoo_site_migrate_read_only_source_class]
+
+**Purpose.** Wraps a transport so that only READ_ONLY_METHODS can ever reach the source.
+**Definition.** `class ReadOnlySource` in `tools/odoo_site_migrate.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `_transport` | `transport` | The wrapped transport. |
+
+**Methods.** `__init__(self, transport)`; `version(self)`; `call(self, model, method, args, kwargs=None)`.
+
+**Notes.** `version()` passes through; `call(model, method, args, kwargs)` raises `PermissionError` for another method. This is the protection that makes an export unable to change the source site.
+
+### `Exporter` [@ANCHOR: odoo_site_migrate:odoo_site_migrate_exporter_class]
+
+**Purpose.** Exports the content of a source Odoo website to a directory through a read-only source: website models, their records page by page, and the binary files up to a size cap, with a state file so an interrupted export can be resumed.
+**Definition.** `class Exporter` in `tools/odoo_site_migrate.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `state_path` | `os.path.join(out_dir, 'state.json')` | `state.json` in the output directory. |
+| `manifest` | `{'tool': TOOL_VERSION, 'models': {}, 'files': {}, ` | Dictionary with the tool version, the exported `models`, `files` and `skipped` entries; written at the end. |
+| `_view_classes` | `{}` | Dictionary collected while exporting views and written into the manifest info as `view_classes` (sorted lists). |
+| `_page_views` | `None` | Set of view ids that belong to pages, looked up lazily and cached. |
+
+**Methods.** `__init__(self, source, out_dir, include=(), page_size=100, max_file_mb=BINARY_CA`; `_write_json(self, name, data)`; `_load_state(self)`; `fields_of(self, model)`; `model_exists(self, model)`; `discover_website_models(self)`; `probe(self)`; `inventory(self)`; `plan_models(self, discovered_extra=True)`; `run(self, resume=False)`; `attachment_domain(self)`; `shipped_ids(self, model)`; `export_model(self, model, domain, extra, previous)`; `page_view_ids(self)`; `filter_rows(self, model, rows)`; `_resume_point(self, path)`; `export_binary_field(self, model, ids, field)`; `export_attachment_file(self, row)`; `finish(self)`.
+
+**Notes.** Constructor `Exporter(source, out_dir, include=(), page_size=100, max_file_mb=25, log=print)`. JSON files are written atomically (temporary file and `os.replace`); `discover_website_models()` finds the stored website models; the source is never written. Network bound and slow for a big site.
+
+### `Importer` [@ANCHOR: odoo_site_migrate:odoo_site_migrate_importer_class]
+
+**Purpose.** Imports an export directory into a target Odoo through its external API.
+**Definition.** `class Importer` in `tools/odoo_site_migrate.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `strip_wordpress` | `strip_wordpress` | When true, sweeps WordPress leftovers out of content. |
+| `domains` | `[d.lower() for d in source_domains]` | Lower-case source domains whose absolute links are made relative. |
+| `website_map` | `{str(source): int(target) for source, target in di` | Dictionary source website id to target website id (integers). |
+| `log` | `log` | Function that receives progress lines; `print` by default. |
+| `forms_notice` | `forms_notice` | Text that replaces website forms in content; None keeps forms. |
+| `skip_menu_urls` | `tuple(skip_menu_urls)` | Tuple of menu URLs that are not imported. |
+| `remove_extra_menus` | `remove_extra_menus` | When true, menus on the target that the source does not have are removed. |
+| `archive_extra_blogs` | `archive_extra_blogs` | When true, blogs on the target that the source does not have are archived. |
+| `idmap_path` | `os.path.join(export_dir, 'idmap.json')` | `idmap.json` in the export directory. |
+| `idmap` | `self._load_idmap()` | Loaded source-id to target-id map; saved after changes. |
+| `report` | `{'created': {}, 'updated': {}, 'matched': {}, 'dro` | Dictionary of counters and lists (created, updated, matched, dropped_fields, unsupported, redirects, html, warnings, lost, forms_replaced, skipped, wordpress_leftovers). |
+| `_target_fields` | `{}` | Cache of the target's field lists per model. |
+| `_modules` | `None` | Cached set of installed module names on the target, None until asked. |
+| `data` | `{}` | Records read from `data/<model>.jsonl`, by model. |
+| `hold` | `self._load_hold()` | Dictionary model to set of source ids that are held back (from `hold.json`). |
+
+**Methods.** `__init__(self, export_dir, target, apply=False, source_domains=(), website_map=N`; `target_modules(self)`; `module_missing(self, module)`; `_load_hold(self)`; `_load_idmap(self)`; `_save_idmap(self)`; `mapped(self, model, source_id)`; `_remember(self, model, source_id, target_id)`; `_count(self, bucket, model, number=1)`; `fields(self, model)`; `has_model(self, model)`; `clean(self, model, row, extra_skip=())`; `create_or_match(self, model, source_id, domain, values, update=False, context=No`; `rewrite(self, html)`; `run(self)`; `check_languages(self)`; `target_website_for(self, source_id)`; `sole_target_website(self)`; `import_websites(self)`; `set_company_name(self, website_id, site_name)`.
+
+**Notes.** Constructor `Importer(export_dir, target, apply=False, source_domains=(), website_map=None, log=print, forms_notice=..., skip_menu_urls=(), remove_extra_menus=False, archive_extra_blogs=False, strip_wordpress=False)`. `target_modules()` and `module_missing(module)` ask the target which modules are installed. Writes to the target only when `apply` is true.
+
+### `Target` [@ANCHOR: odoo_site_wp_cleanup:odoo_site_wp_cleanup_target_class]
+
+**Purpose.** The records of one website, read and written through an odoo_site_migrate transport.
+**Definition.** `class Target` in `tools/odoo_site_wp_cleanup.py`.
+
+**Methods.** `__init__(self, transport, website_id)`; `website(self)`; `_paged(self, model, domain, fields)`; `records(self)`; `write(self, model, record_id, field, value)`.
+
+**Notes.** `website()` reads name and domain and raises `MigrateError` when the id does not exist; `records()` yields the records to clean (paged by `_paged`); `write(model, record_id, field, value)` changes one field on the server, so check what the tool does in report mode first.
+
+### `SnapshotError` [@ANCHOR: odoo_snapshot_source:odoo_snapshot_source_snapshot_error_class]
+
+**Purpose.** Raised by odoo_snapshot_source when the database snapshot cannot be served as a source: an unsafe `store_fname` (attachment path), no filestore directory given for attachments (`--filestore`), or an attachment whose filestore file is missing. Subclass of RuntimeError with no fields.
+**Definition.** `class SnapshotError(RuntimeError)` in `tools/odoo_snapshot_source.py`.
+
+**Notes.** The command line prints it and exits non-zero. Distinct from the XML-RPC `Fault` the module emulates for callers.
+
+### `PgDb` [@ANCHOR: odoo_snapshot_source:odoo_snapshot_source_pg_db_class]
+
+**Purpose.** PostgreSQL through psycopg2, read-only. `dsn` is a libpq string such as "dbname=mig_x".
+**Definition.** `class PgDb` in `tools/odoo_snapshot_source.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `placeholder` | `'%s'` | Class attribute `%s`, the SQL parameter marker of psycopg2. |
+| `conn` | `connect(dsn)` | The open psycopg2 connection to the given libpq string such as "dbname=mig_x". |
+
+**Methods.** `__init__(self, dsn, connect=None)`; `query(self, sql, params=())`; `columns(self, table)`; `close(self)`.
+
+**Notes.** `query(sql, params)` returns a list of dictionaries (column name to value); `columns(table)` lists the column names of a public table. `psycopg2` is imported only when no `connect` function is passed, so tests need no database driver.
+

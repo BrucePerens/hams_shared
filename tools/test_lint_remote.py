@@ -1024,3 +1024,10 @@ class PipPinsOnDirtyHostTests(unittest.TestCase):
         line = [ln for ln in text.splitlines() if "pip install --user" in ln][0]
         for flag in ("--ignore-installed", "--no-deps", "--require-hashes"):
             self.assertIn(flag, line)
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: lint_remote:lint_remote_remote_job_class]
+# Tests [@ANCHOR: lint_remote:lint_remote_plan_class]
+# Tests [@ANCHOR: lint_remote:lint_remote_shell_transport_class]
+# Tests [@ANCHOR: lint_remote:lint_remote_ssh_transport_class]
+# Tests [@ANCHOR: lint_remote:lint_remote_probe_class]

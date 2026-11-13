@@ -212,3 +212,6 @@ class DeadlineTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: mcp_watchdog_client:mcp_watchdog_client_watchdog_client_timeout_class]

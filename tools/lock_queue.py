@@ -426,6 +426,7 @@ def may_try(qdir, tickets, ticket, slots=1):
     return free > 0 and waiting.index(ticket) < free
 
 
+# [@ANCHOR: lock_queue:lock_queue__interrupted_class]
 class _Interrupted(BaseException):
     pass
 

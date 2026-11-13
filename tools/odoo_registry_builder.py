@@ -67,6 +67,7 @@ KNOWN_FIELD_TYPES = RELATIONAL_FIELD_TYPES | {
 }
 
 
+# [@ANCHOR: odoo_registry_builder:odoo_registry_builder_field_info_class]
 @dataclass
 class FieldInfo:
     name: str
@@ -82,6 +83,7 @@ class FieldInfo:
     # against the pre-existing 6-field shape doesn't break.
 
 
+# [@ANCHOR: odoo_registry_builder:odoo_registry_builder_method_info_class]
 @dataclass
 class MethodInfo:
     name: str
@@ -106,6 +108,7 @@ class MethodInfo:
         return None if self.has_varargs else len(self.arg_names)
 
 
+# [@ANCHOR: odoo_registry_builder:odoo_registry_builder_merged_model_class]
 @dataclass
 class MergedModel:
     name: str

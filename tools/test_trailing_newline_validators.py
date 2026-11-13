@@ -83,3 +83,6 @@ class TestTrailingNewlineRefused(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: odoo_snapshot_source:odoo_snapshot_source_pg_db_class]

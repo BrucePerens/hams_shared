@@ -528,3 +528,6 @@ class OdooMypyPluginClassSiblingsRegressionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: odoo_mypy_plugin:odoo_mypy_plugin_odoo_plugin_class]
