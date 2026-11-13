@@ -3,7 +3,7 @@
 ## Status
 Accepted
 
-**Superseded in part (2026-10-23, 2026-10-24):** hams.com removed every ARRL Logbook of the World (LoTW) and TQSL use on 2026-10-23 and restored LoTW on 2026-10-24 only as a licence-verification method for a signed-in member (never sign-in; Bruce's decisions). LoTW verification mentions below apply again; LoTW sign-in, log sync and TQSL mentions are history.
+**Superseded in part (2026-10-23, 2026-10-24):** hams.com removed every ARRL Logbook of the World (LoTW) and TQSL (ARRL's signing tool for Logbook of the World) use on 2026-10-23 and restored LoTW on 2026-10-24 only as a licence-verification method for a signed-in member (never sign-in; Bruce's decisions). LoTW verification mentions below apply again; LoTW sign-in, log sync and TQSL mentions are history.
 
 ## Context
 Bruce's direction of 2026-09-21: the browser goes to an AllStar repeater's own gateway directly, with no
@@ -33,7 +33,7 @@ at login. The password is the user's own login to a repeater run by a third part
 credential, and it is not used by hams.com for anything: hams.com is not in the connection path.
 
 **3. Mitigations, all required.**
-  a. One deliberate, narrow endpoint returns it: an authenticated JSON route (`auth="user"`), TLS only,
+  a. One deliberate, narrow endpoint returns it: an authenticated JSON route (`auth="user"`), TLS (Transport Layer Security) only,
      `Cache-Control: no-store`, rate limited, returning only the caller's own record. The password is
      never logged and never appears in an error message.
   b. Service accounts and other users can never obtain it. The `res.users` field decrypts only for its
@@ -58,7 +58,7 @@ user's own secret and is not a transmit authorization.
 **Verified Ham** is the account status that records that hams.com has verified the person is a licensed radio
 amateur; it is stored separately from, and is narrower than, the general "identity verified" status. An account
 reaches it by one of these routes: (a) a Logbook of the World (LoTW) certificate; (b) an uploaded copy of the
-licence that the system accepts automatically: for a US applicant, the exact digital copy downloaded from the FCC,
+licence that the system accepts automatically: for a US applicant, the exact digital copy downloaded from the FCC (US Federal Communications Commission),
 once it passes the system's structure and currency check, and for a non-US applicant, an approved licence image;
 (c) for a non-US applicant, the HamCall address-knowledge check; (d) an explicit action by an administrator
 (approving an uploaded licence, setting Verified Ham by hand, or an invitation that grants it), which always

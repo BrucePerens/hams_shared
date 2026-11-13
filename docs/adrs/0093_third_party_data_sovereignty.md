@@ -3,9 +3,9 @@
 ## Status
 Accepted
 
-**Superseded in part (2026-10-23, 2026-10-24):** hams.com removed every ARRL (American Radio Relay League) Logbook of the World (LoTW) and TQSL use on 2026-10-23 and restored LoTW on 2026-10-24 only as a licence-verification method for a signed-in member (never sign-in; Bruce's decisions). LoTW verification mentions below apply again; LoTW sign-in, log sync and TQSL mentions are history.
+**Superseded in part (2026-10-23, 2026-10-24):** hams.com removed every ARRL (American Radio Relay League) Logbook of the World (LoTW) and TQSL (ARRL's signing tool for Logbook of the World) use on 2026-10-23 and restored LoTW on 2026-10-24 only as a licence-verification method for a signed-in member (never sign-in; Bruce's decisions). LoTW verification mentions below apply again; LoTW sign-in, log sync and TQSL mentions are history.
 
-**Note, 2026-10-19:** the QRZ bio-edit challenge named below was removed (QRZ.com answered every automated fetch
+**Note, 2026-10-19:** the QRZ (the QRZ.com callsign directory) bio-edit challenge named below was removed (QRZ.com answered every automated fetch
 with "403 Robot Denied", so it never verified anyone; Bruce: "Remove the QRZ validation"). It had been one of the
 independent paths this ADR counts; LoTW mTLS, the official-email OTP (one-time password) and license review remain. The text below is kept
 as the historical record.

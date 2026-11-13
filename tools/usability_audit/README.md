@@ -9,7 +9,7 @@ unsettled (persona count/cadence, where critique gets triaged, whether to allow 
 
 This is deliberately **not** a Claude Agent/fork dispatch. Per
 `.claude/skills/avoiding-api-costs/SKILL.md`, it's a standalone daemon that routes each decision
-point through this codebase's own established MCP scheme (`hams_shared/tools/mcp_watchdog.py`'s
+point through this codebase's own established MCP (Model Context Protocol) scheme (`hams_shared/tools/mcp_watchdog.py`'s
 IPC bridge, the same one `ingest/daemon_utils.py` uses for the course-content pipeline) rather
 than a direct API call -- no `GEMINI_API_KEY` needed. `ask_executor()` writes the prompt to a
 queue and blocks for a JSON response file; whichever agent answers (a fresh, isolated Gemini

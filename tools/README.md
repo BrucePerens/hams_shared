@@ -2990,7 +2990,7 @@ fails (reported as skipped when there is no cargo); the Playwright headless Chro
 `install-deps` as root, `install` as the user without `PLAYWRIGHT_BROWSERS_PATH`) when `<home>/.cache/ms-playwright`
 has no `chromium_headless_shell-*`, reported as a skipped step (with the tests that then fail) when
 `reachable(PLAYWRIGHT_CDN_URL)` is False, as in a cloud session; `npm ci --no-audit --no-fund` in hams_shared when its `node_modules/.bin/eslint`
-is missing. `home` (str) is the runner's home. Network: crates.io, the Playwright CDN, npm. Raises
+is missing. `home` (str) is the runner's home. Network: crates.io, the Playwright CDN (content delivery network), npm. Raises
 `CalledProcessError`. Tests: `KopiaAndUserToolTests`.
 
 ### `[@ANCHOR: provision_test_environment:provision_ml_assets]` `provision_ml_assets(layout, run, report, plan=False, reachable=url_reachable, manifest_exists=os.path.isfile)`
@@ -5438,7 +5438,7 @@ Every class of the tools that is not a function, with its fields, who creates it
 
 ### `_Pcm` [@ANCHOR: alsa_pcm:alsa_pcm__pcm_class]
 
-**Purpose.** Private wrapper around one open ALSA PCM handle (capture or playback) used by `run_duplex`. The constructor opens the device and negotiates interleaved access, sample format, channel count, rate, period and buffer with the ALSA library through ctypes; `close` releases the handle.
+**Purpose.** Private wrapper around one open ALSA PCM (pulse-code modulation) handle (capture or playback) used by `run_duplex`. The constructor opens the device and negotiates interleaved access, sample format, channel count, rate, period and buffer with the ALSA library through ctypes; `close` releases the handle.
 **Definition.** `class _Pcm` in `tools/audio_card_characterize/alsa_pcm.py`.
 
 | Field | Type / initial | Meaning |

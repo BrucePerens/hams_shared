@@ -15,7 +15,7 @@ Bruce's own words, verbatim, resolving that tension with a concrete architectura
 going to have to transition the friend and club system to a public key system. The local relays can
 hold on to the authorized keys, etc. This offloads a lot of traffic from our Central relay, which
 should only be used when the hams local relay is not directly reachable. I think ipv6 is going to be
-a very big help here because it mostly does not use NAT."
+a very big help here because it mostly does not use NAT (network address translation)."
 
 This is not a green-field cryptography project. `hams_local_relay` already has a real, working
 public-key verification pipeline: `noise_channel.rs` implements a Noise Protocol

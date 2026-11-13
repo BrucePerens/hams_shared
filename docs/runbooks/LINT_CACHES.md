@@ -51,7 +51,7 @@ and `/dev/shm/hams-ram-usage.json` carries the same numbers (`ram_dirs.py usage`
 | Machine | `cargo_gb` (each directory) | `free_floor_gb` | `results_mb` | Why |
 |---|---|---|---|---|
 | devbox | 25 | 30 | 200 | /home is 88 % full |
-| mac1-vm | 12 | 10 | 100 | 99 GB VM disk with 17 GB free (2026-11-03), hosts the production FCC sync. The floor was 20: with 17 GB free every run was below it, pruned the directory to nothing and built cold (`lint cache: ... cleared the directory`), so the runner never had a warm Cargo directory. Two directories (hams_com 4.5 GB, hams_open 3.6 GB on arm64) leave about 9 GB for the VM, more than the sync needs |
+| mac1-vm | 12 | 10 | 100 | 99 GB VM disk with 17 GB free (2026-11-03), hosts the production FCC (US Federal Communications Commission) sync. The floor was 20: with 17 GB free every run was below it, pruned the directory to nothing and built cold (`lint cache: ... cleared the directory`), so the runner never had a warm Cargo directory. Two directories (hams_com 4.5 GB, hams_open 3.6 GB on arm64) leave about 9 GB for the VM, more than the sync needs |
 | bruce-yoga | 40 | 20 | 200 | 192 GB disk, 143 GB free |
 
 Change them in `cache_budgets` of `tools/lint_machines.json`, or per run with `HAMS_LINT_CARGO_GB`,

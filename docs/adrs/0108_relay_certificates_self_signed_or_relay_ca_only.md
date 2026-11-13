@@ -41,7 +41,7 @@ started.
 
 ## Consequences
 
-The shared TLS key and the wildcard key no longer exist on any relay or in `ir.config_parameter`; the
+The shared TLS (Transport Layer Security) key and the wildcard key no longer exist on any relay or in `ir.config_parameter`; the
 production database's stored wildcard key is deleted by `ham_relay_bridge`'s 1.1 pre-migration. Existing
 relays that still hold the old files in their data directory ignore them (a test plants them). The
 `localhost.hams.com` DNS records, the leftover `u<id>.local.hams.com` zones and the dev box's certbot

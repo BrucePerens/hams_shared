@@ -9,7 +9,7 @@ To protect the synchronous Odoo WSGI (the Python web-server interface) web worke
 ## Decisions & Mandates
 
 ### 1. Cloudflare Edge Orchestration & Verified Bots
-The `cloudflare` module acts as the control plane for the CDN edge.
+The `cloudflare` module acts as the control plane for the CDN (content delivery network) edge.
 * **Proactive Caching:** Semi-static routes (Blogs, Classifieds) receive `Cloudflare-CDN-Cache-Control` headers for 24-hour caching. The ORM intercepts edits and pushes invalidations to a background queue for batched cache purging.
 * **Verified Bot Allowance:** WAF rules explicitly evaluate `cf.client.bot`. Verified crawlers (Google, Bing) are allowed, while unknown headless scrapers are issued a `managed_challenge` (Turnstile) to verify humanity.
 
