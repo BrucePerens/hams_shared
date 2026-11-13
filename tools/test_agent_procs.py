@@ -1151,9 +1151,10 @@ class ReapTests(ProcTestCase):
         """A python sleeper whose cwd is the directory `name` under the fake agent_work root."""
         path = os.path.join(self.root, name)
         os.makedirs(path)
-        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)", token], cwd=path,
-                                start_new_session=True)
+        proc = subprocess.Popen([sys.executable, "-c", "import time; print('up', flush=True); time.sleep(120)", token],
+                                cwd=path, start_new_session=True, stdout=subprocess.PIPE, text=True)
         self.spawned.append(proc)
+        self.assertEqual(proc.stdout.readline().strip(), "up")  # python has started (its cwd is read), so deleting the directory cannot break the start
         self.until(lambda: ap.read_proc(proc.pid) is not None and token in " ".join(ap.read_proc(proc.pid).argv))
         return proc, path
 
