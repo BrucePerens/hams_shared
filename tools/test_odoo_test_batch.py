@@ -628,6 +628,19 @@ class RemoteTests(unittest.TestCase):
         self.assertEqual([verdicts[m["tip"]]["status"] for m in members], ["passed", "failed"])
         self.assertTrue(any("ham_b:TestB.test_mine" in f for f in verdicts[members[1]["tip"]]["findings"]))
 
+    def test_a_failure_count_above_the_named_failures_is_not_hidden_by_an_environmental_one(self):
+        members = self.members(("a", "ham_a"), ("b", "ham_b"))
+        line = "20:42 1 ERROR hams_test odoo.addons.ham_a.tests.test_x: ERROR: TestA.test_env\n"
+        counted = "odoo.tests.result: 2 failed, 0 error(s) of 40 tests\n"
+
+        def runner(machine, repo, repo_name, group, mods, driver, log_path, work, union=None):
+            return {"host": machine, "exit_code": 1, "conflicted": [], "seconds": 1.0, "error": None, "log": log_path,
+                    "filtered": line + counted, "baseline_exit": 1, "baseline_filtered": line}
+
+        verdicts = self.batch(runner, machines=("yoga",))(1, members, "")["verdicts"]
+        self.assertIn("failed", {v["status"] for v in verdicts.values()})
+        self.assertEqual(len(self.stamps), 1)
+
     def test_run_remote_member_end_to_end_with_a_stand_in_driver(self):
         driver = os.path.join(self.tmp, "driver.py")
         with open(driver, "w") as handle:
