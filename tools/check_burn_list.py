@@ -40,6 +40,19 @@ MODULE_SCAN_FLAGS = ("--scan-daemons-and-tools",)
 _ODOO_LOADING_FLAGS = ("init", "update", "stop_after_init")
 
 
+_LICENSE_REPO_NAMES = ("hams_com", "hams_open", "hams_shared")
+
+
+# [@ANCHOR: check_burn_list:repo_of_path]
+def _repo_of_path(filepath):
+    """The repository a file belongs to: the path component nearest the file that is exactly a repo name. A substring
+    match made a worktree directory such as `hams_com-fix-x/hams_open/mod` count as hams_com."""
+    for part in reversed(filepath.replace("\\", "/").split("/")[:-1]):
+        if part in _LICENSE_REPO_NAMES:
+            return part
+    return None
+
+
 # [@ANCHOR: check_burn_list:check_burn_list_xmlnode_class]
 class XMLNode:
     def __init__(self, tag, attrs, lineno):
@@ -1446,12 +1459,13 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                                             )
                     if self.filename == "__manifest__.py" and k.value == "license":
                         if isinstance(v, ast.Constant) and isinstance(v.value, str):
-                            if "hams_com" in self.filepath and v.value != "Other proprietary":
+                            repo = _repo_of_path(self.filepath)
+                            if repo == "hams_com" and v.value != "Other proprietary":
                                 self.add_error(
                                     v.lineno,
                                     "CRITICAL LICENSING: All modules in hams_com MUST use the 'Other proprietary' license.",
                                 )
-                            elif ("hams_open" in self.filepath or "hams_shared" in self.filepath) and v.value != "AGPL-3":
+                            elif repo in ("hams_open", "hams_shared") and v.value != "AGPL-3":
                                 self.add_error(
                                     v.lineno,
                                     "CRITICAL LICENSING: All modules in hams_open and hams_shared MUST use the 'AGPL-3' license.",
