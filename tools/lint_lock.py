@@ -330,6 +330,7 @@ def waiting_message(qdir, pid=None, slots=1):
     return "waiting for another lint run (holder not recorded), position %d" % position
 
 
+# [@ANCHOR: lint_lock:lint_lock_run_lock_class]
 class RunLock:
     """The machine-wide run lock. `acquire` returns True when held, False on timeout. With `slots` > 1 (see `slot_count`)
     that many runs hold one lock file each at the same time; `slot` is the number taken (1 when there is one slot)."""

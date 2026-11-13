@@ -556,3 +556,6 @@ class AccountabilityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: known_red:known_red_baseline_error_class]

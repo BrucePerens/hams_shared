@@ -35,6 +35,7 @@ SHARED_NAME = "hams_shared"
 SHARED_LINKS = ("agents", "AGENTS.md", "docs", "tools")
 
 
+# [@ANCHOR: lint_layout:lint_layout_layout_error_class]
 class LayoutError(RuntimeError):
     """The layout could not be built. The lint run must stop: falling back to the main checkouts would silently
     bring back the bug this module exists to remove."""

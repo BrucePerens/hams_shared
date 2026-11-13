@@ -443,3 +443,6 @@ class UnitFileTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: gate_canary:gate_canary_canary_error_class]

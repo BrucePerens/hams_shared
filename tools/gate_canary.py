@@ -50,6 +50,7 @@ RELAY_LOG = "relay_full_suite.log"
 RELAY_ID_PREFIX = "relay cargo test: "
 
 
+# [@ANCHOR: gate_canary:gate_canary_canary_error_class]
 class CanaryError(RuntimeError):
     """The canary cannot run (another run holds the lock, or a step failed); the message names the cause."""
 

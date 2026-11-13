@@ -687,3 +687,11 @@ class MachineWideLockTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: lint_exec:lint_exec__admission_class]
+# Tests [@ANCHOR: lint_exec:lint_exec__scheduler_class]
+# Tests [@ANCHOR: lint_exec:lint_exec_cache_class]
+# Tests [@ANCHOR: lint_exec:lint_exec_input_fingerprints_class]
+# Tests [@ANCHOR: lint_exec:lint_exec_result_class]
+# Tests [@ANCHOR: lint_exec:lint_exec_step_class]

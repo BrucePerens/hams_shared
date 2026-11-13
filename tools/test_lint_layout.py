@@ -279,3 +279,6 @@ class StampReposTests(LayoutTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: lint_layout:lint_layout_layout_error_class]

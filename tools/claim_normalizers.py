@@ -78,6 +78,7 @@ LANGUAGE_BY_SUFFIX = {
 LANGUAGES = ("python", "rust", "javascript", "xml", "shell", "sql")
 
 
+# [@ANCHOR: claim_normalizers:claim_normalizers_normalize_error_class]
 class NormalizeError(ValueError):
     """The text cannot be tokenized (unterminated string or comment, malformed XML)."""
 
@@ -90,6 +91,7 @@ def sha256_text(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+# [@ANCHOR: claim_normalizers:claim_normalizers_tok_class]
 class Tok:
     """One lexical token. `kind` is comment, ident, num, str, char, life, regex, punct, tpl*,
     word, nl, heredoc. `nl` is true when a line break separates it from the previous token."""
@@ -1156,6 +1158,7 @@ def render_shell(toks):
 _XML_UNKNOWN_ENTITY = re.compile(r"&(?!(?:amp|lt|gt|quot|apos|#\w+);)([A-Za-z_][\w.-]*);")
 
 
+# [@ANCHOR: claim_normalizers:claim_normalizers__xnode_class]
 class _XNode:
     __slots__ = ("tag", "attrs", "children")
 
@@ -1300,6 +1303,7 @@ def _py_is_plain_string(tok):
     return bool(m) and not set(m.group(1).lower()) & set("bft")
 
 
+# [@ANCHOR: claim_normalizers:claim_normalizers_python_tokens_class]
 class PythonTokens:
     """Tokens of one Python source text, with f-strings merged into single STRING tokens (so the
     token stream is the same on Python 3.8 and 3.14) and docstrings marked."""

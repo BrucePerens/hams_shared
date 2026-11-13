@@ -763,6 +763,7 @@ def checker_version(*paths):
     return h.hexdigest()[:16]
 
 
+# [@ANCHOR: lint_cache:lint_cache_result_cache_class]
 class ResultCache:
     """Per-file results for a checker, keyed by the file's content hash, valid for one checker version.
 

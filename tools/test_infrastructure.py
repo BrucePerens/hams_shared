@@ -8847,3 +8847,6 @@ class AuthGatewayJournalNamespaceTests(unittest.TestCase):
         self.assertIn("[Journal]\n", matches[0]["content"])
         self.assertIn("MaxRetentionSec=14d\n", matches[0]["content"])
         self.assertEqual(matches[0]["environments"], ["prod"])
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: infrastructure:infrastructure_provision_plan_class]

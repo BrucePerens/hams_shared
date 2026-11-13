@@ -599,3 +599,6 @@ class BurstSlotTests(Base):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: lint_lock:lint_lock_run_lock_class]

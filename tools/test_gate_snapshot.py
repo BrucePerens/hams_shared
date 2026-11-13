@@ -586,3 +586,9 @@ class RunnerFlagTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: gate_snapshot:gate_snapshot_snapshot_behind_class]
+# Tests [@ANCHOR: gate_snapshot:gate_snapshot_artifact_class]
+# Tests [@ANCHOR: gate_snapshot:gate_snapshot_trees_class]
+# Tests [@ANCHOR: gate_snapshot:gate_snapshot_snapshot_error_class]
