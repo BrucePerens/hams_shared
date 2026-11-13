@@ -483,6 +483,21 @@ class ArtifactTests(SnapshotTestBase):
         self.assertTrue(any("older than" in p for p in problems), problems)
 
     # Tests [@ANCHOR: gate_snapshot:artifact_problems]
+    def test_an_untracked_file_written_into_a_source_directory_after_the_build_is_not_a_source_change(self):
+        # Round 52/54: a pytest run in the snapshot tree left .pytest_cache in the crate directories after the build.
+        for directory in ("daemons/hams_local_relay", "daemons/shack_console/tools"):
+            cache = os.path.join(self.trees.com, directory, ".pytest_cache", "v", "nodeids")
+            write(cache, "[]")
+            os.utime(cache, (time.time() + 100, time.time() + 100))
+        self.assertEqual(self.problems({gs.RELAY_BIN_ENV: self.relay}), [])
+
+    # Tests [@ANCHOR: gate_snapshot:artifact_problems]
+    def test_a_tracked_source_file_touched_after_the_build_is_still_refused(self):
+        source = os.path.join(self.trees.com, "daemons/shack_console/console/page.js")
+        os.utime(source, (time.time() + 100, time.time() + 100))
+        self.assertTrue(any("older than" in p for p in self.problems()), self.problems())
+
+    # Tests [@ANCHOR: gate_snapshot:artifact_problems]
     def test_a_library_without_a_stamp_or_for_other_sources_is_refused(self):
         os.unlink(self.lib + gs.STAMP_SUFFIX)
         self.assertTrue(any("no stamp" in p for p in self.problems()))
