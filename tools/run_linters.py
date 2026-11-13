@@ -269,6 +269,8 @@ STEP_META = {
     "check_fake_network_listener": {"suffixes": frozenset({".rs", ".py"})},
     "check_function_test_anchors": {"suffixes": _PY},
     "check_private_by_default": {"suffixes": frozenset({".json", ".py"})},
+    "check_doc_references": {"suffixes": frozenset({".md", ".py", ".json"})},
+    "check_doc_references_shared": {"suffixes": frozenset({".md", ".py", ".json"})},
     "check_settings_secrets": {"suffixes": frozenset({".json", ".py"})},
     "check_js_function_test_anchors": {"suffixes": frozenset({".js", ".py"})},
     "check_rust_function_test_anchors": {
@@ -2354,6 +2356,35 @@ def main():
             ),
         ],
     )
+
+    # 38d. check_doc_references -- Markdown must not point at files, script flags, ADRs, headings, units, config keys or
+    # functions that do not exist. A baseline ratchet like step 38: the existing findings are recorded and only counted;
+    # a new one fails. hams_shared's own Markdown is checked with the hams_open run (it is not a repository of its own here).
+    _add(
+        "check_doc_references",
+        [
+            python_exec,
+            os.path.join(dir_path, "tools", "check_doc_references.py"),
+            repo_root,
+            "--baseline",
+            os.path.join(
+                dir_path,
+                "tools",
+                f"doc_references_baseline_{os.path.basename(main_checkout_root)}.json",
+            ),
+        ],
+    )
+    if os.path.basename(main_checkout_root) == "hams_open":
+        _add(
+            "check_doc_references_shared",
+            [
+                python_exec,
+                os.path.join(dir_path, "tools", "check_doc_references.py"),
+                dir_path,
+                "--baseline",
+                os.path.join(dir_path, "tools", "doc_references_baseline_hams_shared.json"),
+            ],
+        )
 
     # 39. check_js_function_test_anchors -- ADR 0090 decision 2's JS
     # sub-track: the same ratchet as step 38, extended to JS via a real
