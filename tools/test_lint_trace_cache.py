@@ -343,3 +343,9 @@ class TraceCacheEndToEndTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: lint_trace_cache:lint_trace_cache_trace_cache_class]
+# Tests [@ANCHOR: lint_trace_cache:lint_trace_cache_hasher_class]
+# Tests [@ANCHOR: lint_trace_cache:lint_trace_cache_roots_class]
+# Tests [@ANCHOR: lint_trace_cache:lint_trace_cache_trace_class]

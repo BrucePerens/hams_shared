@@ -142,6 +142,7 @@ def _unescape(text):
     return raw.decode("utf-8", "surrogateescape")
 
 
+# [@ANCHOR: lint_trace_cache:lint_trace_cache_trace_class]
 class Trace:
     """What one traced run touched: absolute paths read (`reads`), directories listed (`dirs`), looked for and absent (`absent`), written or
     created (`written`), programs executed (`execs`), Unix socket paths bound (`bound`), and network contacts (`contacts`, (kind, detail))."""
@@ -333,6 +334,7 @@ def traced(name):
     return name.startswith(TRACED_STEP_PREFIXES) and never_cached_reason(name) is None
 
 
+# [@ANCHOR: lint_trace_cache:lint_trace_cache_roots_class]
 class Roots:
     """The repositories of this run: name -> real path (hams_com, hams_open, hams_shared), their git directories, and the fixed work copies
     of the Cargo builds (`lint_cache.work_checkout`: <cache>/hams-lint/work/<target>/<repo name>/...), which hold the same bytes."""
@@ -390,6 +392,7 @@ def _git(cwd, *args):
     return out.stdout.strip() if out.returncode == 0 else None
 
 
+# [@ANCHOR: lint_trace_cache:lint_trace_cache_hasher_class]
 class Hasher:
     """Git blob ids of files and listing digests of directories, memoised for the run by (device, inode, size, mtime). Thread-safe."""
 
@@ -630,6 +633,7 @@ def run_traced(trace_file, argv, poll=0.2):
     return status
 
 
+# [@ANCHOR: lint_trace_cache:lint_trace_cache_trace_cache_class]
 class TraceCache:
     """The store: <directory>/<first two hex digits>/<step key>.json, each holding the newest KEEP_ENTRIES passes of that key."""
 

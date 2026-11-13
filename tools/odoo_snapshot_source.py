@@ -40,6 +40,7 @@ ORDER_RE = re.compile(r"^([a-z_][a-z0-9_]*)(?:\s+(asc|desc))?\Z", re.I)
 SNAPSHOT_DB_PREFIX = "mig_"  # restore refuses any other database name: it must never touch a real one
 
 
+# [@ANCHOR: odoo_snapshot_source:odoo_snapshot_source_snapshot_error_class]
 class SnapshotError(RuntimeError):
     pass
 
@@ -53,6 +54,7 @@ def _fault(message):
 # --------------------------------------------------------------------------------------------
 
 
+# [@ANCHOR: odoo_snapshot_source:odoo_snapshot_source_pg_db_class]
 class PgDb:
     """PostgreSQL through psycopg2, read-only. `dsn` is a libpq string such as "dbname=mig_x"."""
 

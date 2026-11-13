@@ -215,6 +215,7 @@ _RELATIONAL_FIELD_FULLNAMES = {
 _ENV_GETITEM_FULLNAME = "odoo.api.Environment.__getitem__"
 
 
+# [@ANCHOR: odoo_mypy_plugin:odoo_mypy_plugin_odoo_plugin_class]
 class OdooPlugin(Plugin):
     def __init__(self, options):
         super().__init__(options)

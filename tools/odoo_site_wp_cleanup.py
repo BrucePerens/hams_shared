@@ -47,6 +47,7 @@ DEAD_REFERENCES = {
 PAGE_SIZE = 100
 
 
+# [@ANCHOR: odoo_site_wp_cleanup:odoo_site_wp_cleanup_target_class]
 class Target:
     """The records of one website, read and written through an odoo_site_migrate transport."""
 

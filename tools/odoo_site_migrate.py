@@ -62,6 +62,7 @@ from urllib.parse import urlsplit
 import wp_leftovers
 
 
+# [@ANCHOR: odoo_site_migrate:odoo_site_migrate__no_redirect_class]
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     """Refuses every redirect. urllib copies all request headers, the credential included, to wherever a 3xx answer
     points; a refused redirect surfaces as the HTTPError of the 3xx status."""
@@ -114,6 +115,7 @@ WEBSITE_INVENTORY_FIELDS = (
 )
 
 
+# [@ANCHOR: odoo_site_migrate:odoo_site_migrate_migrate_error_class]
 class MigrateError(RuntimeError):
     pass
 
@@ -123,6 +125,7 @@ class MigrateError(RuntimeError):
 # --------------------------------------------------------------------------------------------
 
 
+# [@ANCHOR: odoo_site_migrate:odoo_site_migrate_credentials_class]
 class Credentials:
     def __init__(self, url, db, login, secret):
         self.url, self.db, self.login, self._secret = url.rstrip("/"), db, login, secret
@@ -165,14 +168,17 @@ def load_credentials(path):
     return Credentials(url, values.get("ODOO_DB", ""), values["ODOO_LOGIN"], secret)
 
 
+# [@ANCHOR: odoo_site_migrate:odoo_site_migrate__uatransport_class]
 class _UATransport(xmlrpc.client.Transport):
     user_agent = USER_AGENT
 
 
+# [@ANCHOR: odoo_site_migrate:odoo_site_migrate__uasafe_transport_class]
 class _UASafeTransport(xmlrpc.client.SafeTransport):
     user_agent = USER_AGENT
 
 
+# [@ANCHOR: odoo_site_migrate:odoo_site_migrate__throttled_transport_class]
 class _ThrottledTransport:
     """Rate limit, request cap and retries shared by the two transports. A subclass raises
     xmlrpc.client.ProtocolError for an HTTP status worth retrying (429, 500, 502, 503, 504)."""
@@ -209,6 +215,7 @@ class _ThrottledTransport:
         raise MigrateError("unreachable")
 
 
+# [@ANCHOR: odoo_site_migrate:odoo_site_migrate_xml_rpc_transport_class]
 class XmlRpcTransport(_ThrottledTransport):
     """XML-RPC (/xmlrpc/2), which every Odoo from 8 to 19 serves (deprecated in 19). Rate limited with retries."""
 
@@ -291,6 +298,7 @@ def _urllib_http(url, headers, data, timeout=120):
         return exc.code, exc.read()
 
 
+# [@ANCHOR: odoo_site_migrate:odoo_site_migrate_json2_transport_class]
 class Json2Transport(_ThrottledTransport):
     """JSON-2 (Odoo 19+): `Authorization: bearer <API key>`, one POST per call. The secret of the credentials
     must be an API key (JSON-2 refuses a password). A server-side error is raised as xmlrpc.client.Fault, so
@@ -356,6 +364,7 @@ def make_transport(kind, creds, **kwargs):
     raise MigrateError(f"unknown transport {kind!r} (xmlrpc or json2)")
 
 
+# [@ANCHOR: odoo_site_migrate:odoo_site_migrate_read_only_source_class]
 class ReadOnlySource:
     """Wraps a transport so that only READ_ONLY_METHODS can ever reach the source."""
 
@@ -624,6 +633,7 @@ OPTIONAL_MODELS = {
 }
 
 
+# [@ANCHOR: odoo_site_migrate:odoo_site_migrate_exporter_class]
 class Exporter:
     def __init__(self, source, out_dir, include=(), page_size=100, max_file_mb=BINARY_CAP_MB, log=print):
         self.source, self.out, self.include = source, out_dir, tuple(include)
@@ -990,6 +1000,7 @@ def read_jsonl(path):
         return [json.loads(line) for line in handle if line.strip()]
 
 
+# [@ANCHOR: odoo_site_migrate:odoo_site_migrate_importer_class]
 class Importer:
     """Imports an export directory into a target Odoo through its external API."""
 

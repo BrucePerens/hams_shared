@@ -56,6 +56,7 @@ WAIT_TIMEOUT_MARGIN_SECS = 60
 OVERALL_TIMEOUT_MARGIN_SECS = 15
 
 
+# [@ANCHOR: mcp_watchdog_client:mcp_watchdog_client_watchdog_client_timeout_class]
 class WatchdogClientTimeout(Exception):
     """The whole call exceeded its deadline before any single request did.
 

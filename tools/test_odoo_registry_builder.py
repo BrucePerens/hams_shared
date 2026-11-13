@@ -706,3 +706,7 @@ class RegistryBuilderFindSiblingRepoTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: odoo_registry_builder:odoo_registry_builder_merged_model_class]
+# Tests [@ANCHOR: odoo_registry_builder:odoo_registry_builder_method_info_class]

@@ -228,11 +228,13 @@ def get_fsize(path):
 _BaseEventHandler = pyinotify.ProcessEvent if pyinotify else object
 
 
+# [@ANCHOR: mcp_watchdog:mcp_watchdog_dummy_notifier_class]
 class DummyNotifier:
     def stop(self):
         """No inotify watcher was ever started (pyinotify unavailable), so there is nothing to stop."""
 
 
+# [@ANCHOR: mcp_watchdog:mcp_watchdog_watchdog_event_handler_class]
 class WatchdogEventHandler(_BaseEventHandler):
     def __init__(self, file_changed_event, changed_agents_set, expected_file=None):
         self.file_changed_event = file_changed_event

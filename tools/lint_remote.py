@@ -221,6 +221,7 @@ echo "sessions=$(who 2>/dev/null | wc -l)"
 """
 
 
+# [@ANCHOR: lint_remote:lint_remote_probe_class]
 @dataclasses.dataclass
 class Probe:
     name: str
@@ -276,6 +277,7 @@ def parse_probe(name, text):
 # --- transport ----------------------------------------------------------------------------------
 
 
+# [@ANCHOR: lint_remote:lint_remote_ssh_transport_class]
 class SshTransport:
     """One machine reached through ssh. Never prompts (BatchMode), never forwards agents."""
 
@@ -316,6 +318,7 @@ class SshTransport:
         return proc.wait()
 
 
+# [@ANCHOR: lint_remote:lint_remote_shell_transport_class]
 class ShellTransport:
     """A 'machine' that is a directory on this one (tests): commands run through `sh -c`."""
 
@@ -347,6 +350,7 @@ def probe_machine(name, transport):
 # --- routing ------------------------------------------------------------------------------------
 
 
+# [@ANCHOR: lint_remote:lint_remote_plan_class]
 @dataclasses.dataclass
 class Plan:
     local: list
@@ -1094,6 +1098,7 @@ def stamp_hosts_text(hosts):
     return ",".join(sorted(set(hosts)))
 
 
+# [@ANCHOR: lint_remote:lint_remote_remote_job_class]
 class RemoteJob:
     """One machine's share of a run, in a thread. After `join()`: `.status` ('ok', 'failed', 'infra'),
     `.problems`, `.seconds` (step name -> seconds) and `.names`."""

@@ -1076,3 +1076,16 @@ class Json2RedirectTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: odoo_site_migrate:odoo_site_migrate_importer_class]
+# Tests [@ANCHOR: odoo_site_migrate:odoo_site_migrate_exporter_class]
+# Tests [@ANCHOR: odoo_site_migrate:odoo_site_migrate_read_only_source_class]
+# Tests [@ANCHOR: odoo_site_migrate:odoo_site_migrate_json2_transport_class]
+# Tests [@ANCHOR: odoo_site_migrate:odoo_site_migrate_xml_rpc_transport_class]
+# Tests [@ANCHOR: odoo_site_migrate:odoo_site_migrate__throttled_transport_class]
+# Tests [@ANCHOR: odoo_site_migrate:odoo_site_migrate__uasafe_transport_class]
+# Tests [@ANCHOR: odoo_site_migrate:odoo_site_migrate__uatransport_class]
+# Tests [@ANCHOR: odoo_site_migrate:odoo_site_migrate_credentials_class]
+# Tests [@ANCHOR: odoo_site_migrate:odoo_site_migrate_migrate_error_class]
+# Tests [@ANCHOR: odoo_site_migrate:odoo_site_migrate__no_redirect_class]

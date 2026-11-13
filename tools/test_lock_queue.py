@@ -1132,3 +1132,6 @@ class TestGuardAgainstTheSharedDatabase(_TmpDirCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: lock_queue:lock_queue__interrupted_class]
