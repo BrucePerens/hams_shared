@@ -122,6 +122,11 @@ class DataStructureTests(unittest.TestCase):
             self.assertEqual(inv.find_data_structures(write(tmp, "tests/test_x.py", "class T:\n    pass\n")), [])
             self.assertEqual(inv.find_data_structures("/nonexistent/a.rs"), [])
 
+    def test_a_line_separator_inside_a_string_does_not_break_the_python_scan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            py = write(tmp, "sep.py", '"""class Doc is text, not a class."""\nS = "a\u2028b\x0cc"\n\nclass Bare:\n    pass\n')
+            self.assertEqual(inv.find_data_structures(py), [(4, "class", "Bare")])
+
     def test_scan_structures_walks_the_tree_and_prunes_build_output(self):
         with tempfile.TemporaryDirectory() as tmp:
             write(tmp, "src/a.rs", "struct Bare;\n")

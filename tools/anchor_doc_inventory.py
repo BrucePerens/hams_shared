@@ -147,15 +147,18 @@ def find_data_structures(path, root=None):
         return []
     try:
         with open(path, encoding="utf-8") as handle:
-            lines = handle.read().splitlines()
+            text = handle.read()
     except (OSError, UnicodeDecodeError):
         return []
+    # Split on "\n" only, as the Python parser counts lines: `splitlines()` also splits at form feed, U+2028 and other characters
+    # that can sit inside a string literal, which broke the re-joined text and shifted every later line number.
+    lines = text.split("\n")
     missing = []
     py_classes = None
     if suffix == ".py":
         try:
             import ast
-            py_classes = {n.lineno - 1 for n in ast.walk(ast.parse("\n".join(lines))) if isinstance(n, ast.ClassDef)}
+            py_classes = {n.lineno - 1 for n in ast.walk(ast.parse(text)) if isinstance(n, ast.ClassDef)}
         except (SyntaxError, ValueError):
             py_classes = None  # unparsable: fall back to the line scan
     for number, line in enumerate(lines):
