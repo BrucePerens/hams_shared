@@ -633,6 +633,9 @@ def _die_with_parent():
     """`preexec_fn` of the job's command: SIGTERM when the wrapper (its parent) dies, so a lost wrapper never leaves it."""
     import ctypes
     ctypes.CDLL("libc.so.6", use_errno=True).prctl(1, int(signal.SIGTERM))  # PR_SET_PDEATHSIG
+    for signum in ALLOWED_SIGNALS.values():  # the wrapper's forwarding handlers must not run in the command (holder is empty)
+        signal.signal(signum, signal.SIG_DFL)
+    signal.pthread_sigmask(signal.SIG_UNBLOCK, set(ALLOWED_SIGNALS.values()))  # held by the wrapper until Popen returned
 
 
 # [@ANCHOR: agent_procs:wrapper_main]
@@ -655,7 +658,12 @@ def wrapper_main(name, argv, directory=None, timeout=0, kill_grace=KILL_GRACE, m
     reason = None
     try:
         full = limit_argv(argv, mem_max, nice) if shutil.which(argv[0]) else list(argv)  # a missing program stays 127
-        holder[0] = subprocess.Popen(full, stdin=subprocess.DEVNULL, preexec_fn=_die_with_parent)
+        held = set(ALLOWED_SIGNALS.values())
+        signal.pthread_sigmask(signal.SIG_BLOCK, held)  # a signal during the start is delivered after it, not lost
+        try:
+            holder[0] = subprocess.Popen(full, stdin=subprocess.DEVNULL, preexec_fn=_die_with_parent)
+        finally:
+            signal.pthread_sigmask(signal.SIG_UNBLOCK, held)
         try:
             code = holder[0].wait(timeout=timeout or None)
         except subprocess.TimeoutExpired:
