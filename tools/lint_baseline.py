@@ -431,7 +431,10 @@ def refresh(repo, key, tree_name, base="origin/main", force=False, environ=None,
     import lint_batch
     environ = dict(os.environ if environ is None else environ)
     if fetch:
-        subprocess.run(["git", "-C", repo, "fetch", "-q", "origin"], capture_output=True, text=True)
+        try:
+            subprocess.run(["git", "-C", repo, "fetch", "-q", "origin"], capture_output=True, text=True, timeout=300)
+        except subprocess.TimeoutExpired:
+            out("baseline: git fetch did not answer in 300 s; using the refs already here")
     head = subprocess.run(["git", "-C", repo, "rev-parse", base], capture_output=True, text=True).stdout.strip()
     if not head:
         out("baseline: cannot resolve %s in %s" % (base, repo))

@@ -80,7 +80,7 @@ def _clone_at(source, dest, sha):
     """Detached checkout of `sha` of the repository holding `source`, in `dest`, sharing its objects (no copy of history,
     nothing registered in the source repository, so removing `dest` is just deleting the directory)."""
     top = _checked(source, "rev-parse", "--show-toplevel")
-    clone = subprocess.run(["git", "clone", "-q", "--shared", "--no-checkout", top, dest], capture_output=True, text=True)
+    clone = subprocess.run(["git", "clone", "-q", "--shared", "--no-checkout", top, dest], capture_output=True, text=True, timeout=600)
     if clone.returncode != 0:
         raise LayoutError("git clone of %s failed: %s" % (top, clone.stderr.strip()[:300]))
     _checked(dest, "checkout", "-q", "--detach", sha)

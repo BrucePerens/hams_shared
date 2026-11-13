@@ -208,7 +208,7 @@ def choose_credentials(environ, gh_authenticated, git_key=None):
                 "note": "push credentials: the authenticated gh CLI (gh auth setup-git)"}
     if git_key:
         key = check_git_key(git_key)
-        ssh_command = f"ssh -i {shlex.quote(key)} -o IdentitiesOnly=yes"
+        ssh_command = f"ssh -i {shlex.quote(key)} -o IdentitiesOnly=yes -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
         return {"method": "ssh_key", "url_format": "git@github.com:{owner}/{repo}.git", "ssh_command": ssh_command,
                 "note": f"push credentials: the SSH key {key}, set as core.sshCommand on these clones only"}
     return {"method": "read_only", "url_format": https, "ssh_command": None,

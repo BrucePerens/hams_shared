@@ -50,8 +50,18 @@ _SHELLS = ("bash", "sh", "dash", "zsh", "ksh", "fish")
 
 
 # [@ANCHOR: worktree_hygiene:git]
+# A fetch to a hung GitHub must not hang the half-hourly timer unit that runs this module.
+GIT_TIMEOUT_SECONDS = 300
+GH_TIMEOUT_SECONDS = 120
+
+
 def git(repo, *args, check=True):
-    result = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True)
+    try:
+        result = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, timeout=GIT_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        if check:
+            raise RuntimeError(f"git {' '.join(args)} in {repo}: no answer in {GIT_TIMEOUT_SECONDS} s")
+        return ""
     if check and result.returncode != 0:
         raise RuntimeError(f"git {' '.join(args)} in {repo}: {result.stderr.strip()}")
     return result.stdout.strip()
@@ -66,7 +76,10 @@ def merged_pull_request_heads(repo):
             cwd=repo,
             capture_output=True,
             text=True,
+            timeout=GH_TIMEOUT_SECONDS,
         )
+    except subprocess.TimeoutExpired:
+        return {}  # gh did not answer: the plain "no commits beyond origin/main" test applies
     except OSError:
         return {}  # gh is not installed: only the plain "no commits beyond origin/main" test applies, as the module docstring says
     if result.returncode != 0:

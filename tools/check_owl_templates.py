@@ -99,7 +99,7 @@ async def _cdp_call(ws, msg_id, method, params=None):
 async def check_templates_via_cdp(xml_file_contents, port):
     """`xml_file_contents`: list of (filepath, raw_xml_text). Returns a list of dicts:
     {filepath, template_name, ok, error} for every `[t-name]` template found across all files."""
-    targets = requests.get(f"http://localhost:{port}/json").json()
+    targets = requests.get(f"http://localhost:{port}/json", timeout=10).json()
     page = next(t for t in targets if t.get("type") == "page")
     async with websockets.connect(page["webSocketDebuggerUrl"], max_size=None) as ws:
         with open(_OWL_JS_PATH, "r", encoding="utf-8") as f:
