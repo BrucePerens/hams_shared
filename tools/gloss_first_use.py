@@ -11,7 +11,8 @@ as `TERM (expansion)`; a use that ends a parenthesis or clause inside parenthese
     gloss_first_use.py [--terms FILE] [--apply] [PATH ...]
 
 PATHs are Markdown files or directories; with none, the README, ADR, design, runbook and story files
-under the current directory (symlinks are skipped, as hams_shared docs are linked into other repos).
+under the current directory (symlinks and vendor, node_modules and third_party directories are skipped;
+hams_shared docs are linked into other repos).
 Check mode lists `path:line TERM` for every missing gloss and exits 1 if there is one.
 """
 
@@ -23,6 +24,7 @@ import sys
 
 DEFAULT_TERMS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gloss_first_use_terms.txt")
 SCOPE_DIRECTORIES = {"adrs", "design", "runbooks", "stories"}
+SKIPPED_DIRECTORIES = {"vendor", "node_modules", "third_party"}
 _MASK = "\x00"
 _INLINE_MASKS = (
     re.compile(r"`[^`\n]*`"),
@@ -139,7 +141,7 @@ def default_documents(root):
         path = os.path.join(root, name)
         parts = name.split("/")
         in_scope = os.path.basename(name).startswith("README") or SCOPE_DIRECTORIES & set(parts[:-1])
-        if in_scope and not any(
+        if in_scope and not SKIPPED_DIRECTORIES & set(parts) and not any(
                 os.path.islink(os.path.join(root, *parts[:depth])) for depth in range(1, len(parts) + 1)):
             documents.append(path)
     return documents

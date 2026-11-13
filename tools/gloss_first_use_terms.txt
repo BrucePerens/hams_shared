@@ -2,9 +2,9 @@
 CW | continuous wave, Morse code
 TLS | Transport Layer Security
 ARRL | American Radio Relay League
-STUN | Session Traversal Utilities for NAT
+STUN | Session Traversal Utilities for network address translation
 ADIF | Amateur Data Interchange Format
-TURN | Traversal Using Relays around NAT
+TURN | Traversal Using Relays around network address translation
 ICE | Interactive Connectivity Establishment
 SDR | software-defined radio
 RTP | Real-time Transport Protocol
@@ -33,7 +33,7 @@ NCS | net control station
 ICS | Incident Command System
 VFO | variable frequency oscillator, the tuning control
 QSO | two-way radio contact
-DXCC | DX Century Club award
+DXCC | Century Club award for contacts with distant countries
 FT8 | a weak-signal digital mode
 CQ | general call to any station
 RTTY | radio teletype
