@@ -52,6 +52,18 @@ class PureTests(unittest.TestCase):
         self.assertNotIn("gone.py", files)
         self.assertEqual(chk.parse_diff(""), {})
 
+    def test_parse_diff_keeps_a_removed_line_that_starts_with_two_dashes_and_a_space(self):
+        text = "diff --git a/t.sql b/t.sql\n--- a/t.sql\n+++ b/t.sql\n@@ -3,2 +3 @@\n--- repo1-cipher-pass note\n-keep\n+new\n"
+        self.assertEqual(chk.parse_diff(text), {"t.sql": [(["new"], ["-- repo1-cipher-pass note", "keep"])]})
+
+    def test_parse_diff_keeps_an_added_line_that_starts_with_two_pluses_and_a_space(self):
+        text = "diff --git a/t b/t\n--- a/t\n+++ b/t\n@@ -0,0 +1,2 @@\n+++ b/provision_y.py\n+tail\n"
+        self.assertEqual(chk.parse_diff(text), {"t": [(["++ b/provision_y.py", "tail"], [])]})
+
+    def test_parse_diff_drops_the_tab_git_adds_after_a_path_with_a_space(self):
+        text = "diff --git a/b c.py b/b c.py\n--- a/b c.py\t\n+++ b/b c.py\t\n@@ -1,0 +2 @@\n+x\n"
+        self.assertEqual(list(chk.parse_diff(text)), ["b c.py"])
+
     def test_relevant_path(self):
         for path in ("tools/provision.py", "tools/infrastructure.py", "tools/b2_backup.py", "backup_management/models/backup_config.py", "daemon_key_manager/models/key_registry.py",
                      "devbox_tools/hams1-base-backup.service", "devbox_tools/hams1_storage_backup.py", "tools/pgbackrest_setup.sh", "devbox_tools/mirror_repos_to_b2.py"):
