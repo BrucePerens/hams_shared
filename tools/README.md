@@ -3695,6 +3695,18 @@ Purpose: the `jobs` subcommand: one line per record (`name state [code=N] pid= s
 
 Arguments: `args` (with `json`, bool) and `out`. Each record's state comes from `job_state`: `running`, `exited` (the wrapper recorded an exit code, shown as `code=N`) or `lost` (the process vanished without one). The text line is `name state [code=N] pid= started= tag= cwd= cmd=`; `--json` dumps a list of the record fields plus `state`. Read-only and always `EX_OK`. Test: `test_agent_procs.py`.
 
+### `[@ANCHOR: agent_procs:orphan_reason]` `orphan_reason(info, table, min_age, now, boot)`
+
+Purpose: why one process is an orphan of an agent worktree, or `None`. Needs: older than `min_age` seconds, cwd under `AGENT_WORK_ROOT` (`/storage/agent_work`), and either the cwd is deleted (`<path> (deleted)`) or the parent is the systemd user manager. Test: `test_agent_procs.py`.
+
+### `[@ANCHOR: agent_procs:find_orphans]` `find_orphans(table, min_age=900, directory=None)`
+
+Purpose: `[(ProcInfo, reason)]` for the caller's own orphans. Skips protected processes, the caller's family, zombies, and every process in the session of a still-running recorded job (`run` jobs are children of the user manager too). Test: `test_agent_procs.py`.
+
+### `[@ANCHOR: agent_procs:cmd_reap]` `cmd_reap(args, out=sys.stdout)`
+
+Purpose: `reap [--min-age S] [--apply] [--force]`. Dry run lists the orphans; `--apply` stops each with `kill_pid` (SIGTERM, start time confirmed, hard kill only with `--force`; a refusal is printed and skipped). Origin: runaway mutation processes used 48 GB for 80 min after agents deleted their worktrees under them. Test: `test_agent_procs.py`.
+
 ### `[@ANCHOR: agent_procs:cmd_stop]` `cmd_stop(args, out=sys.stdout)`
 
 Purpose: the `stop` subcommand (`stop NAME [--grace S] [--force] [--i-am-the-owner-and-checked]`); returns `stop_job`'s code.
