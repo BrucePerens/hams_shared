@@ -23,7 +23,7 @@ sys.path.insert(0, HERE)
 
 import agent_procs  # noqa: E402
 import dispatch_ok  # noqa: E402
-import atomic_io
+import atomic_io  # noqa: E402
 
 DEFAULT_REPORTS = os.path.join(os.path.expanduser("~"), "workspace", "tmp", "reports")
 MIN_MEM_AVAILABLE_GB = 6.0  # below this the idle-fill work stops (the load display's own HOLD limit is 10 GB; this is the hard floor)
