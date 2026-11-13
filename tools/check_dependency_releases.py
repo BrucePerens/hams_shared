@@ -33,6 +33,7 @@ import urllib.request
 import check_target
 
 
+# [@ANCHOR: check_dependency_releases:check_dependency_releases__same_host_redirect_class]
 class _SameHostRedirect(urllib.request.HTTPRedirectHandler):
     """Follows a redirect only to the same https host. GitHub answers a renamed repository with a 301 to
     `api.github.com/repositories/<id>`; anywhere else the token must not follow (urllib copies every request header to the

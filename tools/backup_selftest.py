@@ -81,14 +81,17 @@ MAX_DETAIL = 200
 SOCKET_PATH_LIMIT = 90
 
 
+# [@ANCHOR: backup_selftest:backup_selftest_configuration_error_class]
 class ConfigurationError(ValueError):
     pass
 
 
+# [@ANCHOR: backup_selftest:backup_selftest_stage_failed_class]
 class StageFailed(RuntimeError):
     """A stage found a problem; the message is the (secret-free) detail on its FAIL line."""
 
 
+# [@ANCHOR: backup_selftest:backup_selftest_refused_class]
 class Refused(RuntimeError):
     """The test must not run now (load, disk): not a backup problem, so no alert; the freshness check catches a test that never runs."""
 
@@ -228,6 +231,7 @@ def cmd_record_fingerprint(cfg: dict, out) -> int:
 # Context, process running, reporting
 # ---------------------------------------------------------------------------------------------------------------------------
 
+# [@ANCHOR: backup_selftest:backup_selftest_context_class]
 class Context:
     """Shared state of one run: the config, scrubbing of secrets from tool output, and cached pgbackrest info."""
 
@@ -308,6 +312,7 @@ def last_line(text: str) -> str:
     return (lines[-1] if lines else "no output")[:MAX_DETAIL]
 
 
+# [@ANCHOR: backup_selftest:backup_selftest_report_class]
 class Report:
     """The result lines of a run; also what is written to the status file."""
 
@@ -556,6 +561,7 @@ def basebackup_manifest_size(directory: str) -> int:
         raise StageFailed("the base backup's backup_manifest is missing or unreadable") from None
 
 
+# [@ANCHOR: backup_selftest:backup_selftest_restore_state_class]
 class RestoreState:
     def __init__(self, ctx: Context):
         self.ctx = ctx

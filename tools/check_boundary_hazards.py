@@ -106,6 +106,7 @@ def _const_str(node):
     return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
 
 
+# [@ANCHOR: check_boundary_hazards:check_boundary_hazards__tree_class]
 class _Tree:
     """One parsed file with the lookups every rule needs."""
 

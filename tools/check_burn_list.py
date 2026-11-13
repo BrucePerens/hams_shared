@@ -36,6 +36,7 @@ from tree_files import tree_walk
 _ODOO_LOADING_FLAGS = ("init", "update", "stop_after_init")
 
 
+# [@ANCHOR: check_burn_list:check_burn_list_xmlnode_class]
 class XMLNode:
     def __init__(self, tag, attrs, lineno):
         self.tag = tag
@@ -60,6 +61,7 @@ class XMLNode:
         return anc
 
 
+# [@ANCHOR: check_burn_list:check_burn_list_odoo_htmlparser_class]
 class OdooHTMLParser(html.parser.HTMLParser):
     def __init__(self):
         super().__init__()
@@ -1005,6 +1007,7 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
         errors.append((e.lineno or 1, f"CRITICAL SYNTAX/INDENTATION ERROR: {e.msg}"))
         return errors, warnings
 
+    # [@ANCHOR: check_burn_list:check_burn_list_taint_visitor_class]
     class TaintVisitor(ast.NodeVisitor):
         def __init__(self, filename, lines, is_odoo_module, filepath=""):
             self.errors = []

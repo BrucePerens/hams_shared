@@ -439,3 +439,6 @@ class GithubRedirectTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: check_dependency_releases:check_dependency_releases__same_host_redirect_class]

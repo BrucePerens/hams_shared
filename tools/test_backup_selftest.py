@@ -728,3 +728,11 @@ class KopiaStageTests(_Env):
 
 if __name__ == "__main__":
     unittest.main()
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: backup_selftest:backup_selftest_restore_state_class]
+# Tests [@ANCHOR: backup_selftest:backup_selftest_report_class]
+# Tests [@ANCHOR: backup_selftest:backup_selftest_context_class]
+# Tests [@ANCHOR: backup_selftest:backup_selftest_refused_class]
+# Tests [@ANCHOR: backup_selftest:backup_selftest_stage_failed_class]
+# Tests [@ANCHOR: backup_selftest:backup_selftest_configuration_error_class]

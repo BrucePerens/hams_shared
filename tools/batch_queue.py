@@ -325,6 +325,7 @@ def read_verdicts(sdir, batch_id):
         return None
 
 
+# [@ANCHOR: batch_queue:batch_queue__interrupted_class]
 class _Interrupted(BaseException):
     pass
 

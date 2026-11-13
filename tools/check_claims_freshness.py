@@ -72,6 +72,7 @@ FIELD_RE = re.compile(r"^([a-zA-Z_]+):[ \t]*(.+?)[ \t]*$", re.MULTILINE)
 EXCLUDED_TOP_LEVEL_DIRS = {"ingest", "ics_forms", "ics_training"}
 
 
+# [@ANCHOR: check_claims_freshness:check_claims_freshness_git_listing_error_class]
 class GitListingError(RuntimeError):
     """`git ls-files` could not list the tree (not a repository, git missing, dubious ownership). Raised, never swallowed into an
     empty list: an empty list reads as "no claims, all fresh" and the gate printed SUCCESS for a tree it had not looked at."""
@@ -399,6 +400,7 @@ def _git_out(root, *args):
     return result.stdout if result.returncode == 0 else None
 
 
+# [@ANCHOR: check_claims_freshness:check_claims_freshness_freshness_context_class]
 class FreshnessContext:
     """Per-run state of the legacy-claim history check: dates of claim commits, and a persistent
     cache of verdicts (`~/.cache/hams_claims/history_verdicts.json`, or `$HAMS_CLAIM_CACHE_DIR`).

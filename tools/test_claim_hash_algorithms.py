@@ -343,3 +343,6 @@ class SpeedTests(RepoCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: check_claims_freshness:check_claims_freshness_freshness_context_class]

@@ -175,6 +175,7 @@ def terminate_group(proc, cap=DEFAULT_CAP_SECONDS, poll=DEFAULT_POLL_SECONDS, lo
     return survivors
 
 
+# [@ANCHOR: chrome_teardown:chrome_teardown_group_popen_class]
 class GroupPopen(subprocess.Popen):
     """Popen whose terminate() takes the whole process group down and waits for it (see module doc)."""
 
