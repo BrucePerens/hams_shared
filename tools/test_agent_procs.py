@@ -74,6 +74,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import agent_procs as ap  # noqa: E402
@@ -826,6 +827,12 @@ class JobTests(ProcTestCase):
             self.assertIn("hello-log", handle.read())
         with open(rec.log) as handle:
             self.assertIn("oops", handle.read())  # standard error goes to the log too
+
+    def test_start_job_refuses_a_wrapper_whose_start_time_cannot_be_read(self):
+        with mock.patch.object(ap, "read_proc", return_value=None):
+            with self.assertRaises(ap.ProcError):
+                ap.start_job("noticks", ["true"], directory=self.jobs)
+        self.assertIsNone(ap.read_record("noticks", self.jobs))
 
     def test_a_job_runs_in_its_own_session_and_group(self):
         done = cli("run", "sess", "--", "sleep", "60", env=self.env)
