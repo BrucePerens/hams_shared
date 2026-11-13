@@ -156,7 +156,7 @@ For detailed narratives and end-to-end workflows, refer to the following:
 
 One entry per anchor, written from the code in the `knowledge` module (`models/knowledge_article.py`, `controllers/main.py`, `static/src/js/manual_toc.js`) and the installer in `zero_sudo/models/ir_module_module.py`. Test anchors carry the same ids in `knowledge/tests/`; the tours are `test_tour_manual_search`, `test_tour_manual_feedback` and `test_tour_manual_toc`.
 
-### `controller_manual_feedback` [@ANCHOR: knowledge:controller_manual_feedback]
+### `controller_manual_feedback` [@ANCHOR: controller_manual_feedback]
 Purpose: record a reader's "Helpful" or "Not helpful" vote. `manual_feedback(article_id, is_helpful, website_feedback_honeypot=None, **kwargs)` on route `/manual/feedback` (POST, public, website).
 
 | Argument | Type | Meaning |
@@ -167,22 +167,22 @@ Purpose: record a reader's "Helpful" or "Not helpful" vote. `manual_feedback(art
 
 Behaviour: the redirect target is the referrer's path only (a path not starting with `/` becomes `/manual`), which prevents open redirects. A second vote on the same article in one browser session is ignored (session key `feedback_submitted_<id>`). The article is read first with the caller's own rights (`check_access("read")`); the increment is then a single SQL `UPDATE ... SET count = COALESCE(count, 0) + 1` on the cursor of the `knowledge.user_knowledge_service_account` environment, so concurrent votes cannot overwrite each other. A bad id or an access error is logged and ignored, which gives an attacker no way to probe for articles. Returns a redirect to the referrer path with `feedback_submitted=1` appended. Tests: `test_tour_manual_feedback`, `tests/test_features.py`.
 
-### `controller_manual_search` [@ANCHOR: knowledge:controller_manual_search]
+### `controller_manual_search` [@ANCHOR: controller_manual_search]
 Purpose: the search page of the manual. `manual_search(search="", **kwargs)` on route `/manual/search` (GET, public, website). It builds the Help domain (`_help_domain()`, which limits results to member user manuals the reader may see, for every reader including administrators) and, when `search` is non-empty, adds `name ilike search OR body ilike search`: a case-insensitive substring match, not a ranked index. At most 1000 articles are returned, rendered with `knowledge.search_results_template` together with the sidebar context. Returns an HTTP response; never raises for an empty search (it lists all visible articles). Record rules still apply to the search. Read-only. Tests: `test_tour_manual_search`; stories `story_manual_search`, `journey_user_browsing`.
 
-### `manual_compute_website_url` [@ANCHOR: knowledge:manual_compute_website_url]
+### `manual_compute_website_url` [@ANCHOR: manual_compute_website_url]
 Purpose: the `website_url` of an article, `/manual/<id>-<slug>`. `knowledge.article._compute_website_url()` is `@api.depends("name")` and extends the `website.published.mixin` method. For a saved record it lowercases the name, folds accents to ASCII (`unicodedata.normalize("NFKD")`), replaces every run of characters outside `a-z0-9` with `-` and strips leading and trailing dashes; an unsaved record (no id) gets `""`. No arguments, no return value (it sets the field). Only the id matters for lookup, so a rename keeps old links working through a canonical redirect in the view controller. Pure computation, no access to other records. Test: `test_manual_url_slug_generation`. See `story_manual_url_generation`.
 
-### `manual_check_hierarchy` [@ANCHOR: knowledge:manual_check_hierarchy]
+### `manual_check_hierarchy` [@ANCHOR: manual_check_hierarchy]
 Purpose: keep the article tree acyclic. `_check_hierarchy()` is an `@api.constrains("parent_id")` method that calls Odoo's `_has_cycle()` and raises `ValidationError("You cannot create recursive articles.")` when an article would become its own ancestor, which also covers setting the parent to a descendant. No arguments and no return value; it runs on create and write of `parent_id` inside the transaction, so the change is rolled back. Cost grows with tree depth. Test: `test_manual_check_hierarchy`. See `story_manual_hierarchy`.
 
-### `manual_compute_breadcrumbs` [@ANCHOR: knowledge:manual_compute_breadcrumbs]
+### `manual_compute_breadcrumbs` [@ANCHOR: manual_compute_breadcrumbs]
 Purpose: the ancestor list shown as breadcrumbs. `_compute_breadcrumb_article_ids()` (`@api.depends("parent_id")`) runs one recursive SQL CTE for all records in `self`, following `parent_id` up to 50 levels, and orders each article's ancestors from root to parent. Because raw SQL ignores the `active` flag and record rules, the ids are then re-read through an ORM `search()` so archived ancestors and ancestors the viewer may not read are dropped instead of appearing in the public page or raising an access error. Unsaved records get an empty list. Sets the field `breadcrumb_article_ids`; no return value. Tests: `test_manual_breadcrumb_archived_ancestor`, `test_manual_breadcrumb_inaccessible_ancestor`.
 
-### `manual_compute_reading_time` [@ANCHOR: knowledge:manual_compute_reading_time]
+### `manual_compute_reading_time` [@ANCHOR: manual_compute_reading_time]
 Purpose: the "N min read" label. `_compute_reading_time()` (`@api.depends("body")`) converts the HTML body to text with `html2plaintext`, counts words and sets `reading_time` (minutes, integer) to `max(1, round(words / 200))`, assuming 200 words per minute. An empty body gives `0`. No arguments, no return value, no side effects. Tests: `test_manual_reading_time`, `test_manual_ui_rendering`.
 
-### `manual_toc_logic` [@ANCHOR: knowledge:manual_toc_logic]
+### `manual_toc_logic` [@ANCHOR: manual_toc_logic]
 Purpose: build the sticky "On this page" table of contents in the browser. `ManualTOC.start()` in `static/src/js/manual_toc.js` is an Odoo `Interaction` bound to `.o_manual_body` and registered as `knowledge.ManualTOC` in `public.interactions`. It first turns a leading `h1` that repeats the page title into an `h2`; it then returns without change if `#manual_toc_container` is absent or the body has no `h2` or `h3`. Otherwise it gives each heading an id (`toc-heading-<n>` when it has none) and fills the container with a list of `#id` links, `h2` bold and `h3` indented. Vanilla JavaScript, no jQuery, no network access, runs once per page view. The text comes from `textContent`, so heading markup cannot inject HTML. Test: `test_tour_manual_toc`. See `story_manual_toc`.
 
 ### `manual_doc_auto_install` [@ANCHOR: manual_doc_auto_install]
@@ -191,10 +191,10 @@ Purpose: install each installed module's documentation as articles. The work is 
 ### `manual_doc_injection` [@ANCHOR: manual_doc_injection]
 Purpose: the contract of one `knowledge_docs` manifest entry, the way a module injects a document. Each entry is a dictionary with `name` (article title, default "<module> Documentation"), the file path, optional `public: True` or `audience: "member"`, and `help_topic` (the Help index heading). Without those the article is created with `internal_permission = 'none'`, not published, `audience = internal`. Paths in stories, journeys or runbooks directories, README files and titles starting "Story:" or "Journey:" are always internal. Markdown files are converted once to sanitized HTML (`_markdown_doc_to_html`). The article is identified by module and name, so two modules with the same title do not overwrite each other. Test: `tests/test_features.py` (`test_04_doc_installation`). See `story_manual_doc_installation`.
 
-### `manual_sidebar_search_optimization` [@ANCHOR: knowledge:manual_sidebar_search_optimization]
+### `manual_sidebar_search_optimization` [@ANCHOR: manual_sidebar_search_optimization]
 Purpose: fetch the sidebar's root articles in one query. `_get_sidebar_articles()` in `controllers/main.py` takes no arguments and builds a single combined domain: root articles (`parent_id` empty) inside the Help domain, plus, for a reader who is not a Manual Administrator, those with `internal_permission` `read` or `write`, or listing the reader in `member_ids`, or private (`none`) and created by the reader. It searches once with a limit of 5000 and splits the result in memory into shared and private articles. Returns the grouped articles for the template. It replaced three separate queries; read-only. Tests: `knowledge/tests/test_controllers.py`, `test_tour_manual_search`.
 
-### `manual_compile_markdown` [@ANCHOR: knowledge:manual_compile_markdown]
+### `manual_compile_markdown` [@ANCHOR: manual_compile_markdown]
 Purpose: show markdown typed into the editor as HTML. `_compile_markdown(html_body, article_id=None, write_date=None)` returns a `Markup` string.
 
 | Argument | Type | Meaning |
