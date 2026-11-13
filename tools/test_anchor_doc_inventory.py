@@ -57,6 +57,8 @@ class EntryShapeTests(unittest.TestCase):
         self.assertGreater(shape["words"], 25)
         self.assertEqual(inv.entry_shape("* one two three %s" % tag("m:a"))["words"], 3)  # the bullet mark is not a word
         self.assertEqual(inv.entry_shape("")["words"], 0)
+        self.assertFalse(inv.entry_shape("| a | b |\n|---|---|\n| 1 | 2 |")["empty_table"])
+        self.assertTrue(inv.entry_shape("text\n| a | b |\n|---|---|\n\nmore")["empty_table"])
 
 
 class DocEntryTests(unittest.TestCase):

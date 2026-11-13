@@ -3270,7 +3270,7 @@ Purpose: reads the opt-in list. Returns the paths (one per line, `#` comments an
 
 ### `[@ANCHOR: anchor_docs_standard:doc_findings]` `doc_findings(path, rel, min_words=40)`
 
-Purpose: the stub check for one markdown file. Uses `anchor_doc_inventory.doc_entries`; an anchor's share is the entry's words divided by the anchors the entry covers. Arguments: `path` file to read, `rel` name used in messages, `min_words` threshold (default 40). Returns a list of message strings, one per entry under the threshold. Never raises (an unreadable file has no entries).
+Purpose: the stub check for one markdown file. Uses `anchor_doc_inventory.doc_entries`; an anchor's share is the entry's words divided by the anchors the entry covers. Arguments: `path` file to read, `rel` name used in messages, `min_words` threshold (default 40). Returns a list of message strings, one per entry under the threshold and one per entry whose table has a header but no body row (the shape check of the argument and field tables, `entry_shape(...)['empty_table']`). Never raises (an unreadable file has no entries).
 
 ### `[@ANCHOR: anchor_docs_standard:source_findings]` `source_findings(path, rel, root)`
 

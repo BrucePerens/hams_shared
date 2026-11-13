@@ -63,6 +63,16 @@ class FindingTests(unittest.TestCase):
             self.assertEqual(len(other), 1)
             self.assertIn("other/b.py:1 class NotListed has no anchor", other[0])
 
+    def test_a_table_with_a_header_and_no_rows_is_a_finding_and_a_filled_table_is_not(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            empty = "### `%s`\n\n%s\n\n| Field | Meaning |\n|---|---|\n" % (tag("m:empty"), LONG)
+            filled = "### `%s`\n\n%s\n\n| Field | Meaning |\n|---|---|\n| `a` | one |\n" % (tag("m:filled"), LONG)
+            write(tmp, "mod/EMPTY.md", empty)
+            write(tmp, "mod/FILLED.md", filled)
+            findings, _ = gate.find_findings(tmp, ["mod/EMPTY.md", "mod/FILLED.md"])
+            self.assertEqual(len(findings), 1, findings)
+            self.assertIn("EMPTY.md:1 entry for m:empty has a table with a header and no rows", findings[0])
+
     def test_a_directory_does_not_check_the_markdown_inside_it(self):
         with tempfile.TemporaryDirectory() as tmp:
             write(tmp, "mod/README.md", "* %s stub\n" % tag("m:short"))
