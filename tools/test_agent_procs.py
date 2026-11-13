@@ -588,6 +588,20 @@ class WaitTests(ProcTestCase):
         self.assertEqual(ap.cmd_wait(ap.parse_args(["wait", "--file", path]), out), 0)
         self.assertIn("ready", out.getvalue())
 
+    def test_wait_job_whose_wrapper_ends_between_the_record_read_and_the_liveness_check_is_not_lost(self):
+        dead = subprocess.Popen(["true"])
+        dead.wait()  # reaped: its pid is gone
+        rec = ap.JobRecord("race", "", dead.pid, dead.pid, dead.pid, 1, "/w", ["x"], "/l", 1.0, "bruce")
+        ap.write_record(rec, self.jobs)
+        stale = ap.read_record("race", self.jobs)  # what the poll read just before the wrapper wrote its exit code
+        rec.exit_code = 0
+        ap.write_record(rec, self.jobs)
+        real = ap.read_record
+        reads = iter([real("race", self.jobs), stale])  # the existence check, then the poll's stale read
+        with mock.patch.object(ap, "read_record", side_effect=lambda *a, **k: next(reads, None) or real(*a, **k)):
+            result = ap.wait_job("race", timeout=5, interval=0.01, directory=self.jobs)
+        self.assertEqual(result.code, 0, result.message)
+
     def test_wait_job_unknown_is_a_usage_error(self):
         with self.assertRaises(ap.ProcError):
             ap.wait_job("nosuchjob", directory=self.jobs)
