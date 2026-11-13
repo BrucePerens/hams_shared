@@ -243,6 +243,11 @@ class CheckClaimsFreshnessTests(unittest.TestCase):
         self.assertEqual(fields["anchor"], "my_module:foo")
         self.assertEqual(fields["code_hash"], "sha256:abc")
 
+    def test_an_empty_field_does_not_swallow_the_next_line(self):
+        fields = ccf.parse_claim_frontmatter("---\nanchor: m:f\nretired:\ncode_hash: abc\n---\nbody\n")
+        self.assertNotIn("retired", fields)
+        self.assertEqual(fields["code_hash"], "abc")
+
 
 # Tests [@ANCHOR: COMM_claim_retirement]
 

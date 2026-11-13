@@ -57,7 +57,7 @@ from check_function_test_anchors import (  # noqa: E402
 )
 
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?\n)---\s*\n", re.DOTALL)
-FIELD_RE = re.compile(r"^([a-zA-Z_]+):\s*(.+?)\s*$", re.MULTILINE)
+FIELD_RE = re.compile(r"^([a-zA-Z_]+):[ \t]*(.+?)[ \t]*$", re.MULTILINE)
 
 # Wired into run_linters.py as a hard-blocking gate, with these three top-level directories
 # excluded for now: `ingest/`, `ics_forms/`, and `ics_training/` all have other sessions' real,
