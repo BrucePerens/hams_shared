@@ -1009,23 +1009,30 @@ def backup_tenant(spec, paths, system, keep=7):
     stamp = system.now().strftime("%Y%m%dT%H%M%SZ")
     target = os.path.join(paths.backup_dir(name), stamp)
     system.makedirs(target, 0o700, "root:root")
-    dump = os.path.join(target, "db.dump")
-    system.run_to_file(["runuser", "-u", "postgres", "--", "pg_dump", "-Fc", "-d", name], dump)
-    filestore = os.path.join(paths.data_dir(name), "filestore", name)
-    archive = os.path.join(target, "filestore.tar.gz")
-    with tarfile.open(archive, "w:gz") as tar:
-        if os.path.isdir(filestore):
-            tar.add(filestore, arcname="filestore")
-    os.chmod(archive, 0o600)
-    manifest = {
-        "tenant": name,
-        "created": stamp,
-        "files": {
-            "db.dump": {"sha256": sha256_file(dump), "bytes": os.path.getsize(dump)},
-            "filestore.tar.gz": {"sha256": sha256_file(archive), "bytes": os.path.getsize(archive)},
-        },
-    }
-    system.write_text(os.path.join(target, "MANIFEST.json"), json.dumps(manifest, indent=2) + "\n", 0o600, "root:root")
+    complete = False
+    try:
+        dump = os.path.join(target, "db.dump")
+        system.run_to_file(["runuser", "-u", "postgres", "--", "pg_dump", "-Fc", "-d", name], dump)
+        filestore = os.path.join(paths.data_dir(name), "filestore", name)
+        archive = os.path.join(target, "filestore.tar.gz")
+        with tarfile.open(archive, "w:gz") as tar:
+            if os.path.isdir(filestore):
+                tar.add(filestore, arcname="filestore")
+        os.chmod(archive, 0o600)
+        manifest = {
+            "tenant": name,
+            "created": stamp,
+            "files": {
+                "db.dump": {"sha256": sha256_file(dump), "bytes": os.path.getsize(dump)},
+                "filestore.tar.gz": {"sha256": sha256_file(archive), "bytes": os.path.getsize(archive)},
+            },
+        }
+        system.write_text(os.path.join(target, "MANIFEST.json"), json.dumps(manifest, indent=2) + "\n", 0o600, "root:root")
+        complete = True
+    finally:
+        if not complete:
+            # A half-written set would count toward `keep` and push good older sets out.
+            system.remove_tree(target)
     sets = sorted(d for d in system.listdir(paths.backup_dir(name)) if re.match(r"^\d{8}T\d{6}Z\Z", d))
     for old in sets[:-keep] if keep > 0 else []:
         system.remove_tree(os.path.join(paths.backup_dir(name), old))
