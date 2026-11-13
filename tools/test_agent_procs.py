@@ -1004,12 +1004,32 @@ class JobTests(ProcTestCase):
     def test_wrapper_forwards_quit_and_usr1_to_the_command(self):
         for name in ("QUIT", "USR1"):
             job = "fw" + name
-            cli("run", job, "--", "sleep", "60", env=self.env)
+            ready = os.path.join(self.tmp, "ready-" + name)
+            cli("run", job, "--", "sh", "-c", f"touch {ready}; exec sleep 60", env=self.env)
             rec = ap.read_record(job, self.jobs)
-            self.until(lambda: pathlib.Path(f"/proc/{rec.pid}/task/{rec.pid}/children").read_text().strip())  # command runs
+            self.until(lambda: os.path.exists(ready), 60)  # the command is running (the wrapper had started it)
             ap.signal_same_process(rec.pid, rec.start_ticks, ap.ALLOWED_SIGNALS[name])
-            self.until(lambda: ap.read_record(job, self.jobs).exit_code is not None)
+            self.until(lambda: ap.read_record(job, self.jobs).exit_code is not None, 30)
             self.assertEqual(ap.read_record(job, self.jobs).exit_code, 128 + int(ap.ALLOWED_SIGNALS[name]))
+
+    def test_wrapper_holds_a_signal_that_arrives_while_the_command_is_starting(self):
+        """Tests [@ANCHOR: agent_procs:wrapper_main] and [@ANCHOR: agent_procs:forward_signal]: a signal sent to the wrapper
+        between the fork and the exec of the command (slowed here by a sleep in the start hook) still reaches the command."""
+        started = os.path.join(self.tmp, "starting")
+        script = (
+            "import sys, time, pathlib, agent_procs as ap\n"
+            "orig = ap._die_with_parent\n"
+            f"def slow():\n    pathlib.Path({started!r}).touch()\n    time.sleep(1)\n    orig()\n"
+            "ap._die_with_parent = slow\n"
+            "sys.exit(ap.wrapper_main('early', ['sleep', '60'], None))\n")
+        wrapper = subprocess.Popen([sys.executable, "-c", script], cwd=os.path.dirname(TOOL), stdin=subprocess.PIPE, text=True,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        self.spawned.append(wrapper)
+        wrapper.stdin.write("go\n")
+        wrapper.stdin.flush()
+        self.until(lambda: os.path.exists(started), 30)
+        wrapper.send_signal(signal.SIGUSR1)
+        self.assertEqual(wrapper.wait(timeout=30), 128 + int(signal.SIGUSR1))
 
     def test_wrapper_main_refuses_to_run_without_the_go_line(self):
         code = subprocess.run([sys.executable, TOOL, "_wrap", "never", "--", "touch", os.path.join(self.tmp, "ran")],
