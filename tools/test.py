@@ -51,6 +51,7 @@ if "--mcp" in sys.argv:
 import host_requirements
 import infrastructure
 import bisect_modules
+import check_burn_list
 import gate_snapshot
 import hang_guard
 import known_red
@@ -1925,7 +1926,7 @@ def check_linters(
                 burn_target,
                 "--ignore-file",
                 ignore_filepath,
-                "--scan-daemons-and-tools",
+                *check_burn_list.MODULE_SCAN_FLAGS,
             ],
             capture_output=True,
             text=True,
