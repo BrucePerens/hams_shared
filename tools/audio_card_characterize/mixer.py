@@ -10,6 +10,7 @@ def _run(args: list[str]) -> str:
     return subprocess.run(args, check=True, capture_output=True, text=True).stdout
 
 
+# [@ANCHOR: mixer:mixer_control_class]
 class Control:
     def __init__(self, numid: int, name: str, ctype: str, vmin: int | None, vmax: int | None,
                  db_min: float | None, db_max: float | None, values: list[str]):
@@ -27,6 +28,7 @@ class Control:
         return int(round(self.vmin + frac * (self.vmax - self.vmin)))
 
 
+# [@ANCHOR: mixer:mixer_mixer_class]
 class Mixer:
     def __init__(self, card: str):
         self.card = card

@@ -224,3 +224,39 @@ class SimulatedCardTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BackendAndMixerWrapperTests(unittest.TestCase):
+    def test_alsa_backend_forwards_to_run_duplex_with_its_settings(self):
+        seen = {}
+        original = alsa_pcm.run_duplex
+        alsa_pcm.run_duplex = lambda device, stimulus, **kw: seen.update(device=device, kw=kw) or "result"
+        try:
+            self.assertEqual(measure.AlsaBackend("hw:9,0", rate=44100, fmt="S16_LE").duplex("stim", period=256), "result")
+        finally:
+            alsa_pcm.run_duplex = original
+        self.assertEqual(seen["device"], "hw:9,0")
+        self.assertEqual(seen["kw"], {"rate": 44100, "fmt": "S16_LE", "period": 256})
+
+    def test_mixer_parses_amixer_contents_into_controls(self):
+        import mixer as mixer_module
+        text = ("numid=8,iface=MIXER,name='Speaker Playback Volume'\n  ; type=INTEGER,access=rw---R--,values=2,min=0,max=88,step=0\n"
+                "  : values=88,88\n  | dBminmax-min=-44.00dB,max=0.00dB\n")
+        original = mixer_module._run
+        mixer_module._run = lambda argv: text
+        try:
+            control = mixer_module.Mixer("0").controls()["Speaker Playback Volume"]
+        finally:
+            mixer_module._run = original
+        self.assertEqual((control.numid, control.vmin, control.vmax, control.values), (8, 0, 88, ["88", "88"]))
+        self.assertEqual(control.db_at(88), 0.0)
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: alsa_pcm:alsa_pcm__pcm_class]
+# Tests [@ANCHOR: alsa_pcm:alsa_pcm_duplex_result_class]
+# Tests [@ANCHOR: measure:measure_rig_class]
+# Tests [@ANCHOR: measure:measure_alsa_backend_class]
+# Tests [@ANCHOR: mixer:mixer_mixer_class]
+# Tests [@ANCHOR: mixer:mixer_control_class]
+# Tests [@ANCHOR: sim:sim_sim_backend_class]
+# Tests [@ANCHOR: sim:sim_sim_mixer_class]

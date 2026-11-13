@@ -12,6 +12,7 @@ from alsa_pcm import DuplexResult
 from mixer import Control
 
 
+# [@ANCHOR: sim:sim_sim_mixer_class]
 class SimMixer:
     def __init__(self):
         self.ctls = {
@@ -39,6 +40,7 @@ class SimMixer:
             self.set(numid, val.split(","))
 
 
+# [@ANCHOR: sim:sim_sim_backend_class]
 class SimBackend:
     def __init__(self, mixer: SimMixer, cable_db=6.0, dac_clip=1.0, adc_clip=1.0, k3=0.0, noise_dbfs=-90.0,
                  dc=0.0, delay=480, ppm=0.0, seed=1):

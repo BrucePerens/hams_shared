@@ -57,6 +57,7 @@ def decode(raw: bytes, fmt: str, channels: int = 2) -> np.ndarray:
     return (v.astype(np.float64) / 8388608.0).reshape(-1, channels)
 
 
+# [@ANCHOR: alsa_pcm:alsa_pcm_duplex_result_class]
 @dataclass
 class DuplexResult:
     capture: np.ndarray                 # (frames, 2) float
@@ -76,6 +77,7 @@ class DuplexResult:
     write_delay: list = field(default_factory=list)      # snd_pcm_delay() (frames to the DAC) just before each write
 
 
+# [@ANCHOR: alsa_pcm:alsa_pcm__pcm_class]
 class _Pcm:
     def __init__(self, lib, device: str, stream: int, rate: int, fmt: str, channels: int, period: int, nperiods: int):
         self.lib, self.fmt, self.channels = lib, fmt, channels
