@@ -811,6 +811,9 @@ def wait_job(name, timeout=DEFAULT_WAIT_TIMEOUT, interval=POLL_INTERVAL, sleep=t
         if rec is None:
             return WaitResult(EX_FAILED, f"the record of job {name} disappeared while waiting (removed, or unreadable)")
         state = job_state(rec)
+        if state == "lost":  # the wrapper may have written its exit code and ended between our read and the liveness check
+            rec = read_record(name, directory) or rec
+            state = job_state(rec)
         if state == "exited":
             return WaitResult(EX_OK if rec.exit_code == 0 else EX_FAILED, f"job {name} exited with code {rec.exit_code}")
         if state == "lost":
