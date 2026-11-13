@@ -15,6 +15,7 @@ use std::borrow::Cow;
 /// Python's `io.TextIOWrapper._CHUNK_SIZE`.
 pub const CHUNK: usize = 8192;
 
+// [@ANCHOR: hams_lint:text_decode_error_struct]
 /// A decoding failure, described the way Python's `UnicodeDecodeError` prints it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecodeError {
@@ -58,6 +59,7 @@ fn decode_error(bytes: &[u8], e: &std::str::Utf8Error, chunk_start: usize) -> De
     DecodeError { offset: p, message }
 }
 
+// [@ANCHOR: hams_lint:text_py_line_type]
 /// One line as Python's universal-newline iteration yields it: the text plus a trailing `\n` when the
 /// line had any terminator.
 pub type PyLine<'a> = Cow<'a, str>;
@@ -206,6 +208,8 @@ pub fn py_ext(name: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Tests [@ANCHOR: hams_lint:text_decode_error_struct]
+    // Tests [@ANCHOR: hams_lint:text_py_line_type]
 
     #[test]
     fn universal_newlines_translate_and_number_like_python() {

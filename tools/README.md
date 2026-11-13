@@ -5927,7 +5927,7 @@ Every class of the tools that is not a function, with its fields, who creates it
 **Purpose.** The snapshot cannot be built or trusted; the message names the cause.
 **Definition.** `class SnapshotError(RuntimeError)` in `tools/gate_snapshot.py`.
 
-**Notes.** Parent of `SnapshotBehind`. The caller prints the message and stops the gate; nothing is half-published.
+**Notes.** Parent of `SnapshotBehind`. The caller prints the message and stops the gate; nothing is half-published. It has no fields beyond the message and is raised from the module's git helper and from the refusal to run on hams1.
 
 ### `Trees` [@ANCHOR: gate_snapshot:gate_snapshot_trees_class]
 
@@ -6015,7 +6015,7 @@ Every class of the tools that is not a function, with its fields, who creates it
 **Purpose.** The comparison could not be made (exit 2).
 **Definition.** `class NotCompared(Exception)` in `tools/lint_engine_parity.py`.
 
-**Notes.** The parity run reports it as "not compared" instead of as a mismatch, since there is nothing to compare.
+**Notes.** The parity run reports it as "not compared" instead of as a mismatch, since there is nothing to compare. It is raised before any process is started for the comparison, so no output of either side exists to be judged.
 
 ### `Runner` [@ANCHOR: lint_engine_parity:lint_engine_parity_runner_class]
 
@@ -6730,7 +6730,7 @@ Every class of the tools that is not a function, with its fields, who creates it
 **Purpose.** Base class for provisioning-cache failures.
 **Definition.** `class CacheError(Exception)` in `tools/provision_cache.py`.
 
-**Notes.** Catch it to handle both `HashRejected` and `Unavailable`; the provisioning code usually lets it stop the run with its message.
+**Notes.** Catch it to handle both `HashRejected` and `Unavailable`; the provisioning code usually lets it stop the run with its message. It is never raised by itself, only through its two subclasses, and it carries no fields.
 
 ### `HashRejected` [@ANCHOR: provision_cache:provision_cache_hash_rejected_class]
 
@@ -6744,7 +6744,7 @@ Every class of the tools that is not a function, with its fields, who creates it
 **Purpose.** The network failed and there is no cached copy to fall back to.
 **Definition.** `class Unavailable(CacheError)` in `tools/provision_cache.py`.
 
-**Notes.** Subclass of `CacheError`; the message has the URL and the network error.
+**Notes.** Subclass of `CacheError`; the message has the URL and the network error. Raised only on the path where the fetch failed and the cache has no entry for that URL, so it never hides a usable cached copy.
 
 ### `Result` [@ANCHOR: provision_cache:provision_cache_result_class]
 
@@ -7120,7 +7120,7 @@ Every class of the tools that is not a function, with its fields, who creates it
 **Purpose.** A tenant spec is invalid. Raised, never papered over (fail fast).
 **Definition.** `class SpecError(ValueError)` in `tools/tenant_lib.py`.
 
-**Notes.** The command line prints the message and exits non-zero before anything on the system is changed.
+**Notes.** The command line prints the message and exits non-zero before anything on the system is changed. It is a plain ValueError subclass with no fields; the message quotes the offending value so the spec file can be corrected.
 
 ### `Paths` [@ANCHOR: tenant_lib:tenant_lib_paths_class]
 
@@ -7341,3 +7341,274 @@ Every class of the tools that is not a function, with its fields, who creates it
 
 **Notes.** `find(relative)` returns (real path, candidate) or None, also looking in multisite `sites/<n>/` subdirectories. `resolve(url_path, referrer)` returns the new relative URL of an upload or None when the snapshot has no such file, creating the attachment on first use. Reads files under the given directories only.
 
+
+### `Cache` [@ANCHOR: hams_lint:cache_cache_struct]
+
+**Purpose.** The result cache of the `hams_lint` engine (`tools/hams_lint/src/cache.rs`): per root, a map from (check fingerprint, path relative to the root, SHA-256 of the file's bytes) to that check's `FileResult` for that file. A file whose bytes did not change is not evaluated again; a changed rule definition or engine version changes the fingerprint and so misses.
+**Definition.** `pub struct Cache { path: PathBuf, old: HashMap<String, FileResult>, used: Mutex<HashMap<String, FileResult>>, pub hits: AtomicUsize }`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `path` | `PathBuf` | The JSON file of this root, `<dir>/<first 24 hex digits of the SHA-256 of the canonical root path>.json`, under `~/.cache/hams-lint/engine/` by default (`XDG_CACHE_HOME` honoured). |
+| `old` | `HashMap<String, FileResult>` | Entries read from `path` when the cache was opened; empty when the file is missing or does not parse. Read only. |
+| `used` | `Mutex<HashMap<String, FileResult>>` | The entries this run hit or added; the only ones `save` writes, so the file never grows past one tree's worth. |
+| `hits` | `AtomicUsize` | Number of `get` calls answered from `old`, for the statistics line. |
+
+**Notes.** Key text is `fingerprint<TAB>rel<TAB>sha`. `open(dir, root)` never fails; `get(fingerprint, rel, sha)` returns a clone and records the entry as used; `put(...)` adds one; `save()` writes `used` to a temporary file named after the process id and renames it over the old file, ignoring write errors, because a cache that cannot be written only costs time. `get` and `put` take the lock briefly and may be called from the worker threads.
+
+### `RootFiles` [@ANCHOR: hams_lint:files_root_files_struct]
+
+**Purpose.** The candidate files of one root of a checkout, listed once and then filtered per check (`tools/hams_lint/src/files.rs`, the Rust twin of `tools/tree_files.py`). In a git work tree the list comes from `git ls-files --cached --recurse-submodules`, plus untracked files for checks that ask for them; outside git the directory is walked like `os.walk`.
+**Definition.** `pub struct RootFiles { pub root: PathBuf, pub git: bool, pub tracked: Vec<String>, pub untracked: Vec<String> }`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `root` | `PathBuf` | The root directory that was listed. |
+| `git` | `bool` | True when git listed the files; false when the directory was walked. |
+| `tracked` | `Vec<String>` | Tracked (or walked) files, relative to the root with `/` separators; paths that no longer exist, or are directories (a symlink to one, a submodule), are dropped. |
+| `untracked` | `Vec<String>` | Untracked, not ignored files, only with `want_untracked` and only in git; empty otherwise. |
+
+**Notes.** Created by `RootFiles::list(root, want_untracked)`, which runs `git` as a subprocess (once per root, not once per check) and then only read; `candidates(untracked)` iterates the files a check may look at. A directory that holds its own `.git` is another checkout and is skipped when walking.
+
+### `Evaluated` [@ANCHOR: hams_lint:main_evaluated_type]
+
+**Purpose.** Type alias in `tools/hams_lint/src/main.rs` for what the worker threads of `scan_root` produce for one file: the file's relative path, a list of results, and the number of bytes read.
+**Definition.** `type Evaluated<'a> = (&'a str, Vec<(usize, FileResult)>, usize);`.
+
+| Part | Type | Meaning |
+|---|---|---|
+| 0 | `&str` | Path of the file relative to the root, borrowed from the listing. |
+| 1 | `Vec<(usize, FileResult)>` | One pair per check that wanted this file: the index of the check in the run's check list and its result for the file. |
+| 2 | `usize` | Bytes read from the file (the file is read once for all checks), added to `Stats::bytes_read`. |
+
+**Notes.** Built in parallel with rayon and then folded into `RootResult` values in the order of each check's file list. Never stored or serialized.
+
+### `RootResult` [@ANCHOR: hams_lint:main_root_result_struct]
+
+**Purpose.** One check's results under one root, in the check's report order, as produced by `scan_root` and consumed by the report functions (`report`, `json_escape_results`, `lines_empty_guard`).
+**Definition.** `struct RootResult { root: PathBuf, scanned: usize, files: Vec<(String, FileResult)> }`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `root` | `PathBuf` | The root the check was run on. |
+| `scanned` | `usize` | Number of files the check selected, which `require_scanned` compares with zero. |
+| `files` | `Vec<(String, FileResult)>` | Relative path and result of each selected file, in the check's order (tree-walk or sorted). |
+
+**Notes.** Private to the binary; one per check and root; only read after it is built.
+
+### `Stats` [@ANCHOR: hams_lint:main_stats_struct]
+
+**Purpose.** Counters of one engine run, filled in by `scan_root` and reported in the JSON output of the scan command (`files_read`, `bytes_read`, `walked_roots` and the seconds spent listing and in total) so the cost of a lint run can be seen.
+**Definition.** `struct Stats { walked_roots: usize, files_read: usize, bytes_read: usize, list_seconds: f64 }`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `walked_roots` | `usize` | Roots that were walked because they are not in git. |
+| `files_read` | `usize` | Files read (each at most once per run, whatever the number of checks). |
+| `bytes_read` | `usize` | Total bytes of those files. |
+| `list_seconds` | `f64` | Seconds spent listing files (git or walk). |
+
+**Notes.** Created with zeros by `cmd_check`, `cmd_scan` and `cmd_selftest`, passed as `&mut` to `scan_root` and only added to; single-threaded access.
+
+### `RuleFile` [@ANCHOR: hams_lint:rules_rule_file_struct]
+
+**Purpose.** The whole rule file `tools/hams_lint/rules/checks.toml`, as parsed by serde in `tools/hams_lint/src/rules.rs`. Unknown keys are refused (`deny_unknown_fields`), so a misspelled key is an error and not a silently ignored rule.
+**Definition.** `pub struct RuleFile { pub version: u32, #[serde(rename = "check", default)] pub checks: Vec<CheckSpec> }`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `version` | `u32` | Schema version of the rule file; only 1 is supported, anything else makes `load` fail. |
+| `checks` | `Vec<CheckSpec>` | The `[[check]]` tables in file order; empty when there are none. |
+
+**Notes.** `rules::load(text)` parses it, compiles every check into a `Check` and returns an error text naming the check on any problem. Read once at start.
+
+### `CheckSpec` [@ANCHOR: hams_lint:rules_check_spec_struct]
+
+**Purpose.** One `[[check]]` table of the rule file: the declarative description of a lint checker that replaces a Python one. It says which files to read, how, which line rules or named algorithm to apply and how the result is reported. Unknown keys are refused.
+**Definition.** `pub struct CheckSpec { name, legacy, roots, report, header, usage, what, order, scanned_check, files, read, on_error, cacheable, algorithm, skip_file_if, rules, examples, inject }`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `name` | `String` | The lint step name; pass stamps and `run_linters.py` know the check by it. |
+| `legacy` | `String` | The Python checker this rule set replaces; the parity harness runs it as the reference. |
+| `roots` | `String` | How command-line roots are taken: `single` (first argument only), `multi` (every argument, duplicates dropped) or `multi_shared_parent` (a directory named hams_shared stands for its parent). |
+| `report` | `String` | `list` (a header line, then `  - rel:line message`) or `inline` (`rel:line: message` with the root prefixed when several roots are given). |
+| `header` | `String` | Header text of the `list` report; default empty. |
+| `usage` | `String` | Usage line printed for a missing argument. |
+| `what` | `String` | What `require_scanned` says the checker reads, such as "Python files". |
+| `order` | `String` | `walk` (files of a directory before its subdirectories) or `path` (sorted paths); default `path`. |
+| `scanned_check` | `String` | `before` (the count is checked first) or `after`; default `after`. |
+| `files` | `FileSpec` | Which files the check reads. |
+| `read` | `String` | `lines_strict` (Python line iteration, utf-8, partial on a decode error) or `text_replace` (whole text, invalid bytes replaced, `splitlines()` numbering). |
+| `on_error` | `String` | On a read error: `warn` prints `Warning: could not read PATH: ERROR`, `silent` does not; default `warn`. |
+| `cacheable` | `bool` | Cache results by file content; worth it only for an expensive algorithm; default false. |
+| `algorithm` | `String` | Name of a Rust algorithm in `algos.rs` used instead of the line rules; default empty. |
+| `skip_file_if` | `String` | Regex; a file where it matches anywhere in the text is clean. |
+| `rules` | `Vec<LineRuleSpec>` | The `[[check.rule]]` line rules. |
+| `examples` | `Vec<Example>` | The `[[check.example]]` injected cases, run by the parity harness and by `hams_lint selftest`. |
+| `inject` | `Vec<String>` | Lines the parity harness appends to real files to inject a violation; read by `lint_engine_parity.py`, not by the engine. |
+
+**Notes.** Compiled by `load` into a `Check`; the regular expressions are compiled there, and `load` refuses an invalid one, an unknown `algorithm`, and a check with neither an algorithm nor a rule, naming the check. Not changed after loading.
+
+### `FileSpec` [@ANCHOR: hams_lint:rules_file_spec_struct]
+
+**Purpose.** The `files` table of a check: the filters that choose which files of the root the check reads. It mirrors the walk and filter code of the Python checkers it replaces.
+**Definition.** `pub struct FileSpec { suffixes, skip_dirs, skip_hidden_dirs, skip_rel_dirs, untracked, exts, names, keep_dotless, accept_any, skip_names, skip_broken_links }`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `suffixes` | `Vec<String>` | File-name endings to keep; an empty string keeps every file. Required. |
+| `skip_dirs` | `Vec<String>` | Directory names never entered; default empty. |
+| `skip_hidden_dirs` | `bool` | Skip directories whose name starts with a dot; default false. |
+| `skip_rel_dirs` | `Vec<String>` | Path prefixes relative to the root, `/`-separated without a trailing slash, never scanned. |
+| `untracked` | `bool` | Also consider untracked, not ignored files (git only); default false. |
+| `exts` | `Vec<String>` | Extensions (as `os.path.splitext` gives them) to keep after the suffix filter; empty keeps all. |
+| `names` | `Vec<String>` | File names kept regardless of `exts`. |
+| `keep_dotless` | `bool` | Keep a file whose name has no dot even if `exts` does not list the empty extension. |
+| `accept_any` | `Vec<String>` | Regexes on the relative path; a file is kept when any matches; empty keeps all. |
+| `skip_names` | `Vec<String>` | File names never scanned, exact or with one `*` (`prefix*suffix`). |
+| `skip_broken_links` | `bool` | A broken symlink is skipped before counting instead of failing to read. |
+
+**Notes.** Every field except `suffixes` has a default, so rule files stay short. Read by `selected(check, listing)` in `main.rs`.
+
+### `LineRuleSpec` [@ANCHOR: hams_lint:rules_line_rule_spec_struct]
+
+**Purpose.** One `[[check.rule]]`: a pattern searched in every line of every selected file, with the message reported for a hit.
+**Definition.** `pub struct LineRuleSpec { id, regex, literal, legacy_regex, unless_line, message, post_filter }`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | `String` | Name of the rule, for messages and the parity harness. |
+| `regex` | `String` | Regex (Rust `regex` syntax) searched in each line. |
+| `literal` | `String` | A plain substring to search instead of a regex. |
+| `legacy_regex` | `String` | The Python pattern this replaces, when the Rust form differs; documentation, read by `tools/lint_engine_parity.py` and not by the engine. |
+| `unless_line` | `String` | The line is exempt when this regex matches it. |
+| `message` | `String` | Text reported; `{1}` to `{9}` stand for the regex's capture groups. |
+| `post_filter` | `String` | Name of an `algos.rs` function that may drop a hit a pattern cannot express. |
+
+**Notes.** Compiled into a `LineRule`. `load` refuses a rule that has both or neither of `regex` and `literal`, an unknown `post_filter`, and an invalid regex, each with the check and rule named.
+
+### `Example` [@ANCHOR: hams_lint:rules_example_struct]
+
+**Purpose.** One `[[check.example]]`: an injected test case for a check, a file with known content and the lines the check must report for it.
+**Definition.** `pub struct Example { pub path: String, pub content: String, pub lines: Vec<usize> }`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `path` | `String` | File path relative to a scratch root, which decides whether the check's file filters select it. |
+| `content` | `String` | The file text. |
+| `lines` | `Vec<usize>` | The 1-based line numbers the check must report, in order; empty for a clean file. |
+
+**Notes.** Written to a temporary directory and scanned by `hams_lint selftest`; the parity harness also runs it through the Python checker. A mismatch prints `FAIL <check> example <n>`.
+
+### `Finding` [@ANCHOR: hams_lint:rules_finding_struct]
+
+**Purpose.** One finding of a check: the line and the message.
+**Definition.** `pub struct Finding { pub line: usize, pub message: String }`, serializable with serde.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `line` | `usize` | 1-based line number in the file. |
+| `message` | `String` | The text to report, already with capture groups filled in. |
+
+**Notes.** Stored in the result cache; its serialized form is part of what the cache holds, and the fingerprint changes with `ENGINE_VERSION`. Compared for equality by tests and the parity harness.
+
+### `FileResult` [@ANCHOR: hams_lint:rules_file_result_struct]
+
+**Purpose.** What one check concluded about one file: its findings and, when the file could not be read, the warning text.
+**Definition.** `pub struct FileResult { pub findings: Vec<Finding>, pub warning: Option<String> }`, with `Default`, serde and equality.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `findings` | `Vec<Finding>` | Findings in line order; empty for a clean file. |
+| `warning` | `Option<String>` | A read or decode problem already formatted (`Warning: could not read ...`) when `on_error` is `warn`, otherwise `None`. |
+
+**Notes.** Cached by content in the `Cache` and printed by the report functions. Not the same type as the `FileResult` of `rust_function_scan`.
+
+### `LineRule` [@ANCHOR: hams_lint:rules_line_rule_struct]
+
+**Purpose.** A `LineRuleSpec` with its regular expressions compiled, ready to be applied to lines.
+**Definition.** `pub struct LineRule { pub spec: LineRuleSpec, regex: Option<Regex>, unless: Option<Regex> }`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `spec` | `LineRuleSpec` | The rule as written in the file. |
+| `regex` | `Option<Regex>` | Compiled `regex`, `None` when the rule uses `literal`. |
+| `unless` | `Option<Regex>` | Compiled `unless_line`, `None` when empty. |
+
+**Notes.** Built by `load`; immutable and shared between worker threads.
+
+### `Check` [@ANCHOR: hams_lint:rules_check_struct]
+
+**Purpose.** A compiled check: its `CheckSpec`, the regexes compiled, its line rules and a fingerprint that changes whenever the rule definition or the engine version changes, so cached results never outlive the rules that made them.
+**Definition.** `pub struct Check { pub spec: CheckSpec, pub fingerprint: String, accept_any: Vec<Regex>, skip_file_if: Option<Regex>, pub rules: Vec<LineRule> }`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `spec` | `CheckSpec` | The check as written in the file. |
+| `fingerprint` | `String` | Hex SHA-256 over `ENGINE_VERSION` and the Debug text of the `CheckSpec`; part of every cache key. |
+| `accept_any` | `Vec<Regex>` | Compiled path filters of `files.accept_any`. |
+| `skip_file_if` | `Option<Regex>` | Compiled `skip_file_if`, `None` when empty. |
+| `rules` | `Vec<LineRule>` | The compiled line rules in file order. |
+
+**Notes.** Built by `rules::load` and then shared read-only by all threads. `ENGINE_VERSION` is the crate version, so a new release of the engine also invalidates cached results.
+
+### `DecodeError` [@ANCHOR: hams_lint:text_decode_error_struct]
+
+**Purpose.** A decoding failure described the way Python's `UnicodeDecodeError` prints it, so the warning text of the engine equals the Python checker's (`tools/hams_lint/src/text.rs`).
+**Definition.** `pub struct DecodeError { pub offset: usize, pub message: String }`, with `Debug`, `Clone` and equality.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `offset` | `usize` | Byte offset of the first undecodable byte in the file. |
+| `message` | `String` | The text Python would print, for example the invalid start byte and its position. |
+
+**Notes.** Returned with the lines that precede the failing chunk: lines are kept only when they lie wholly in earlier 8192-byte chunks (`CHUNK`), because Python's text reader decodes by chunk. Created by `strict_lines`, then read.
+
+### `PyLine` [@ANCHOR: hams_lint:text_py_line_type]
+
+**Purpose.** Type alias for one line as Python's universal-newline iteration yields it: the text plus a trailing newline when the line had any terminator.
+**Definition.** `pub type PyLine<'a> = Cow<'a, str>;`.
+
+| Part | Type | Meaning |
+|---|---|---|
+| value | `Cow<'a, str>` | The line, borrowed from the decoded text when it needs no change and owned when a `\r\n` or `\r` terminator was translated to `\n`. |
+
+**Notes.** Produced by `universal_lines` and `strict_lines`; a final unterminated line has no newline. Used so line numbers and text equal what the Python checkers see.
+
+### `FunctionEntry` [@ANCHOR: rust_function_scan:main_function_entry_struct]
+
+**Purpose.** One function found by the `rust_function_scan` tool (`tools/rust_function_scan/src/main.rs`), as printed in its JSON output for the Python anchor checks: where the function is and whether it is trivial enough to need no anchor.
+**Definition.** `struct FunctionEntry { name: String, start: usize, end: usize, is_trivial: bool }`, derived `Serialize`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `name` | `String` | Function name qualified with its enclosing module or impl prefix (`qualify`). |
+| `start` | `usize` | First line of the function (1-based). |
+| `end` | `usize` | Last line of the function. |
+| `is_trivial` | `bool` | True when the body has no control-flow expression anywhere and at most two real statements (an `assert!` family macro statement does not count); the rule of Bruce's answer on small helpers, so such a function is exempt from the anchor requirement. |
+
+**Notes.** Created while walking the syntax tree with `syn`; test-only functions and `#[cfg(test)]` modules are skipped. Serialized to JSON by `serde`.
+
+### `Finder` [@ANCHOR: rust_function_scan:main_finder_struct]
+
+**Purpose.** Tiny visitor declared inside `expr_has_control_flow` of `rust_function_scan`: it walks an expression tree and remembers whether any `if`, `match`, `for`, `while` or `loop` occurs at any depth.
+**Definition.** `struct Finder(bool)`, implementing `syn::visit::Visit`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `0` | `bool` | Starts false; set true by `visit_expr` when a control-flow expression is met. |
+
+**Notes.** Exists only for one call of the function, which returns the flag. The visit recurses into sub-expressions, so `a + if x { 1 } else { 2 }` counts as having control flow.
+
+### `FileResult` [@ANCHOR: rust_function_scan:main_file_result_struct]
+
+**Purpose.** The scan result of one source file in `rust_function_scan`: the file name and its functions, the object printed in the JSON output.
+**Definition.** `struct FileResult { file: String, functions: Vec<FunctionEntry> }`, derived `Serialize`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `file` | `String` | Path of the scanned file as given on the command line. |
+| `functions` | `Vec<FunctionEntry>` | The functions of the file in source order. |
+
+**Notes.** Not the same type as `FileResult` in hams_lint. Created per file and serialized once.
