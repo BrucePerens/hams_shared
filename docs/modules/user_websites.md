@@ -505,7 +505,7 @@ The blog index route `/<slug>/blog`, handled by `user_blog_index` (anchor `user_
 
 The "Create Your Blog" action, a POST to `/<slug>/create_blog` handled by `create_blog` (`user_websites:COMM_create_blog`), after which the browser lands on `/<slug>/blog`. The id is the user-experience name used by the stories and journeys. Tests: `create_blog_tour` and `test_08_group_inverse_relationships` in `tests/test_lifecycle_and_groups.py`, which creates a group page.
 
-### `controller_user_websites_documentation` [@ANCHOR: controller_user_websites_documentation]
+### `controller_user_websites_documentation` [@ANCHOR: user_websites:documentation]
 
 The documentation route `GET /user-websites/documentation`, login required, handled by `documentation` in `controllers/main.py` (code anchor `user_websites:COMM_documentation`). It searches `knowledge.article` for a name like "User Websites Documentation" as the current user, so the article's own access rules apply, and redirects to its website URL. If none exists it renders the `documentation_page` fallback template. No code or test carries this id itself, so the test is `test_documentation_route`.
 
@@ -561,7 +561,7 @@ The group counterpart of `slug_cache_invalidation`: writing `website_slug` (or `
 
 Deleting a `user.websites.group` evicts its slug from the slug cache through `edge.routing.mixin.unlink()`, as for users (see `slug_cache_invalidation_unlink`). The slugs are read before the delete and the invalidation is sent after it, and a failed notification is logged, not raised. Tested by `test_05_bdd_ormcache_query_counting_group_slugs` in `tests/test_audit_edge_cases.py`.
 
-### `utils_slugify` [@ANCHOR: utils_slugify]
+### `utils_slugify` [@ANCHOR: edge_routing:utils_slugify]
 
 `slugify(s, max_length=None)` in `edge_routing/utils.py` (code anchor `edge_routing:utils_slugify`, test `test_utils_slugify`). It lower-cases and strips the text, folds accents to ASCII (NFKD, dropping what cannot be folded), replaces every run of characters outside `a-z0-9` with a single hyphen and trims hyphens at both ends. A falsy input gives `""`. With `max_length` the result is cut to that length and trailing hyphens are trimmed, and `max_length=0` really gives the empty string. Pure and side-effect free; it does not check reserved words or uniqueness.
 

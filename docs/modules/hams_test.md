@@ -124,14 +124,14 @@ The module implements three primary testing facilities:
 It also includes a **Noisy Table Management** interface (`COMM_UX_NOISY_TABLE_MANAGEMENT`) to allow administrators to whitelist tables from leak detection.
 
 ### Security Design
-- **Service Accounts**: The testing facility defines no service account of its own in this repository's data files; the anchor [@ANCHOR: user_real_transaction_service] is only a documentation marker. The documentation installation described in [zero_sudo.md](zero_sudo.md) is a separate part of `zero_sudo`.
+- **Service Accounts**: The testing facility defines no service account of its own in this repository's data files; the anchor [@ANCHOR: zero_sudo:user_real_transaction_service] is only a documentation marker. The documentation installation described in [zero_sudo.md](zero_sudo.md) is a separate part of `zero_sudo`.
 - **Zero-Sudo Compliance**: The test classes do not call `.sudo()`; cleanup deletes as user id 2 (`with_user(2)`).
-- **SQL Injection Prevention**: Uses `psycopg2.sql.Identifier` and `psycopg2.sql.Literal` for the dynamic SQL in the leak detector and the fallback cleanup ([@ANCHOR: leak_verification]).
+- **SQL Injection Prevention**: Uses `psycopg2.sql.Identifier` and `psycopg2.sql.Literal` for the dynamic SQL in the leak detector and the fallback cleanup ([@ANCHOR: zero_sudo:leak_verification]).
 
 ### Stories & Journeys
 - **Real Transaction Testing Story**: Explains the need for real commits and how the facility handles them (`cursor_hijacking`).
 
-- **Documentation Injection Story**: Describes the automated documentation setup process ([@ANCHOR: documentation_bootstrap]).
+- **Documentation Injection Story**: Describes the automated documentation setup process ([@ANCHOR: user_websites:documentation_bootstrap]).
 - **Developer Testing Flow Journey**: Guides developers through using `RealTransactionCase` for advanced integration tests.
 - **Documentation Setup Flow Journey**: Details the technical steps of injecting documentation into the knowledge base.
 
@@ -141,7 +141,7 @@ It also includes a **Noisy Table Management** interface (`COMM_UX_NOISY_TABLE_MA
 
 Entries for the testing-facility anchors cited above; the code is in `zero_sudo/tests/real_transaction.py`, `zero_sudo/tests/common.py` and `zero_sudo/models/noisy_table.py` (the code spells these ids with a `zero_sudo:COMM_` prefix).
 
-### `orm_instrumentation` [@ANCHOR: orm_instrumentation]
+### `orm_instrumentation` [@ANCHOR: zero_sudo:orm_instrumentation]
 
 **Purpose.** Lets `RealTransactionCase` clean up after itself even though its data is really committed: every record the test creates through the ORM is remembered, so teardown can delete it.
 
@@ -151,7 +151,7 @@ Entries for the testing-facility anchors cited above; the code is in `zero_sudo/
 
 **Concerns.** The patch is process-wide while the test runs, so creates in other threads of the same test process are tracked too. Records created by raw SQL are not tracked; the leak check reports them. Test: `COMM_test_orm_instrumentation` in `tests/test_facility.py`. To-do: this document's id lacks the `zero_sudo:COMM_` prefix used by the code.
 
-### `leak_snapshotting` [@ANCHOR: leak_snapshotting]
+### `leak_snapshotting` [@ANCHOR: zero_sudo:leak_snapshotting]
 
 **Purpose.** Detects data a test leaves behind: it records how many rows each table has before the test and compares after cleanup.
 
@@ -161,7 +161,7 @@ Entries for the testing-facility anchors cited above; the code is in `zero_sudo/
 
 **Concerns.** Cost is one count per table at start and end. Test: `COMM_test_leak_snapshotting` in `tests/test_facility.py`.
 
-### `integration_daemon_testing` [@ANCHOR: integration_daemon_testing]
+### `integration_daemon_testing` [@ANCHOR: zero_sudo:integration_daemon_testing]
 
 **Purpose.** Lets an integration test run a real Python daemon next to the Odoo test run and wait until it is healthy.
 
@@ -191,7 +191,7 @@ Entries for the testing-facility anchors cited above; the code is in `zero_sudo/
 
 **Concerns.** Excluding a table hides real leaks in it, so keep the list short. Only test runs read it; production is unaffected. Documentation anchor: also `zero_sudo:COMM_UX_NOISY_TABLE_MANAGEMENT`.
 
-### `cursor_hijacking` [@ANCHOR: cursor_hijacking]
+### `cursor_hijacking` [@ANCHOR: zero_sudo:cursor_hijacking]
 
 **Purpose.** Gives a test (and the HTTP threads it starts) a real, committable PostgreSQL connection instead of Odoo's shared test cursor, so it behaves like production.
 

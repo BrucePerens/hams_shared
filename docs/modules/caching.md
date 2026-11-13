@@ -128,7 +128,7 @@ Purpose: turn the per-website quota into the two numbers injected into the servi
 
 Returns `(latest_mtime, max_file_size)`, both as strings (whole seconds; bytes). The safe quota is `max(0, quota_mb - 10)` MB, because 10 MB is reserved for Odoo bundles. If the safe quota is 0 the limit is `"0"` (no module file cached); with no static files it is 10 MB; if all files fit it is the larger of 10 MB and the largest file plus 1 KB; otherwise the largest files are dropped one at a time until the rest fit and the limit is just under the last dropped file (size minus 1). Pure computation over the scan result; no writes. Tests: `test_01_quota_config_updates_sw`, `test_06_quota_edge_cases` in `tests/test_settings_and_cache.py`.
 
-### `xpath_rendering_caching_layout` [@ANCHOR: xpath_rendering_caching_layout]
+### `xpath_rendering_caching_layout`
 Status: unknown, to-do. This document says the registration script is injected into `website.layout` by an XPath, but the current code does not do that: `caching/__manifest__.py` adds `static/src/js/register.js` (which calls `navigator.serviceWorker.register('/sw.js')` when the browser supports it, and logs success or failure) and `toast.js` to the `web.assets_frontend` bundle, and there is no template inheriting `website.layout`. No file in `caching/` carries an anchor with this id, so it exists only in this document. To-do: either add the anchor to `register.js` and reword the sentence, or drop the id from the document. Behaviour today: every frontend page loads the bundle and registers the one root-scope worker; a failure is logged to the console and does not break the page. Related: `caching_sw_serve_route` (the script that is registered).
 
 ### `xpath_rendering_caching_settings` [@ANCHOR: xpath_rendering_caching_settings]
@@ -136,7 +136,7 @@ Purpose: the settings screen block of the module. `views/res_config_settings_vie
 
 Special concerns: the XPath depends on the block id in Odoo's own website settings view, so an Odoo upgrade that renames it breaks the view at load. Only users who can open Website Settings see it. Test: `test_04_xpath_rendering_settings` in `tests/test_settings_and_cache.py` (cited there as `test_xpath_rendering_caching_settings`).
 
-### `caching_docs_bootstrap` [@ANCHOR: caching_docs_bootstrap]
+### `caching_docs_bootstrap`
 Status: unknown, to-do. The anchor names the installation of this module's own manual. The file `caching/data/documentation.html` exists, but the manifest has no `knowledge_docs` entry for it, and the `post_init_hook` in `caching/__init__.py` (`_post_init_hook(env)`, docstring "Inject documentation") has a body of only `pass`, so nothing installs it. No code carries the anchor. The generic installer is `ir.module.module._bootstrap_knowledge_docs()` in `zero_sudo` (see `manual_doc_auto_install`), which reads `knowledge_docs` from the manifest. To-do: add the manifest entry (with `public`/`help_topic` if members should see it) or remove the empty hook and the story.
 
 ### `caching_sw_fetch_interceptor` [@ANCHOR: caching_sw_fetch_interceptor]
