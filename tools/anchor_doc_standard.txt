@@ -2054,3 +2054,18 @@ user_websites_seo
 user_websites_seo/docs/stories/user_websites_seo_data_structures.md
 zero_sudo
 zero_sudo/docs/stories/zero_sudo_data_structures.md
+# shack_console completion (2026-11-12): every class, struct and enum of the console source, router, pipeline and check tools, and every story
+daemons/shack_console/console/src
+daemons/shack_console/src
+daemons/shack_console/pipeline.rs
+daemons/shack_console/tools
+daemons/shack_console/docs/stories/console_classes_01_activity_to_chat.md
+daemons/shack_console/docs/stories/console_classes_02_controller_to_logbook.md
+daemons/shack_console/docs/stories/console_classes_03_logger_to_rig_pins_store.md
+daemons/shack_console/docs/stories/console_classes_04_rig_trail_to_updater_area.md
+daemons/shack_console/docs/stories/console_classes_05_settings_to_relays.md
+daemons/shack_console/docs/stories/console_classes_06_webrtc_link_to_voice_worklets.md
+daemons/shack_console/docs/stories/console_data_structures_01_rust.md
+daemons/shack_console/docs/stories/console_data_structures_02_check_tools.md
+daemons/shack_console/docs/stories/pwa_update_prompt.md
+daemons/shack_console/docs/stories/traffic_control.md
