@@ -45,7 +45,7 @@ DISCOVERY_FUNCTIONS = {
 # passed in by the caller, which the literal-name scan cannot see. A dynamic launch in any OTHER file is a finding: add the file here
 # in the same change that documents the program in ADR 0114.
 DYNAMIC_LAUNCH_FILES = frozenset({
-    "src/audio_mixer.rs",
+    "src/audio_mixer.rs", "src/bounded_command.rs",
     "src/ardop.rs", "src/checkin.rs", "src/com0com.rs", "src/device_worker_launch.rs", "src/direwolf.rs", "src/gps_time.rs", "src/m17_reference.rs", "src/mercury.rs",
     "src/relay_info.rs", "src/secret_store.rs", "src/shared_receiver/frontend_process.rs", "src/updater.rs", "src/winlink.rs",
 })

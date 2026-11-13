@@ -117,6 +117,8 @@ named here, so a new discovery function (or a rename) is a change to this ADR.
 The device worker (`device_worker_launch.rs`) is the one launch whose program is not ours to pin: the operator names it in
 `HAMS_LOCAL_RELAY_DEVICE_WORKER_COMMAND` (unset means nothing starts), so the file is in `DYNAMIC_LAUNCH_FILES`.
 
+`bounded_command.rs` is the second: it runs whatever helper its caller hands it (`amixer`, `arecord`, `nmcli`, `sh`, a TNC's `-h` or `--version`, and the other programs the first table already names) under a time limit and a size cap. It chooses no program itself, so the file is in `DYNAMIC_LAUNCH_FILES`; every caller that names a literal program is still checked against the tables.
+
 ## Known gaps (to-dos)
 - hidapi (vendored in the Mercury tree, follows its pin), RADE (`rade_c` was copied in whole with no recorded upstream commit, so there is nothing honest to pin) and the model files (Hugging Face repositories, not GitHub releases) have no upstream check.
 - Inno Setup, MinGW-w64, wine and the container images are not pinned beyond what the release preflight
