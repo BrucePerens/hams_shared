@@ -14,6 +14,7 @@ import numpy as np
 import dsp
 
 
+# [@ANCHOR: measure:measure_alsa_backend_class]
 class AlsaBackend:
     def __init__(self, device: str, rate: int = 48000, fmt: str = "S24_3LE"):
         self.device, self.rate, self.fmt = device, rate, fmt
@@ -24,6 +25,7 @@ class AlsaBackend:
         return alsa_pcm.run_duplex(self.device, stimulus, fmt=self.fmt, **kw)
 
 
+# [@ANCHOR: measure:measure_rig_class]
 class Rig:
     def __init__(self, backend, mixer, play_ctl="Speaker Playback Volume", cap_ctl="Mic Capture Volume",
                  switch_ctl="Speaker Playback Switch", rate=48000, play_channels=(0,), cap_channel=0,

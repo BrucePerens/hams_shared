@@ -91,10 +91,12 @@ KEEP_EVERYTHING = 100000
 DEFAULT_RECORDINGS_SAMPLE_FILES = 6
 
 
+# [@ANCHOR: b2_backup:b2_backup_config_error_class]
 class ConfigError(ValueError):
     pass
 
 
+# [@ANCHOR: b2_backup:b2_backup_backup_error_class]
 class BackupError(RuntimeError):
     pass
 
@@ -103,6 +105,7 @@ class BackupError(RuntimeError):
 # Configuration
 # --------------------------------------------------------------------------------------------
 
+# [@ANCHOR: b2_backup:b2_backup_config_class]
 @dataclasses.dataclass
 class Config:
     backend: dict
@@ -253,6 +256,7 @@ def fingerprint(password):
 # Sources
 # --------------------------------------------------------------------------------------------
 
+# [@ANCHOR: b2_backup:b2_backup_source_class]
 @dataclasses.dataclass(frozen=True)
 class Source:
     name: str          # stable key; the snapshot's virtual path derives from it
@@ -329,6 +333,7 @@ def build_sources(cfg):
 # Running things
 # --------------------------------------------------------------------------------------------
 
+# [@ANCHOR: b2_backup:b2_backup_runner_class]
 class Runner:
     """Runs commands, or in plan mode only announces them. Nothing is a stand-in: the plan prints the
     exact argv the real run would execute (no secret is ever on an argv)."""
@@ -447,6 +452,7 @@ def ensure_dirs(cfg, runner):
             os.makedirs(path, mode=0o700, exist_ok=True)
 
 
+# [@ANCHOR: b2_backup:b2_backup__lock_class]
 class _Lock:
     def __init__(self, cfg, runner):
         self.cfg, self.runner, self.handle = cfg, runner, None

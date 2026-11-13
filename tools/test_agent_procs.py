@@ -1345,3 +1345,6 @@ class MainTests(ProcTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: agent_procs:agent_procs_proc_error_class]

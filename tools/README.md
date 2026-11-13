@@ -5393,3 +5393,216 @@ finding whose path exists in a root, or any such entry when two or more roots we
 
 Purpose: the command line. Takes the repository roots (a root named `hams_shared` means its parent repository; duplicates dropped). Prints the report, or one OK line; returns the
 status, or 1 with a usage line when no root is given.
+
+## Data structures (ADR 0113)
+
+Every class of the tools that is not a function, with its fields, who creates it and how it is used. Each entry sits under the anchor on the class in code.
+
+### `ProcError` [@ANCHOR: agent_procs:agent_procs_proc_error_class]
+
+**Purpose.** A refusal or usage error with the exit code the CLI should use (`code`).
+**Definition.** `class ProcError(Exception)` in `tools/agent_procs.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `code` | `code` | Process exit code the CLI returns for this error, `EX_USAGE` unless the raiser passes another; read by the CLI main handler. |
+
+**Methods.** `__init__(self, message, code=EX_USAGE)`.
+
+**Notes.** Plain exception class: no state besides the message and `code`, created and raised in one place, never serialized.
+
+### `DuplexResult` [@ANCHOR: alsa_pcm:alsa_pcm_duplex_result_class]
+
+**Purpose.** Result of one full-duplex ALSA run (`run_duplex`): the captured audio plus the period and buffer sizes ALSA actually granted, xrun counts and per-call timing logs. The characterization scripts read it after the run; `sim.SimBackend` builds the same shape for tests without hardware.
+**Definition.** `class DuplexResult` in `tools/audio_card_characterize/alsa_pcm.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `capture` | `np.ndarray = -` | Captured samples, float array of shape (frames, 2), one column per channel, full scale = 1.0. |
+| `rate` | `int = -` | Sample rate in Hz the run used. |
+| `period` | `int = -` | Period size in frames that ALSA actually granted, which can differ from the requested one. |
+| `buffer` | `int = -` | Buffer size in frames that ALSA actually granted. |
+| `events` | `dict = field(default_factory=dict)` | Free-form dictionary of named event times recorded during the run by the caller's callbacks; empty by default. |
+| `xrun_at_frames` | `list = field(default_factory=list)` | Capture frames already read at each point where an xrun forced a stream restart. |
+| `xruns_capture` | `int = 0` | Number of capture-side xruns (overruns) handled during the run. |
+| `xruns_playback` | `int = 0` | Number of playback-side xruns (underruns) handled during the run. |
+| `read_times` | `list = field(default_factory=list)` | CLOCK_MONOTONIC seconds taken after each capture read returned. |
+| `read_times_raw` | `list = field(default_factory=list)` | CLOCK_MONOTONIC_RAW seconds after each read, unaffected by NTP slewing. |
+| `read_frames` | `list = field(default_factory=list)` | Cumulative capture frames after each read, parallel to `read_times`. |
+| `write_times` | `list = field(default_factory=list)` | CLOCK_MONOTONIC seconds after each playback write returned. |
+| `write_frames` | `list = field(default_factory=list)` | Cumulative playback frames accepted by ALSA after each write. |
+| `write_submit` | `list = field(default_factory=list)` | CLOCK_MONOTONIC seconds just before each write call was made. |
+| `write_delay` | `list = field(default_factory=list)` | `snd_pcm_delay()` in frames (frames still queued before the DAC) read just before each write. |
+
+**Notes.** Lists are appended by the capture loop in call order, so all `read_*` lists have equal length, as do all `write_*` lists. Created once per run, not shared between threads after the run returns.
+
+### `_Pcm` [@ANCHOR: alsa_pcm:alsa_pcm__pcm_class]
+
+**Purpose.** Private wrapper around one open ALSA PCM handle (capture or playback) used by `run_duplex`. The constructor opens the device and negotiates interleaved access, sample format, channel count, rate, period and buffer with the ALSA library through ctypes; `close` releases the handle.
+**Definition.** `class _Pcm` in `tools/audio_card_characterize/alsa_pcm.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `handle` | `ctypes.c_void_p()` | The `snd_pcm_t` pointer (ctypes void pointer); set to `None` by `close`, so a second close is harmless. |
+| `bytes_per_frame` | `FORMATS[fmt][1] * channels` | Bytes in one interleaved frame: sample size of the chosen format times channels; used to size read and write buffers. |
+
+**Methods.** `__init__(self, lib, device: str, stream: int, rate: int, fmt: str, channels: int`; `close(self)`.
+
+**Notes.** Constructor arguments: library handle, device name, stream direction constant, rate Hz, format key of `FORMATS`, channel count, period frames and number of periods. A failing ALSA call raises through `_check` with the ALSA error text. `period` and `buffer` attributes hold the granted sizes. Not thread-safe; one `_Pcm` per direction, owned by the one `run_duplex` call.
+
+### `AlsaBackend` [@ANCHOR: measure:measure_alsa_backend_class]
+
+**Purpose.** The real-hardware backend of the audio card characterization: it binds an ALSA device name, sample rate and format and forwards `duplex(stimulus, **kw)` to `alsa_pcm.run_duplex`. `Rig` calls it the same way it calls the simulated backend in `sim.py`, so tests can swap one for the other.
+**Definition.** `class AlsaBackend` in `tools/audio_card_characterize/measure.py`.
+
+**Methods.** `__init__(self, device: str, rate: int=48000, fmt: str='S24_3LE')`; `duplex(self, stimulus, **kw)`.
+
+**Notes.** Fields `device` (ALSA name such as hw:1,0), `rate` (default 48000 Hz) and `fmt` (default S24_3LE) are set once by the constructor and never changed. `duplex` returns a `DuplexResult`; extra keyword arguments pass through, and the rate is filled in when absent. Opens and closes the sound device on each call, so it plays and records audio and must not run while another program owns the card.
+
+### `Rig` [@ANCHOR: measure:measure_rig_class]
+
+**Purpose.** The measurement rig of the audio card characterization: one sound card with its mixer and a backend, plus the knowledge of which mixer controls set playback gain, capture gain and mute. Measurement functions use it to set gains in dB and run stimuli through the loopback cable.
+**Definition.** `class Rig` in `tools/audio_card_characterize/measure.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `gain_db` | `None` | Gain in dB last applied by the rig, or `None` before any gain was set. |
+| `last_delay` | `None` | Round-trip delay in frames found by the last measurement, or `None` when none was made yet. |
+| `settle_s` | `0.2` | Seconds discarded at the start of every measured segment so limiter attack and filter settling do not disturb results; default 0.2. |
+
+**Methods.** `__init__(self, backend, mixer, play_ctl='Speaker Playback Volume', cap_ctl='Mic `; `_set_db(self, name: str, db: float)`; `set_play_db(self, db: float)`; `set_cap_db(self, db: float)`; `set_play_raw(self, raw: int)`; `set_cap_raw(self, raw: int)`; `settings(self)`; `stereo(self, x: np.ndarray)`; `run(self, mono: np.ndarray, tail_s: float=0.3, **kw)`; `cap(self, res)`; `steady_tone(self, freq: float, level_dbfs: float, secs: float=1.2, **kw)`; `capture_idle(self, secs: float, state: str='silence')`; `run_segments(self, segs, marker_db: float, lead_s=1.2, marker_s=0.3, gap_s=0.2, `; `probe_gain(self, level_dbfs: float=-50.0)`; `marker_level(self, hi: float)`.
+
+**Notes.** Constructor arguments are the backend, the mixer, the control names `play_ctl`, `cap_ctl`, `switch_ctl`, rate in Hz (48000), the played channel tuple, the capture channel, period frames (1024), number of periods (4) and a `log` callable (print). Methods change mixer settings on the real card, so one rig must own the card at a time. No locking.
+
+### `Control` [@ANCHOR: mixer:mixer_control_class]
+
+**Purpose.** One ALSA mixer control as read from `amixer contents`: its numid, name, type, raw range, dB range and current values. The mixer wrapper builds one per control and the rig converts between raw steps and dB with it.
+**Definition.** `class Control` in `tools/audio_card_characterize/mixer.py`.
+
+**Methods.** `__init__(self, numid: int, name: str, ctype: str, vmin: int | None, vmax: int | `; `db_at(self, raw: int)`; `raw_for_db(self, db: float)`.
+
+**Notes.** Fields are set once by the constructor: `numid` (integer id), `name`, `ctype` (INTEGER, BOOLEAN and so on), `vmin` and `vmax` (raw range, `None` when the control has none), `db_min` and `db_max` (dB at the range ends, `None` without a dB scale) and `values` (list of value strings). `db_at` and `raw_for_db` assume a linear-in-dB scale, which is to be verified by measurement; `raw_for_db` raises TypeError when no dB range exists.
+
+### `Mixer` [@ANCHOR: mixer:mixer_mixer_class]
+
+**Purpose.** Thin wrapper around the `amixer` command for one sound card. It lists controls as `Control` objects, sets a control by name or numid, and takes and restores snapshots so a characterization run can put the card back as it found it.
+**Definition.** `class Mixer` in `tools/audio_card_characterize/mixer.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `card` | `card` | Card identifier passed to `amixer -c` (a number or card name), set by the constructor. |
+
+**Methods.** `__init__(self, card: str)`; `contents(self)`; `controls(self)`; `set(self, name_or_numid, value)`; `get(self, name: str)`; `snapshot(self)`; `restore(self, snap: dict[int, str])`.
+
+**Notes.** Every method runs `amixer` as a subprocess, so each call reads or writes real hardware state and costs a process start; `controls()` parses the whole `contents` text each time. A failing amixer call raises from `_run`. Not safe for concurrent use of the same card by several processes.
+
+### `SimMixer` [@ANCHOR: sim:sim_sim_mixer_class]
+
+**Purpose.** Test double for `Mixer`: it keeps three fixed controls in memory (speaker playback volume, mic capture volume, speaker playback switch) so the characterization code can be tested without a sound card. It offers the same `controls`, `set`, `get`, `snapshot` and `restore` calls.
+**Definition.** `class SimMixer` in `tools/audio_card_characterize/sim.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `ctls` | `{'Speaker Playback Volume': Control(8, 'Speaker Pl` | Dictionary of control name to `Control`, holding Speaker Playback Volume (numid 8, raw 0 to 88, -44 to 0 dB), Mic Capture Volume (numid 4, raw 0 to 60, 0 to 30 dB) and Speaker Playback Switch (numid 7). |
+
+**Methods.** `__init__(self)`; `controls(self)`; `set(self, name_or_numid, value)`; `get(self, name)`; `snapshot(self)`; `restore(self, snap)`.
+
+**Notes.** `set` matches by numid or name and stores values as strings, exactly as the real mixer reports them. `SimBackend` reads these controls to compute its gain, so a changed value changes the simulated audio. Not thread-safe; no hardware or file access.
+
+### `SimBackend` [@ANCHOR: sim:sim_sim_backend_class]
+
+**Purpose.** Simulated sound card for tests: `duplex` turns a stimulus into a capture through a model of DAC clipping, cube nonlinearity, cable gain, capture gain, delay, noise, DC offset and ADC clipping, driven by a `SimMixer`. It returns a `DuplexResult`, so the rig cannot tell it from `AlsaBackend`.
+**Definition.** `class SimBackend` in `tools/audio_card_characterize/sim.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `rng` | `np.random.default_rng(seed)` | NumPy random generator seeded with `seed` (default 1), so a simulated run is repeatable. |
+
+**Methods.** `__init__(self, mixer: SimMixer, cable_db=6.0, dac_clip=1.0, adc_clip=1.0, k3=0.0`; `_db(self, name)`; `duplex(self, stimulus, rate=48000, period=1024, nperiods=4, tail_frames=0, captu`.
+
+**Notes.** Constructor arguments: the mixer, `cable_db` (6.0 dB), `dac_clip` and `adc_clip` (1.0 full scale), `k3` (cubic distortion, 0.0), `noise_dbfs` (-90.0), `dc` offset (0.0), `delay` in frames (480), `ppm` clock error in parts per million (0.0) and `seed`. Capture noise is only added when capture gain is nonzero. No audio device is touched.
+
+### `ConfigError` [@ANCHOR: b2_backup:b2_backup_config_error_class]
+
+**Purpose.** Raised by b2_backup when its configuration file or secrets file is wrong or incomplete, for example a missing key, a bad value or an environment file that lacks a required secret. A subclass of ValueError with no extra state.
+**Definition.** `class ConfigError(ValueError)` in `tools/b2_backup.py`.
+
+**Notes.** Raised while loading or checking the configuration, before any backup work starts; the command line reports the message and exits non-zero. Never serialized.
+
+### `BackupError` [@ANCHOR: b2_backup:b2_backup_backup_error_class]
+
+**Purpose.** Raised by b2_backup when a backup, restore or verification step fails at run time: a command exits non-zero, another run holds the lock, or a check finds a mismatch. A subclass of RuntimeError with no extra state.
+**Definition.** `class BackupError(RuntimeError)` in `tools/b2_backup.py`.
+
+**Notes.** `Runner.run` raises it with the first three argv words, the exit code and the last 400 bytes of stderr when output was captured. The command line prints it and exits non-zero so a timer unit shows the run as failed; it never carries a secret because secrets are not on argv.
+
+### `Config` [@ANCHOR: b2_backup:b2_backup_config_class]
+
+**Purpose.** The parsed and validated b2_backup configuration: where the backup repository lives, which paths, single files and databases are backed up, the retention policy, bandwidth limits and the restore-test sizes. Built once by the config loader from the JSON file and passed to every step.
+**Definition.** `class Config` in `tools/b2_backup.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `backend` | `dict = -` | Repository backend settings (bucket and similar), read when kopia is connected. |
+| `env_file` | `str = -` | Path of the environment file holding the secrets (repository password, backend keys). |
+| `state_dir` | `str = -` | Directory for the lock, password fingerprint, status files, kopia config, cache and logs. |
+| `kopia` | `str = -` | Path or name of the kopia executable. |
+| `max_upload_bytes_per_sec` | `int = -` | Upload bandwidth limit in bytes per second. |
+| `max_download_bytes_per_sec` | `int = -` | Download bandwidth limit in bytes per second. |
+| `retention` | `dict = -` | Mapping of retention counts (latest, daily, weekly and so on) applied after a backup. |
+| `paths` | `list = -` | List of path sources: name, path, exclude list, content_addressed flag, optional flag. |
+| `files` | `list = -` | List of single-file sources (name, path, optional), snapshotted from stdin. |
+| `tenant_spec_dir` | `str = -` | Directory of retired tenant `*.json` specs, scanned by `discover_tenants`. |
+| `tenant_data_root` | `str = -` | Root directory holding the retired tenants' data. |
+| `databases` | `list = -` | Names of PostgreSQL databases to dump, such as hams_prod. |
+| `pg_prefix` | `list = -` | Command prefix used to run PostgreSQL tools as the database role, empty when the caller already is that role. |
+| `restore_sample_files` | `int = -` | Number of files restored and compared in the restore check. |
+| `restore_verify_percent` | `int = -` | Percentage of repository data verified by the restore check. |
+| `restore_database` | `bool = -` | Whether the restore check also restores a database dump. |
+| `restore_recordings_files` | `int = -` | Number of recordings files sampled by the restore check. |
+
+**Methods.** `lock_path(self)`; `fingerprint_path(self)`; `status_path(self)`; `restore_status_path(self)`; `staging_dir(self)`; `scratch_dir(self)`; `kopia_config(self)`.
+
+**Notes.** Properties `lock_path`, `fingerprint_path`, `status_path`, `restore_status_path`, `staging_dir`, `scratch_dir` and `kopia_config` derive file names under `state_dir`. The object is not changed after loading. Secrets are never stored in it.
+
+### `Source` [@ANCHOR: b2_backup:b2_backup_source_class]
+
+**Purpose.** One thing the backup captures, as a frozen record: a directory tree, a single file or a database dump. `snapshot_path` gives the path kopia records it under, a stable virtual one for files and databases so every night forms one versioned series.
+**Definition.** `class Source` in `tools/b2_backup.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `name` | `str = -` | Stable key of the source; the virtual snapshot path derives from it. |
+| `kind` | `str = -` | One of "path", "file" or "db". |
+| `path` | `str = ''` | Filesystem path, for kinds "path" and "file"; empty for "db". |
+| `database` | `str = ''` | PostgreSQL database name, for kind "db"; empty otherwise. |
+| `exclude` | `tuple = ()` | Tuple of exclude patterns for a "path" source; empty by default. |
+| `content_addressed` | `bool = False` | True when the source holds content-addressed files, so the backup treats unchanged names as unchanged data; default False. |
+
+**Methods.** `snapshot_path(self)`.
+
+**Notes.** Frozen dataclass: hashable and never changed after creation. Built from `Config.paths`, `Config.files` and `Config.databases` plus the discovered tenants.
+
+### `Runner` [@ANCHOR: b2_backup:b2_backup_runner_class]
+
+**Purpose.** Runs commands, or in plan mode only announces them. Nothing is a stand-in: the plan prints the exact argv the real run would execute (no secret is ever on an argv).
+**Definition.** `class Runner` in `tools/b2_backup.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `plan` | `plan` | True for a dry run; commands are printed with a `PLAN run:` prefix and not executed. |
+| `out` | `out or sys.stdout` | Text stream receiving the messages, `sys.stdout` when none was given. |
+
+**Methods.** `__init__(self, plan=False, out=None)`; `say(self, text)`; `run(self, argv, env=None, stdout=None, stdin=None, capture=False, check=True)`.
+
+**Notes.** `run(argv, env, stdout, stdin, capture, check)` returns the `CompletedProcess` and raises `BackupError` on a non-zero exit when `check` is true; `say` prints one flushed line. Blocking: each `run` waits for the process. Not thread-safe.
+
+### `_Lock` [@ANCHOR: b2_backup:b2_backup__lock_class]
+
+**Purpose.** Context manager that takes an exclusive, non-blocking file lock on the state directory's lock file so only one b2_backup run proceeds. A second run raises `BackupError` at once ("another b2_backup run holds the lock") instead of waiting.
+**Definition.** `class _Lock` in `tools/b2_backup.py`.
+
+**Methods.** `__init__(self, cfg, runner)`; `__enter__(self)`; `__exit__(self, *exc)`.
+
+**Notes.** Fields `cfg`, `runner` and `handle` (open file, `None` outside the block). In plan mode nothing is locked. The lock is released when the file closes at `__exit__`, or when the process dies, so a crashed run leaves no stale lock.
+

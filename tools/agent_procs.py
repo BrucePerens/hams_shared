@@ -81,6 +81,7 @@ ALLOWED_SIGNALS = {
 OWNER_OVERRIDE_FLAG = "--i-am-the-owner-and-checked"
 
 
+# [@ANCHOR: agent_procs:agent_procs_proc_error_class]
 class ProcError(Exception):
     """A refusal or usage error with the exit code the CLI should use (`code`)."""
 

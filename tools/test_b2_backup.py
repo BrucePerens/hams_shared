@@ -272,3 +272,11 @@ class SingleFileBackupTests(_Env):
 
 if __name__ == "__main__":
     unittest.main()
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: b2_backup:b2_backup__lock_class]
+# Tests [@ANCHOR: b2_backup:b2_backup_runner_class]
+# Tests [@ANCHOR: b2_backup:b2_backup_source_class]
+# Tests [@ANCHOR: b2_backup:b2_backup_config_class]
+# Tests [@ANCHOR: b2_backup:b2_backup_backup_error_class]
+# Tests [@ANCHOR: b2_backup:b2_backup_config_error_class]
