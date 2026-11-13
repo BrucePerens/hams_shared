@@ -12,7 +12,7 @@ metadata:
 
 Bruce Perens files his provisional patent applications pro se as a micro entity.
 Each application's filing package lives under
-`hams_com/docs/proposals/patent_disclosures/filed_applications/<NN>_<name>/`:
+`hams_com/docs/patent_disclosures/filed_applications/<NN>_<name>/`:
 
 - `specification.pdf` and `drawings.pdf` are generated from
   `provisional_specs/<NN>_<name>.md` and `_src/fig*.svg` by

@@ -15,7 +15,7 @@ Claude tried to route a batch of "which of these should I do, and in what order"
 the user via a multi-question prompt:
 
 1. **Keep a written record.** Maintain a durable, continuing record of gaps found (this
-   session's practice has been `/home/bruce/workspace/tmp/night_shift_todo.md`, which already
+   session's practice has been `/home/bruce/workspace/tmp/night_shift_todo/`, which already
    serves this role for in-progress/resume state -- the gap survey and its findings belong in the
    same durable-record tradition, not just in a one-off chat reply or artifact that isn't tracked
    going forward).

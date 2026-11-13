@@ -875,55 +875,55 @@ Each anchor below has its own entry, in the template of ADR 0113: purpose, call 
 
 ### `story_cache_purging` [@ANCHOR: story_cache_purging]
 
-**Asynchronous Cache Purging** (`hams_shared/docs/stories/cache_purging.md`).
+**Asynchronous Cache Purging** (`hams_open/cloudflare/docs/stories/cache_purging.md`).
 
 A content manager saves a page, post, product or menu and the edit finishes at once. The write hooks queue purges in `cloudflare.purge.queue`; a cron later sends them to Cloudflare in grouped batches per website, so no edit waits for the network. See `cloudflare:COMM_enqueue_urls_batch` and `cf_process_queue_logic`.
 
 ### `story_request_context` [@ANCHOR: story_request_context]
 
-**Geo-Aware Request Context** (`hams_shared/docs/stories/request_context.md`).
+**Geo-Aware Request Context** (`hams_open/cloudflare/docs/stories/request_context.md`).
 
 A developer reads the visitor's country and threat score through `cloudflare.utils.get_request_context()`. The `CF-*` headers are believed only from a trusted peer (loopback or the trusted Cloudflare ranges), so a direct request to the origin cannot forge them. See `cf_get_request_context`.
 
 ### `story_tunnels` [@ANCHOR: story_tunnels]
 
-**Secure Edge Bridging via Tunnels** (`hams_shared/docs/stories/tunnels.md`).
+**Secure Edge Bridging via Tunnels** (`hams_open/cloudflare/docs/stories/tunnels.md`).
 
 A system administrator connects the server to Cloudflare without opening an inbound port: the wizard creates a tunnel and prints an install command, sync brings tunnel records into Odoo, and the cron keeps one `cloudflared` daemon per tunnel running. See `cf_tunnel_setup`, `cf_sync_tunnels`, `ensure_tunnel_running`.
 
 ### `story_turnstile` [@ANCHOR: story_turnstile]
 
-**CAPTCHA Verification with Turnstile** (`hams_shared/docs/stories/turnstile_verification.md`).
+**CAPTCHA Verification with Turnstile** (`hams_open/cloudflare/docs/stories/turnstile_verification.md`).
 
 A visitor completes a Turnstile challenge in a form; the controller calls `verify_token()`, which asks Cloudflare to check it against the website's secret, and the form is processed only when the answer is true. See `cf_turnstile_verify`.
 
 ### `story_waf_banning` [@ANCHOR: story_waf_banning]
 
-**Automated WAF IP Banning** (`hams_shared/docs/stories/waf_banning.md`).
+**Automated WAF IP Banning** (`hams_open/cloudflare/docs/stories/waf_banning.md`).
 
 A honeypot or other security module calls `cloudflare.waf.ban_ip()`; the module creates a Cloudflare IP Access Rule and records the ban. A ban has no expiry and ends only when an administrator lifts it. See `cf_execute_ban` and `cloudflare:COMM_action_lift_ban_sync`.
 
 ### `journey_content_invalidation` [@ANCHOR: journey_content_invalidation]
 
-**High-Performance Content Invalidation** (`hams_shared/docs/journeys/content_invalidation.md`).
+**High-Performance Content Invalidation** (`hams_open/cloudflare/docs/journeys/content_invalidation.md`).
 
 The path from an edit to a cleared edge cache: a record write queues URLs or tags, the queue holds them in `cloudflare.purge.queue`, and the cron sends grouped batches. Users keep working during the whole path. See `cloudflare:COMM_enqueue_cloudflare_purge` and `cf_process_queue_logic`.
 
 ### `journey_edge_security` [@ANCHOR: journey_edge_security]
 
-**Managing Edge Security** (`hams_shared/docs/journeys/edge_security.md`).
+**Managing Edge Security** (`hams_open/cloudflare/docs/journeys/edge_security.md`).
 
 The life of an IP ban: detection by another module, enforcement through `cf_execute_ban`, and resolution when an administrator lifts it, because bans do not expire on their own. See `cloudflare:COMM_action_lift_ban_sync`.
 
 ### `journey_infrastructure` [@ANCHOR: journey_infrastructure]
 
-**Infrastructure Provisioning** (`hams_shared/docs/journeys/infrastructure.md`).
+**Infrastructure Provisioning** (`hams_open/cloudflare/docs/journeys/infrastructure.md`).
 
 Setting up the edge connection end to end: credentials in Settings, creating a tunnel, syncing its record, pushing its routes and keeping it running. The administrator works only through Settings and the Tunnel wizard; no Cloudflare dashboard step is needed once the API token and Account ID are in place. See `cf_tunnel_setup`, `cf_sync_tunnels` and `cloudflare:COMM_tunnel_action_push_configuration`.
 
 ### `journey_traffic_handling` [@ANCHOR: journey_traffic_handling]
 
-**Intelligent Traffic Handling** (`hams_shared/docs/journeys/traffic_handling.md`).
+**Intelligent Traffic Handling** (`hams_open/cloudflare/docs/journeys/traffic_handling.md`).
 
 How edge metadata feeds application decisions: the edge adds headers, `_post_dispatch` sets cache headers, `get_request_context()` extracts trusted geography and threat data, and a controller may then require Turnstile. See `edge_cache:COMM_ir_http_post_dispatch_headers`, `cf_get_request_context` and `cf_turnstile_verify`.
 

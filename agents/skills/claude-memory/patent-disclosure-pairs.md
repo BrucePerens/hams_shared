@@ -11,7 +11,7 @@ metadata:
 # Patent disclosures and provisional specs are updated as a pair
 
 In Bruce Perens's `hams_com` repository, the patent material under
-`docs/proposals/patent_disclosures/` is kept as two parallel files per invention:
+`docs/patent_disclosures/` is kept as two parallel files per invention:
 the numbered *disclosure* at the top level (for example
 `29_unified_multi_mode_signal_id_and_closed_loop_correction.md`, written in an
 explanatory engineering voice for counsel review) and the matching *provisional

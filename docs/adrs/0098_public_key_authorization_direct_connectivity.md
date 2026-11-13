@@ -21,7 +21,7 @@ This is not a green-field cryptography project. `hams_local_relay` already has a
 public-key verification pipeline: `noise_channel.rs` implements a Noise Protocol
 secure channel (there is no `noise_session.rs`) and `attestation_subcarrier.rs`, `revocation.rs` and `noise_channel.rs` use Ed25519 (`ed25519_dalek`) verification, where a client presents a
 signed attestation the relay verifies against a signing key sourced from Odoo (per
-`docs/proposals/TRANSMITTER_HIJACK_PREVENTION.md` section 1). Friend/club authorization via public
+`hams_com/docs/proposals/done/TRANSMITTER_HIJACK_PREVENTION.md` section 1). Friend/club authorization via public
 keys is a natural extension of infrastructure that already exists and is already proven, not a new
 mechanism to build from scratch.
 

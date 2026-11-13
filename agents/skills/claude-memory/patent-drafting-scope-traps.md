@@ -9,7 +9,7 @@ metadata:
 ---
 
 When drafting a patent invention disclosure or provisional specification (as on hams.com's
-`docs/proposals/patent_disclosures/` work), the user, Bruce Perens, identified two specific
+`docs/patent_disclosures/` work), the user, Bruce Perens, identified two specific
 patterns that unnecessarily and gratuitously narrow claim scope, discovered mid-session while
 drafting a disclosure for an AI radio/ICS-forms assistant that originally described human approval
 of AI-drafted content as a mandatory gate before any consequential action.

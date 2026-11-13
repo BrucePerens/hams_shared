@@ -207,14 +207,14 @@ To add a new monitoring plugin:
 <stories_and_journeys>
 ## 4. Architectural Stories & Journeys
 
-*   [Story: Scaling the Watchtower](hams_shared/docs/stories/automated_monitoring_setup.md)
-*   [Story: Finding the Needle in the Haystack](hams_shared/docs/stories/log_anomaly_detection.md)
-*   [Story: The Midnight Guardian](hams_shared/docs/stories/on_call_alerting.md)
-*   [Story: The Data-Driven Post-Mortem](hams_shared/docs/stories/performance_analytics.md)
-*   [Journey: Daemon Execution Loop](hams_shared/docs/journeys/daemon_execution_loop.md)
-*   [Journey: Escalation Pathway](hams_shared/docs/journeys/escalation_pathway.md)
-*   [Journey: Incident Lifecycle](hams_shared/docs/journeys/incident_lifecycle.md)
-*   [Journey: Synthetic Monitoring Flow](hams_shared/docs/journeys/synthetic_monitoring_flow.md)
+*   [Story: Scaling the Watchtower](../../../pager_duty/docs/stories/automated_monitoring_setup.md)
+*   [Story: Finding the Needle in the Haystack](../../../pager_duty/docs/stories/log_anomaly_detection.md)
+*   [Story: The Midnight Guardian](../../../pager_duty/docs/stories/on_call_alerting.md)
+*   [Story: The Data-Driven Post-Mortem](../../../pager_duty/docs/stories/performance_analytics.md)
+*   [Journey: Daemon Execution Loop](../../../pager_duty/docs/journeys/daemon_execution_loop.md)
+*   [Journey: Escalation Pathway](../../../pager_duty/docs/journeys/escalation_pathway.md)
+*   [Journey: Incident Lifecycle](../../../pager_duty/docs/journeys/incident_lifecycle.md)
+*   [Journey: Synthetic Monitoring Flow](../../../pager_duty/docs/journeys/synthetic_monitoring_flow.md)
 </stories_and_journeys>
 
 ---

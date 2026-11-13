@@ -6,7 +6,7 @@ Accepted (Bruce, 2026-11-08: "improve how code reaches main so a red main or a q
 ## Scope
 The lint run (`tools/run_linters.py`), its pass stamp, the coalescing batches of ADR 0115, the merge helper
 (`prmerge.sh`) and a new merge queue worker. Part 1 (the baseline) is in `tools/lint_baseline.py`; part 2 (the queue) is in
-`tools/merge_queue.py` once it lands. Operating manual: `docs/runbooks/LINT_MERGE_QUEUE.md`; anchor reference:
+`hams_com/devbox_tools/merge_queue.py` once it lands. Operating manual: `docs/runbooks/LINT_MERGE_QUEUE.md`; anchor reference:
 `docs/runbooks/LINT_MERGE_QUEUE_ANCHORS.md`.
 
 ## Context
