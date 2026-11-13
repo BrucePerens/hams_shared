@@ -3611,7 +3611,7 @@ Purpose: the wrapper's signal handler (installed with `functools.partial(forward
 
 ### `[@ANCHOR: agent_procs:parse_size]` `parse_size(text)`
 
-Purpose: bytes in a size such as `6G`, `512M`, `100K` or a plain number (binary units, case-insensitive). Raises `ProcError` for anything else. Test: `test_agent_procs.py`.
+Purpose: bytes in a size such as `6G`, `512M`, `100K` or a plain number (binary units, case-insensitive). Argument: `text`, any value, converted with `str` and stripped. A trailing `b` is accepted (`6GB`); the units K, M, G and T are powers of 1024 and a number without a unit is bytes. Returns the `int` byte count. Errors: raises `ProcError` for anything else (empty text, a decimal point, an unknown unit), with a message that names the accepted forms. Pure; no I/O. The caller handles the literal `none` (no limit) before calling. Test: `test_agent_procs.py`.
 
 ### `[@ANCHOR: agent_procs:limit_argv]` `limit_argv(argv, mem_max, nice, have_systemd=None)`
 
