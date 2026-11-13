@@ -188,18 +188,18 @@ def source_stamp(artifact, trees):
 _BUILD_PRODUCTS = (infrastructure.CFFI_LIB_NAME, "libcloudflared.h")
 
 
-def _newest_mtime(directory):
-    """The newest modification time of a source file under `directory` (build products and stamps excluded)."""
+def _newest_mtime(base, directory):
+    """The newest modification time of a git-tracked source file under `base/directory`. Untracked files (a .pytest_cache,
+    __pycache__ or editor file written into the tree after the build) are not sources: the stamp's tree ids cover what is
+    committed, and a tracked file changed in place is caught here."""
     newest = 0.0
-    for root, dirs, files in os.walk(directory):
-        dirs[:] = [d for d in dirs if d not in ("target", "node_modules", ".git", "__pycache__")]
-        for name in files:
-            if name in _BUILD_PRODUCTS or name.endswith((STAMP_SUFFIX, ".console_tree")):
-                continue
-            try:
-                newest = max(newest, os.path.getmtime(os.path.join(root, name)))
-            except OSError:
-                pass
+    for name in _git(base, "ls-files", "-z", "--", directory).split("\0"):
+        if not name or os.path.basename(name) in _BUILD_PRODUCTS or name.endswith((STAMP_SUFFIX, ".console_tree")):
+            continue
+        try:
+            newest = max(newest, os.path.getmtime(os.path.join(base, name)))
+        except OSError:
+            pass
     return newest
 
 
@@ -225,7 +225,7 @@ def artifact_problems(artifact, trees, cargo_target_dir, environ=None):
         problems.append("%s: %s has no stamp for the current sources (copied in, or built from other sources)" % (artifact.name, output))
     built = os.path.getmtime(output)
     for source in artifact.sources:
-        if _newest_mtime(os.path.join(base, source)) > built:
+        if _newest_mtime(base, source) > built:
             problems.append("%s: %s is older than its source %s" % (artifact.name, output, source))
     if artifact.name == "cloudflared_ffi":
         ok, reason = infrastructure.cffi_library_status(os.path.dirname(output))
