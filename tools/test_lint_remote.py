@@ -583,6 +583,13 @@ class SyncTests(unittest.TestCase):
         self.sync()
         self.assertEqual(self.read("sub/inner2.txt"), "inner2\n")
 
+    def test_a_staged_rename_removes_the_old_name_from_the_mirror(self):
+        self.sync()
+        git(self.repo, "mv", "a.txt", "c.txt")
+        self.sync()
+        self.assertEqual(self.read("c.txt"), "one\n")
+        self.assertFalse(os.path.lexists(os.path.join(self.dest, "a.txt")))
+
     def test_secrets_symlinks_and_build_output_are_never_shipped(self):
         self.sync()
         write(os.path.join(self.repo, ".env"), "SECRET=1\n")
