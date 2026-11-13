@@ -22,7 +22,7 @@ agent (woken hourly by a scheduled task, see that skill) is the automation that 
 tradeoff (self-service revoke vs. admin-only), a product direction, a credential/business step,
 picking between two viable architectures. Historically this went one of three ways, all lossy: (1)
 `AskUserQuestion` right then, which only works if Bruce is actually at the terminal that moment;
-(2) writing a paragraph into `night_shift_todo.md` and hoping a future session or Bruce notices it
+(2) writing a paragraph into `night_shift_todo/` and hoping a future session or Bruce notices it
 buried in prose; (3) the session just picks an answer itself and moves on, which is exactly what
 `hams-dont-be-too-cautious-about-originating-work` says NOT to do for a genuine judgment call. This
 queue is the fourth, durable option: file the question, keep working everything that ISN'T blocked
@@ -110,7 +110,7 @@ whoever next works the to-do doesn't have to open a second file to know what cha
 exactly what the night-watch agent does automatically every pass (see the `night-watch` skill) -- but
 any session noticing an answered question with a live `blocks:` entry should do this immediately
 rather than waiting for the next scheduled run, the same "don't leave your own past entries stale"
-principle the CI watch (now `night-watch` Part 1) was corrected to follow for `night_shift_todo.md`.
+principle the CI watch (now `night-watch` Part 1) was corrected to follow for `night_shift_todo/`.
 
 
 **Clear `claimed_by:` when you unblock, or you hand the queue an ambiguous item.** An item usually

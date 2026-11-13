@@ -69,18 +69,18 @@ This module is built with security as a primary concern, adhering strictly to th
 Detailed architectural narratives and process flows are documented in the `hams_shared/docs/` directory:
 
 ### Stories
-* [Cache Quota Management](hams_shared/docs/stories/cache_quota_management.md) (`caching_quota_calculation`)
+* [Cache Quota Management](../../../caching/docs/stories/cache_quota_management.md) (`caching_quota_calculation`)
 
-* [Cache Invalidation Strategy](hams_shared/docs/stories/cache_invalidation_strategy.md) (`caching_fs_scan_logic`)
+* [Cache Invalidation Strategy](../../../caching/docs/stories/cache_invalidation_strategy.md) (`caching_fs_scan_logic`)
 
-* [Documentation Bootstrap](hams_shared/docs/stories/documentation_bootstrap.md) (`caching_docs_bootstrap`)
+* [Documentation Bootstrap](../../../zero_sudo/docs/stories/documentation_bootstrap.md) (`caching_docs_bootstrap`)
 
 ### Journeys
-* [Asset Request Flow](hams_shared/docs/journeys/asset_request_flow.md) (`caching_sw_fetch_interceptor`)
+* [Asset Request Flow](../../../caching/docs/journeys/asset_request_flow.md) (`caching_sw_fetch_interceptor`)
 
-* [Server Startup Scan](hams_shared/docs/journeys/server_startup_scan.md) (`caching_sw_serve_route`)
+* [Server Startup Scan](../../../caching/docs/journeys/server_startup_scan.md) (`caching_sw_serve_route`)
 
-* [Manual Invalidation](hams_shared/docs/journeys/manual_invalidation.md) (`test_caching_sudo_params`)
+* [Manual Invalidation](../../../caching/docs/journeys/manual_invalidation.md) (`test_caching_sudo_params`)
 
 ## 4b. Stage 1 Anchor-Coverage Sweep Additions
 * **PWA Manifest Route:** `caching:COMM_pwa_manifest` -- `/manifest.json`, reflects the current website's name/theme colors.

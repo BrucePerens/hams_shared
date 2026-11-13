@@ -26,7 +26,7 @@ Bruce explicitly asked, therefore inherently suspect and worth flagging) was its
 miscalibration on this project.
 
 This does not cancel ordinary engineering judgment: still write real tests, still record decisions
-in `night_shift_todo.md` as they're made, still flag genuine product-judgment calls that only Bruce
+in `night_shift_todo/` as they're made, still flag genuine product-judgment calls that only Bruce
 can make (a design direction with real tradeoffs, not just "I built this without being asked"), and
 this does not extend to actions outside Claude's own codebase changes -- pushing to remotes remains
 Bruce's own step (`hams-user-does-all-pushing`), and this doesn't override the general engineering

@@ -11,7 +11,7 @@ metadata:
 # The generated patent PDFs are the real filings, not a preview
 
 In Bruce Perens's `hams_com` repository, the directory
-`docs/proposals/patent_disclosures/filed_applications/<NN>_<name>/` holds the
+`docs/patent_disclosures/filed_applications/<NN>_<name>/` holds the
 actual documents Bruce submits to the USPTO for each provisional application:
 `specification.pdf`, `drawings.pdf`, and the `_src/` HTML they were rendered
 from. They are generated from `provisional_specs/<NN>_<name>.md` by

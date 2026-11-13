@@ -1061,7 +1061,7 @@ to `if: false`. Don't report its skipped job as a failure.
 ## Part 2: The structured to-do queue
 
 Bruce's own instruction, 2026-09-15, after a session watched multiple independent hourly
-`dependabot-and-ci-watch` runs coordinate real work all evening: `night_shift_todo.md` had grown
+`dependabot-and-ci-watch` runs coordinate real work all evening: `night_shift_todo/` had grown
 past 8,900 lines of free-form prose, genuinely hard for any session to scan for "what's actually
 still open" without a full read-through -- exactly the failure mode that once caused a claimed
 "done" backlog to turn out to have 20 unsorted files still sitting in it. His fix, given directly:
@@ -1118,7 +1118,7 @@ created_at: 2026-09-15
 
 Free-form body: what the to-do actually is, why it matters, any investigation already done,
 relevant commit hashes, links to proposals. Write it the same way you'd write a
-night_shift_todo.md entry -- this replaces that habit, not the writing quality.
+night_shift_todo/ entry -- this replaces that habit, not the writing quality.
 ```
 
 ### Workflow
@@ -1193,7 +1193,7 @@ to-do for any that isn't, after checking whether its owning session already file
 tracking to-dos in your commit or history entry so a later reader doesn't re-investigate them.
 
 **Completing one**: fold a real summary (what was found, what was fixed, commit hashes, test
-results -- the same standard `night_shift_todo.md` entries already held) into
+results -- the same standard `night_shift_todo/` entries already held) into
 a new `night_shift_history/` entry file (see "Where history entries go" below), then remove the
 to-do's own file from `night_shift_todo/` (`git rm` it). The queue directory should always reflect
 only genuinely open work -- a completed item lingering there as `status: done` defeats the point of
@@ -1207,7 +1207,7 @@ staged is yours on a box other sessions are actively writing to.
 
 ### Relationship to other systems -- don't conflate these
 
-- **`night_shift_todo.md` is now historical.** It holds the full record up to 2026-09-15 and stays
+- **`night_shift_history.md` is now historical.** It holds the full record up to 2026-09-15 and stays
   as reference, but new to-dos go into this directory, not appended to that file. It carries a note
   at its own top saying so.
 - **`night_shift_history/`** (one file per entry; it was the single file `night_shift_history.md` until 2026-11-08) is

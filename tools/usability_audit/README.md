@@ -1,6 +1,6 @@
 # Simulated-newcomer usability audit
 
-Implements `docs/proposals/USABILITY_AUDIT_SIMULATED_HAM.md`: a real headless browser, driven by
+Implements `hams_com/docs/proposals/done/USABILITY_AUDIT_SIMULATED_HAM.md`: a real headless browser, driven by
 a non-technical-ham persona, walking the live site and producing structured, timestamped
 critique. See that proposal for the full rationale and the open questions it deliberately leaves
 unsettled (persona count/cadence, where critique gets triaged, whether to allow recovery attempts
@@ -8,7 +8,7 @@ unsettled (persona count/cadence, where critique gets triaged, whether to allow 
 `CONSECUTIVE_CONFUSION_LIMIT` (3) confused steps in a row, to keep each run's signal comparable).
 
 This is deliberately **not** a Claude Agent/fork dispatch. Per
-`.claude/skills/avoiding-api-costs/SKILL.md`, it's a standalone daemon that routes each decision
+`hams_com/agents/skills/avoiding-api-costs/SKILL.md`, it's a standalone daemon that routes each decision
 point through this codebase's own established MCP (Model Context Protocol) scheme (`hams_shared/tools/mcp_watchdog.py`'s
 IPC bridge, the same one `ingest/daemon_utils.py` uses for the course-content pipeline) rather
 than a direct API call -- no `GEMINI_API_KEY` needed. `ask_executor()` writes the prompt to a

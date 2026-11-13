@@ -101,5 +101,5 @@ version, so it cannot be rolled back. There is deliberately no expiry on a store
 (`RELAY_PROTOCOL_SIMPLE.md` 1.6): a revocation reaches a relay when its uplink next connects, and an
 owner can also block a key locally at the relay. This is a different answer from the bounded-validity
 window the "Real tension" section above asked for; Bruce chose it, and the proposal states the worst
-case. The audit this ADR points to lives in the night-shift to-do files (the old `night_shift_todo.md`
+case. The audit this ADR points to lives in the night-shift to-do files (the old `night_shift_todo/`
 archive is no longer the place).

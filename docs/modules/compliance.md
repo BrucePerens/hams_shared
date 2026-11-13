@@ -39,14 +39,14 @@ A non-interactive configuration module that enforces baseline regulatory complia
 ### 📚 User Stories & Journeys
 
 #### Stories
-* [Automatic Legal Pages Generation](./hams_shared/docs/stories/automatic_legal_pages.md) `story_automatic_legal_pages`
+* [Automatic Legal Pages Generation](../../../compliance/docs/stories/automatic_legal_pages.md) `story_automatic_legal_pages`
 
-* [Enforced Cookie Consent](./hams_shared/docs/stories/cookie_consent.md) `story_cookie_consent`
+* [Enforced Cookie Consent](../../../compliance/docs/stories/cookie_consent.md) `story_cookie_consent`
 
-* [Site Owner Documentation](./hams_shared/docs/stories/compliance_documentation.md) `story_compliance_documentation`
+* [Site Owner Documentation](../../../compliance/docs/stories/compliance_documentation.md) `story_compliance_documentation`
 
 #### Journeys
-* [Compliance Setup Journey](./hams_shared/docs/journeys/compliance_setup_journey.md) `journey_compliance_setup`
+* [Compliance Setup Journey](../../../compliance/docs/journeys/compliance_setup_journey.md) `journey_compliance_setup`
 
 ## 2. Enforcement Details
 * **Automated Cookie Consent:** Programmatically enables the Odoo `website` native `cookies_bar` boolean on install and sets it as the default for new websites. `compliance_post_init_cookie_bar`

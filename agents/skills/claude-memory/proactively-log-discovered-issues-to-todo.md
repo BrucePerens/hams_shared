@@ -22,7 +22,7 @@ fallback, so any test run or tool invocation that doesn't already have that vari
 outright). Neither belonged in the diff for the task actually being worked, but both were worth
 keeping.
 
-Apply this broadly, in any project with a durable to-do/backlog document (`night_shift_todo.md` in
+Apply this broadly, in any project with a durable to-do/backlog document (`night_shift_todo/` in
 this codebase): when a problem surfaces as a side effect of other work -- a lint failure, a crash,
 a stale assumption, missing test coverage -- don't silently drop it, and don't necessarily stop the
 current task to fix it either unless it actually blocks that task. Instead, add a clear, dated

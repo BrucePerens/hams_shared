@@ -30,7 +30,7 @@ live elsewhere.
   same footing: for hams_open, extract the factual/mathematical content by reading the source, cite
   it clearly (title, authors, URL), and do not commit the document itself.
 - **Patent disclosure drafting has two recurring scope traps to actively avoid** (from work on
-  `hams_com/docs/proposals/patent_disclosures/`): (1) never describe a safety/oversight/human-approval
+  `hams_com/docs/patent_disclosures/`): (1) never describe a safety/oversight/human-approval
   gate as a *required* element of an invention — a competitor can design around the patent by simply
   omitting the gate, and it would also box out the patent holder's own more-autonomous future
   version. Describe such a feature as a configurable posture across a range (fully autonomous to
@@ -81,14 +81,14 @@ live elsewhere.
   Since `hams_shared` is a git submodule shared by hams_com and hams_open, a new ADR needs its own
   submodule commit plus a separate submodule-pointer-bump commit in whichever parent repo(s)
   reference it.
-- **`night_shift_todo.md` (in `hams_com`) is the durable, always-consulted cross-session index for
+- **`night_shift_todo/` (in `hams_com`) is the durable, always-consulted cross-session index for
   this project** — individual proposal docs are not reliably re-read by a future session picking up
   the backlog, and their own status headers can go stale even after the true outcome was recorded
   elsewhere. Whenever the user answers a question that unblocks a proposal or backlog item, write the
-  question and answer into `night_shift_todo.md` immediately as its own dated entry, in addition to
+  question and answer into `night_shift_todo/` immediately as its own dated entry, in addition to
   updating the specific proposal doc — do this before moving on, not as a later cleanup pass. Before
   asking the user any proposal-blocker question or presenting a proposal survey as current status:
-  (1) grep `night_shift_todo.md` for the topic — its own record is the ground truth on what's already
+  (1) grep `night_shift_todo/` for the topic — its own record is the ground truth on what's already
   been asked and answered; (2) check the actual code or `git log -- <path>` for whether the feature
   already exists, since a proposal doc can simply never get updated when the work lands. A proposal
   doc's header is a claim to verify, not a source of truth.
@@ -114,7 +114,7 @@ live elsewhere.
   first build" for an open sub-question, that default IS the answer to build against, not merely one
   option awaiting Bruce's input — don't write "X would be the safer choice" and then withhold X
   because "there's an open question about X." None of this cancels ordinary engineering judgment:
-  still write real tests, still record decisions in `night_shift_todo.md`, still flag a genuine
+  still write real tests, still record decisions in `night_shift_todo/`, still flag a genuine
   product-judgment call with real tradeoffs that only Bruce can make, and this doesn't extend to
   pushing to remotes (below) or override the deployed-system caution question (below) where that
   caution is still warranted for reasons other than self-authorization.

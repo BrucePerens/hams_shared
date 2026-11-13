@@ -22,7 +22,7 @@ The rule has two parts, both standing:
 1. **Auto-promote, don't ask.** Any finding discovered during other work that could plausibly
    affect real users in production -- not just a test artifact, not just a linter nit, not
    something confirmed test-only/environment-only -- gets written into the relevant to-do list
-   (currently `night_shift_todo.md`) as explicitly HIGH PRIORITY the moment it's found, without
+   (currently `night_shift_todo/`) as explicitly HIGH PRIORITY the moment it's found, without
    waiting for the user to ask. This mirrors how the `shack_sw.js` finding was framed once flagged:
    a short "why this is high priority, not just a test nit" explanation of the concrete production
    impact, not just a severity label.

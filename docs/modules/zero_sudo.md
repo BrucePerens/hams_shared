@@ -121,7 +121,7 @@ Safely retrieves a whitelisted system configuration parameter, reading it as `ze
 **Special concerns.** An allowed read runs as `zero_sudo.config_service_internal`, not with `.sudo()`. A denied read writes a `zero_sudo.security.log` row as the facility account. Cryptographic secrets come from `_get_crypto_secret`, never from here. Test: `COMM_test_01_mechanical_secret_block_enforcement`.
 
 #### `_notify_cache_invalidation(model_name, key_value)` `[@ANCHOR: coherent_cache_signal]`
-Emits a PostgreSQL `NOTIFY` event to synchronize distributed caches. It delegates to `distributed_redis_cache`'s `notify_model_invalidation()`, which signals on the `distributed_cache_invalidation` channel that the `distributed_redis_cache` cache-manager daemon listens on. Invalidation is for the whole model; `key_value` must be non-empty but does not narrow it. What this signal does and does not reach on other workers is spelled out in [docs/stories/cache_signaling.md](docs/stories/cache_signaling.md).
+Emits a PostgreSQL `NOTIFY` event to synchronize distributed caches. It delegates to `distributed_redis_cache`'s `notify_model_invalidation()`, which signals on the `distributed_cache_invalidation` channel that the `distributed_redis_cache` cache-manager daemon listens on. Invalidation is for the whole model; `key_value` must be non-empty but does not narrow it. What this signal does and does not reach on other workers is spelled out in [../../../zero_sudo/docs/stories/cache_signaling.md](../../../zero_sudo/docs/stories/cache_signaling.md).
 
 #### `_get_crypto_secret()` `[@ANCHOR: get_crypto_secret]`
 Retrieves the root cryptographic key from environment or local file, bypassing DB. It checks the `HAMS_CRYPTO_KEY` environment variable, then `/var/lib/odoo/hams_crypto.secret`, then Odoo's `admin_passwd` setting. If none is set, or the value is `admin`, it logs an error and returns an empty string, so callers must refuse to encrypt or sign.
@@ -204,26 +204,26 @@ The centralized audit log model (`zero_sudo_security_log`). Records blocked serv
 For detailed narratives and end-to-end workflows, refer to the following:
 
 ### Stories
-* **Secure Privilege Escalation** `COMM_story_secure_escalation`: Narrative on how developers securely escalate privileges using service accounts instead of `.sudo()`. [Read Story](zero_sudo/hams_shared/docs/stories/secure_escalation.md)
+* **Secure Privilege Escalation** `COMM_story_secure_escalation`: Narrative on how developers securely escalate privileges using service accounts instead of `.sudo()`. [Read Story](../../../zero_sudo/docs/stories/secure_escalation.md)
 
-* **Blocking Service Account Login** `COMM_story_login_blocking`: How the system prevents service accounts from accessing the interactive web interface. [Read Story](zero_sudo/hams_shared/docs/stories/login_blocking.md)
+* **Blocking Service Account Login** `COMM_story_login_blocking`: How the system prevents service accounts from accessing the interactive web interface. [Read Story](../../../zero_sudo/docs/stories/login_blocking.md)
 
-* **Parameter Whitelisting** `COMM_story_parameter_whitelisting`: Protection of sensitive system parameters from unauthorized access. [Read Story](zero_sudo/hams_shared/docs/stories/parameter_whitelisting.md)
+* **Parameter Whitelisting** `COMM_story_parameter_whitelisting`: Protection of sensitive system parameters from unauthorized access. [Read Story](../../../zero_sudo/docs/stories/parameter_whitelisting.md)
 
-* **Multi-Website Awareness** `story_multi_website`: How the security core behaves in multi-website environments. [Read Story](zero_sudo/hams_shared/docs/stories/multi_website.md)
+* **Multi-Website Awareness** `story_multi_website`: How the security core behaves in multi-website environments. [Read Story](../../../zero_sudo/docs/stories/multi_website.md)
 
-* **Coherent Cache Signaling** `COMM_story_cache_signaling`: Ensuring cache consistency across multiple Odoo workers using Postgres NOTIFY. [Read Story](zero_sudo/hams_shared/docs/stories/cache_signaling.md)
+* **Coherent Cache Signaling** `COMM_story_cache_signaling`: Ensuring cache consistency across multiple Odoo workers using Postgres NOTIFY. [Read Story](../../../zero_sudo/docs/stories/cache_signaling.md)
 
-* **Deterministic Hashing** `COMM_story_deterministic_hash`: Generation of stable integer hashes for PostgreSQL advisory locks. [Read Story](zero_sudo/hams_shared/docs/stories/deterministic_hashing.md)
+* **Deterministic Hashing** `COMM_story_deterministic_hash`: Generation of stable integer hashes for PostgreSQL advisory locks. [Read Story](../../../zero_sudo/docs/stories/deterministic_hashing.md)
 
-* **Centralized Documentation Bootstrap** `story_zero_sudo_doc_installer`: How documentation is centrally installed across the platform. [Read Story](zero_sudo/hams_shared/docs/stories/documentation_bootstrap.md)
+* **Centralized Documentation Bootstrap** `story_zero_sudo_doc_installer`: How documentation is centrally installed across the platform. [Read Story](../../../zero_sudo/docs/stories/documentation_bootstrap.md)
 
 ### Journeys
-* **Service Account Lifecycle** `COMM_journey_service_account_lifecycle`: The end-to-end flow of a service account from provisioning to secure execution. [Read Journey](zero_sudo/hams_shared/docs/journeys/service_account_lifecycle.md)
+* **Service Account Lifecycle** `COMM_journey_service_account_lifecycle`: The end-to-end flow of a service account from provisioning to secure execution. [Read Journey](../../../zero_sudo/docs/journeys/service_account_lifecycle.md)
 
-* **Securing Configuration Parameters** `COMM_journey_securing_configuration`: The workflow for safely integrating and accessing new configuration parameters. [Read Journey](zero_sudo/hams_shared/docs/journeys/securing_configuration.md)
+* **Securing Configuration Parameters** `COMM_journey_securing_configuration`: The workflow for safely integrating and accessing new configuration parameters. [Read Journey](../../../zero_sudo/docs/journeys/securing_configuration.md)
 
-* **Developer Integration** `journey_developer_integration`: End-to-end workflow for developers to integrate with the Zero-Sudo ecosystem. [Read Journey](zero_sudo/hams_shared/docs/journeys/developer_integration.md)
+* **Developer Integration** `journey_developer_integration`: End-to-end workflow for developers to integrate with the Zero-Sudo ecosystem. [Read Journey](../../../zero_sudo/docs/journeys/developer_integration.md)
 </stories_and_journeys>
 
 ## 7. Function-Level Anchors

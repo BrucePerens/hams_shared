@@ -126,28 +126,28 @@ Every record rule below is also limited to the user's allowed companies.
 For detailed narratives and end-to-end workflows, refer to the following:
 
 ### Stories
-* [Article Feedback](hams_shared/docs/stories/feedback.md) `story_manual_feedback`
+* [Article Feedback](../../../knowledge/docs/stories/feedback.md) `story_manual_feedback`
 
-* [Article Hierarchy Integrity](hams_shared/docs/stories/hierarchy.md) `story_manual_hierarchy`
+* [Article Hierarchy Integrity](../../../knowledge/docs/stories/hierarchy.md) `story_manual_hierarchy`
 
-* [Automated Documentation Installation](hams_shared/docs/stories/doc_installation.md) `story_manual_doc_installation`
+* [Automated Documentation Installation](../../../knowledge/docs/stories/doc_installation.md) `story_manual_doc_installation`
 
-* [Backend Management Views](hams_shared/docs/stories/backend_views.md) `story_manual_backend_views`
+* [Backend Management Views](../../../knowledge/docs/stories/backend_views.md) `story_manual_backend_views`
 
-* [Dynamic Table of Contents](hams_shared/docs/stories/toc.md) `story_manual_toc`
+* [Dynamic Table of Contents](../../../knowledge/docs/stories/toc.md) `story_manual_toc`
 
-* [Dynamic URL Generation](hams_shared/docs/stories/url_generation.md) `story_manual_url_generation`
+* [Dynamic URL Generation](../../../knowledge/docs/stories/url_generation.md) `story_manual_url_generation`
 
-* [Searching the Manual](hams_shared/docs/stories/search.md) `story_manual_search`
+* [Searching the Manual](../../../knowledge/docs/stories/search.md) `story_manual_search`
 
-* [Viewing Manual Articles](hams_shared/docs/stories/article_view.md) `story_article_view`
+* [Viewing Manual Articles](../../../knowledge/docs/stories/article_view.md) `story_article_view`
 
 ### Journeys
-* [Administrator Managing Articles](hams_shared/docs/journeys/admin_managing_articles.md) `journey_admin_managing`
+* [Administrator Managing Articles](../../../knowledge/docs/journeys/admin_managing_articles.md) `journey_admin_managing`
 
-* [Developer Integrating Documentation](hams_shared/docs/journeys/developer_doc_integration.md) `journey_developer_integration`
+* [Developer Integrating Documentation](../../../knowledge/docs/journeys/developer_doc_integration.md) `journey_developer_integration`
 
-* [User Browsing the Manual](hams_shared/docs/journeys/user_browsing_journey.md) `journey_user_browsing`
+* [User Browsing the Manual](../../../knowledge/docs/journeys/user_browsing_journey.md) `journey_user_browsing`
 </stories_and_journeys>
 
 ---
@@ -206,34 +206,34 @@ Purpose: show markdown typed into the editor as HTML. `_compile_markdown(html_bo
 Behaviour: an empty body gives empty `Markup`. The body is converted to plain text with `html2plaintext` and scanned for markdown signatures (headings, fenced code, list items, bold, links). Compilation is skipped when the HTML already holds structure (`div`, tables, images, headings, lists, `pre`, `blockquote`, `svg` and similar). The markdown library output (extensions fenced_code, tables, nl2br, toc) always passes through Odoo's `html_sanitize` before it is marked safe, so typed text such as a script tag cannot become live HTML. The result is kept in an LRU cache (`_md_cache`). If the markdown parser fails, the original body is returned. No database access. The LRU cache holds 1024 entries. Test: `knowledge/tests/test_robustness.py`.
 
 ### `story_manual_feedback` [@ANCHOR: story_manual_feedback]
-Story document `hams_shared/docs/stories/feedback.md`: a reader finishes an article and votes helpful or not helpful. The story walks through the POST to `/manual/feedback`, the honeypot, the read-access check and the atomic SQL increment, and cites `controller_manual_feedback`. It is a narrative anchor with no code of its own; the code and tests are those of `controller_manual_feedback`, and a change to the voting behaviour must change the story in the same pull request.
+Story document `hams_open/knowledge/docs/stories/feedback.md`: a reader finishes an article and votes helpful or not helpful. The story walks through the POST to `/manual/feedback`, the honeypot, the read-access check and the atomic SQL increment, and cites `controller_manual_feedback`. It is a narrative anchor with no code of its own; the code and tests are those of `controller_manual_feedback`, and a change to the voting behaviour must change the story in the same pull request.
 
 ### `story_manual_hierarchy` [@ANCHOR: story_manual_hierarchy]
-Story document `hams_shared/docs/stories/hierarchy.md`: an administrator tries to make an article a child of one of its own descendants, and the `_check_hierarchy` constraint refuses with a `ValidationError`. It cites `manual_check_hierarchy`. A narrative anchor with no code of its own; verification is `test_manual_check_hierarchy`. Change the story together with the constraint.
+Story document `hams_open/knowledge/docs/stories/hierarchy.md`: an administrator tries to make an article a child of one of its own descendants, and the `_check_hierarchy` constraint refuses with a `ValidationError`. It cites `manual_check_hierarchy`. A narrative anchor with no code of its own; verification is `test_manual_check_hierarchy`. Change the story together with the constraint.
 
 ### `story_manual_doc_installation` [@ANCHOR: story_manual_doc_installation]
-Story document `hams_shared/docs/stories/doc_installation.md`: when a module with a `knowledge_docs` manifest entry is installed, the loader in `zero_sudo` finds the Knowledge provider, installs the article and keeps it up to date by content hash. It cites `manual_doc_auto_install`, `manual_doc_injection` and `zero_sudo:zero_sudo_doc_installer`. No code of its own; tests are `test_04_doc_installation` and the zero_sudo tests.
+Story document `hams_open/knowledge/docs/stories/doc_installation.md`: when a module with a `knowledge_docs` manifest entry is installed, the loader in `zero_sudo` finds the Knowledge provider, installs the article and keeps it up to date by content hash. It cites `manual_doc_auto_install`, `manual_doc_injection` and `zero_sudo:zero_sudo_doc_installer`. No code of its own; tests are `test_04_doc_installation` and the zero_sudo tests.
 
 ### `story_manual_backend_views` [@ANCHOR: story_manual_backend_views]
-Story document `hams_shared/docs/stories/backend_views.md`: a documentation manager works in the backend list and form views (`view_knowledge_article_list`, `view_knowledge_article_form`), editing title, body, hierarchy, `internal_permission` and `member_ids`. It cites the view rendering test `test_manual_backend_views_rendering`. Narrative anchor, no function; creating, editing and deleting require the Manual Administrator group.
+Story document `hams_open/knowledge/docs/stories/backend_views.md`: a documentation manager works in the backend list and form views (`view_knowledge_article_list`, `view_knowledge_article_form`), editing title, body, hierarchy, `internal_permission` and `member_ids`. It cites the view rendering test `test_manual_backend_views_rendering`. Narrative anchor, no function; creating, editing and deleting require the Manual Administrator group.
 
 ### `story_manual_toc` [@ANCHOR: story_manual_toc]
-Story document `hams_shared/docs/stories/toc.md`: on a long article the browser builds a sticky table of contents from `h2` and `h3` headings. It cites `manual_toc_logic` and the tour `test_tour_manual_toc`. A narrative anchor; the behaviour is documented in the `manual_toc_logic` entry above.
+Story document `hams_open/knowledge/docs/stories/toc.md`: on a long article the browser builds a sticky table of contents from `h2` and `h3` headings. It cites `manual_toc_logic` and the tour `test_tour_manual_toc`. A narrative anchor; the behaviour is documented in the `manual_toc_logic` entry above.
 
 ### `story_manual_url_generation` [@ANCHOR: story_manual_url_generation]
-Story document `hams_shared/docs/stories/url_generation.md`: renaming or creating an article recomputes its `/manual/<id>-<safe-name>` address. It cites `manual_compute_website_url` and the test `test_manual_url_slug_generation`. Narrative anchor only, with no code of its own; the slug rules (accent folding, dashes, id prefix) are in the `manual_compute_website_url` entry, and a change to them must change the story.
+Story document `hams_open/knowledge/docs/stories/url_generation.md`: renaming or creating an article recomputes its `/manual/<id>-<safe-name>` address. It cites `manual_compute_website_url` and the test `test_manual_url_slug_generation`. Narrative anchor only, with no code of its own; the slug rules (accent folding, dashes, id prefix) are in the `manual_compute_website_url` entry, and a change to them must change the story.
 
 ### `story_manual_search` [@ANCHOR: story_manual_search]
-Story document `hams_shared/docs/stories/search.md`: a reader who does not know where a topic lives uses the search bar. The story states that the search is a case-insensitive substring match over title and body of articles the reader may see, and cites `controller_manual_search`. Narrative anchor; tour `test_tour_manual_search` verifies it.
+Story document `hams_open/knowledge/docs/stories/search.md`: a reader who does not know where a topic lives uses the search bar. The story states that the search is a case-insensitive substring match over title and body of articles the reader may see, and cites `controller_manual_search`. Narrative anchor; tour `test_tour_manual_search` verifies it.
 
 ### `story_article_view` [@ANCHOR: story_article_view]
-Story document `hams_shared/docs/stories/article_view.md`: a visitor opens `/manual` or `/manual/<id>-<slug>`. The `manual_article_view` controller extracts the id, falls back to the first root article, checks read access, redirects to the canonical slug, compiles markdown and renders article, sidebar and breadcrumbs. It cites `controller_manual_article_view`. Narrative anchor with no function of its own.
+Story document `hams_open/knowledge/docs/stories/article_view.md`: a visitor opens `/manual` or `/manual/<id>-<slug>`. The `manual_article_view` controller extracts the id, falls back to the first root article, checks read access, redirects to the canonical slug, compiles markdown and renders article, sidebar and breadcrumbs. It cites `controller_manual_article_view`. Narrative anchor with no function of its own.
 
 ### `journey_admin_managing` [@ANCHOR: journey_admin_managing]
-Journey document `hams_shared/docs/journeys/admin_managing_articles.md`: a Manual Administrator creates an article, sets a parent (guarded by `manual_check_hierarchy`), checks the generated address (`manual_compute_website_url`) and publishes it. The persona is a member of the Manual Administrator group. Narrative anchor; it links the hierarchy and URL stories and has no code.
+Journey document `hams_open/knowledge/docs/journeys/admin_managing_articles.md`: a Manual Administrator creates an article, sets a parent (guarded by `manual_check_hierarchy`), checks the generated address (`manual_compute_website_url`) and publishes it. The persona is a member of the Manual Administrator group. Narrative anchor; it links the hierarchy and URL stories and has no code.
 
 ### `journey_developer_integration` [@ANCHOR: journey_developer_integration]
-Journey document `hams_shared/docs/journeys/developer_doc_integration.md`: a module developer writes `data/documentation.html`, lists it in `knowledge_docs` in the manifest, installs the module and checks `/manual`. It cites the installer anchor `zero_sudo:zero_sudo_doc_installer` and the story `story_manual_doc_installation`. Narrative anchor with no code of its own.
+Journey document `hams_open/knowledge/docs/journeys/developer_doc_integration.md`: a module developer writes `data/documentation.html`, lists it in `knowledge_docs` in the manifest, installs the module and checks `/manual`. It cites the installer anchor `zero_sudo:zero_sudo_doc_installer` and the story `story_manual_doc_installation`. Narrative anchor with no code of its own.
 
 ### `journey_user_browsing` [@ANCHOR: journey_user_browsing]
-Journey document `hams_shared/docs/journeys/user_browsing_journey.md`: a guest or portal user arrives at `/manual`, searches (`controller_manual_search`), navigates by sidebar and breadcrumbs, reads an article with its table of contents and gives feedback (`controller_manual_feedback`). Narrative anchor with no code; the personas are Guest and Portal User, and what they may see follows the record rules in section 5 above.
+Journey document `hams_open/knowledge/docs/journeys/user_browsing_journey.md`: a guest or portal user arrives at `/manual`, searches (`controller_manual_search`), navigates by sidebar and breadcrumbs, reads an article with its table of contents and gives feedback (`controller_manual_feedback`). Narrative anchor with no code; the personas are Guest and Portal User, and what they may see follows the record rules in section 5 above.

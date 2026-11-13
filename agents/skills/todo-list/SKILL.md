@@ -23,7 +23,7 @@ When adding a new to-do, use `write_to_file` (with Overwrite=True) to rewrite th
 
 - [x] Architect Winlink integration into the Rust relay daemon.
   - Details: Define protocol for sending/receiving Winlink B2F messages over WebSocket. Scope out how Pat and Direwolf/ARDOP will integrate into the relay daemon's architecture.
-  - Linked Proposal: [WINLINK_RELAY_DAEMON_INTEGRATION.md](../../../../../hams_com/docs/proposals/WINLINK_RELAY_DAEMON_INTEGRATION.md)
+  - Linked Proposal: [WINLINK_RELAY_DAEMON_INTEGRATION.md](../../../../../hams_com/docs/proposals/done/WINLINK_RELAY_DAEMON_INTEGRATION.md)
 
 - [x] Add auto-update function to hams_relay_server.
   - Details: Implement a mechanism for the Rust relay daemon to automatically update itself when a new release is available.
