@@ -1093,6 +1093,7 @@ class GcUnitFilesTest(unittest.TestCase):
         timer = open(os.path.join(directory, "hams-ram-dirs-gc.timer"), encoding="utf-8").read()
         self.assertIn("ram_dirs.py gc", service)
         self.assertIn("Type=oneshot", service)
+        self.assertIn("TimeoutStartSec=", service, "a hung oneshot would silence an OnUnitActiveSec timer for ever")
         self.assertIn("OnUnitActiveSec=30min", timer)
         self.assertNotIn("[Install]", service, "the service is started by the timer, not enabled itself")
         self.assertIn("WantedBy=timers.target", timer)
