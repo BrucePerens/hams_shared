@@ -314,7 +314,7 @@ ODOO_RPC_KEY=12345abcd...
 
 **See also.** `cron_rotation_trigger`, test `test_cron_rotate_all_keys`.
 
-### `daemon_self_healing` [@ANCHOR: daemon_self_healing]
+### `daemon_self_healing` [@ANCHOR: daemons:daemon_self_healing]
 
 **Purpose.** The rule that a daemon using a registry key must survive that key being rotated while it runs.
 
