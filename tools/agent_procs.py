@@ -24,7 +24,9 @@ pattern search never lists the searcher, its ancestors or its descendants. Pure 
                           a named job; log in ~/.cache/hams-jobs/NAME.log; ends after 1800 s (`--timeout 0`: never) and is
                           capped at 6G (`--mem-max none`: no cap; systemd-run --user scope, else ulimit -v); a timeout stops
                           the whole process group (exit 124, reason `timeout` in the record); the command dies with its wrapper
-    agent_procs.py jobs   [--json]
+    agent_procs.py jobs   [--json]                         shows each job's timeout and memory cap
+    agent_procs.py reap   [--min-age S] [--apply] [--force]   your orphans: cwd a deleted path under /storage/agent_work, or
+                          parent the systemd user manager and cwd under it, older than 900 s; dry run unless --apply
     agent_procs.py stop   NAME [--grace S] [--force]          SIGTERM the job's process group; SIGKILL only with --force
     agent_procs.py kill-pid PID (--start-time T | --cwd-under PATH) [--grace S] [--force]    one exact, verified pid
 
@@ -62,6 +64,8 @@ DEFAULT_GRACE = 10.0
 DEFAULT_TIMEOUT = 1800
 DEFAULT_MEM_MAX = "6G"
 KILL_GRACE = 10
+AGENT_WORK_ROOT = "/storage/agent_work"
+DEFAULT_MIN_AGE = 900
 EX_TIMEOUT_JOB = 124
 POLL_INTERVAL = 0.5
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
@@ -1065,6 +1069,65 @@ def cmd_jobs(args, out=sys.stdout):
     return EX_OK
 
 
+# [@ANCHOR: agent_procs:orphan_reason]
+def orphan_reason(info, table, min_age, now, boot):
+    """Why `info` is an orphan of an agent worktree, or `None`. It must be older than `min_age` seconds, have its cwd under
+    `AGENT_WORK_ROOT`, and either that cwd is deleted (`/proc/PID/cwd` reads `<path> (deleted)`), or its parent (in `table`)
+    is a systemd user manager (comm `systemd`, not pid 1, same user): the agent that started it is gone."""
+    cwd = info.cwd or ""
+    deleted = cwd.endswith(" (deleted)")
+    if not is_under(cwd[:-len(" (deleted)")] if deleted else cwd, AGENT_WORK_ROOT):
+        return None
+    if now - (boot + info.start_ticks / CLK_TCK) < min_age:
+        return None
+    if deleted:
+        return "its working directory was deleted"
+    parent = table.get(info.ppid)
+    if parent is not None and parent.pid != 1 and parent.uid == info.uid and parent.comm == "systemd":
+        return "its parent is the systemd user manager (the agent that started it is gone)"
+    return None
+
+
+# [@ANCHOR: agent_procs:find_orphans]
+def find_orphans(table, min_age=DEFAULT_MIN_AGE, directory=None):
+    """`[(ProcInfo, reason)]` of the caller's own orphaned agent processes (`orphan_reason`). Never listed: protected
+    processes (`protected_reason`), the caller's family, and any process in the session of a still-running recorded job
+    (`run` jobs are children of the user manager too)."""
+    now, boot, me = time.time(), boot_time(), os.getuid()
+    family = ancestry(table, os.getpid())
+    job_sids = {rec.sid for rec in list_records(directory) if job_state(rec) == "running"}
+    worktree, tmpdir = caller_worktree(), os.environ.get("TMPDIR")
+    found = []
+    for info in sorted(table.values(), key=lambda i: i.pid):
+        if info.uid != me or info.sid in job_sids or info.state in ("Z", "X"):
+            continue
+        why = orphan_reason(info, table, min_age, now, boot)
+        if why and not protected_reason(info, me, worktree, tmpdir, family):
+            found.append((info, why))
+    return found
+
+
+# [@ANCHOR: agent_procs:cmd_reap]
+def cmd_reap(args, out=sys.stdout):
+    """`reap` subcommand: lists `find_orphans`; with `--apply` stops each through `kill_pid` (SIGTERM, exact start time,
+    the hard kill only with `--force`). Returns 0, or 1 when a process was still running after the grace."""
+    found = find_orphans(snapshot(), args.min_age)
+    code = EX_OK
+    for info, why in found:
+        print(f"{ps_line(info)}  ORPHAN: {why}", file=out)
+        if args.apply:
+            try:
+                if kill_pid(info.pid, info.start_ticks, force=args.force, out=out):
+                    code = EX_FAILED
+            except ProcError as error:
+                print(f"  skipped: {error}", file=out)
+    if not found:
+        print("no orphans", file=out)
+    elif not args.apply:
+        print(f"{len(found)} orphan(s); dry run, add --apply to stop them", file=out)
+    return code
+
+
 # [@ANCHOR: agent_procs:cmd_stop]
 def cmd_stop(args, out=sys.stdout):
     """`stop` subcommand: `stop_job` with the command-line options."""
@@ -1117,6 +1180,10 @@ def build_parser():
                      help=f"stop the whole process group after this long (default {DEFAULT_TIMEOUT}; 0: no timeout)")
     run.add_argument("--mem-max", metavar="SIZE", help=f"memory cap, e.g. 4G (default {DEFAULT_MEM_MAX}; none: no cap)")
     run.add_argument("--nice", type=int, metavar="N", help="run under nice -n N")
+    reap = sub.add_parser("reap", help="list (and with --apply stop) your orphaned agent-worktree processes")
+    reap.add_argument("--min-age", type=float, default=DEFAULT_MIN_AGE, metavar="SECONDS")
+    reap.add_argument("--apply", action="store_true", help="stop them (default: dry run)")
+    reap.add_argument("--force", action="store_true", help="with --apply: hard-kill one that survives SIGTERM")
     jobs = sub.add_parser("jobs", help="list job records")
     jobs.add_argument("--json", action="store_true")
     stop = sub.add_parser("stop", help="stop a named job (its process group)")
@@ -1167,7 +1234,7 @@ def main(argv=None):
         if args.cmd == "_wrap":
             return wrapper_main(args.name, args.command, timeout=args.timeout, kill_grace=args.kill_grace,
                             mem_max=None if args.mem_max == "none" else args.mem_max, nice=args.nice)
-        handler = {"find": cmd_find, "wait": cmd_wait, "run": cmd_run, "jobs": cmd_jobs, "stop": cmd_stop,
+        handler = {"find": cmd_find, "wait": cmd_wait, "run": cmd_run, "jobs": cmd_jobs, "reap": cmd_reap, "stop": cmd_stop,
                    "kill-pid": cmd_kill_pid}[args.cmd]
         return handler(args)
     except ProcError as error:

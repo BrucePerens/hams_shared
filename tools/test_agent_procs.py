@@ -40,6 +40,8 @@ Tests [@ANCHOR: agent_procs:wrapper_main]
 Tests [@ANCHOR: agent_procs:parse_size]
 Tests [@ANCHOR: agent_procs:limit_argv]
 Tests [@ANCHOR: agent_procs:stop_group]
+Tests [@ANCHOR: agent_procs:orphan_reason]
+Tests [@ANCHOR: agent_procs:cmd_reap]
 Tests [@ANCHOR: agent_procs:start_job]
 Tests [@ANCHOR: agent_procs:wait_pid]
 Tests [@ANCHOR: agent_procs:wait_matching]
@@ -1092,6 +1094,77 @@ class LimitTests(ProcTestCase):
         fallback = ap.limit_argv(["x"], "1G", 0, have_systemd=False)
         self.assertEqual(fallback[0], "sh")
         self.assertIn("ulimit -v 1048576", fallback[2])
+
+
+class ReapTests(ProcTestCase):
+    """reap: orphans of deleted agent worktrees, nothing else."""
+
+    def setUp(self):
+        super().setUp()
+        self.root = os.path.join(self.tmp, "agent_work")
+        os.makedirs(self.root)
+        old = ap.AGENT_WORK_ROOT
+        ap.AGENT_WORK_ROOT = self.root
+        self.addCleanup(setattr, ap, "AGENT_WORK_ROOT", old)
+
+    def work_proc(self, name, token):
+        """A python sleeper whose cwd is the directory `name` under the fake agent_work root."""
+        path = os.path.join(self.root, name)
+        os.makedirs(path)
+        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)", token], cwd=path,
+                                start_new_session=True)
+        self.spawned.append(proc)
+        self.until(lambda: ap.read_proc(proc.pid) is not None and token in " ".join(ap.read_proc(proc.pid).argv))
+        return proc, path
+
+    def test_reap_finds_the_deleted_cwd_process_and_only_that(self):
+        gone, gone_path = self.work_proc("wt-gone", "tokreap1")
+        live, _ = self.work_proc("wt-live", "tokreap2")
+        elsewhere = self.decoy("tokreap3", cwd=self.tmp)
+        shutil.rmtree(gone_path)
+        found = [info.pid for info, _why in ap.find_orphans(ap.snapshot(), min_age=0)]
+        self.assertIn(gone.pid, found)
+        self.assertNotIn(live.pid, found)
+        self.assertNotIn(elsewhere.pid, found)
+        out = io.StringIO()
+        self.assertEqual(ap.cmd_reap(ap.parse_args(["reap", "--min-age", "0"]), out), 0)
+        self.assertIn(str(gone.pid), out.getvalue())
+        self.assertTrue(self.alive(gone))  # a dry run signals nothing
+        out = io.StringIO()
+        self.assertEqual(ap.cmd_reap(ap.parse_args(["reap", "--min-age", "0", "--apply"]), out), 0)
+        self.until(lambda: not self.alive(gone))
+        self.assertTrue(self.alive(live))
+        self.assertTrue(self.alive(elsewhere))
+
+    def test_min_age_keeps_young_processes(self):
+        gone, gone_path = self.work_proc("wt-young", "tokreap4")
+        shutil.rmtree(gone_path)
+        self.assertEqual([i for i, _ in ap.find_orphans(ap.snapshot(), min_age=900) if i.pid == gone.pid], [])
+
+    def test_a_running_recorded_job_is_not_an_orphan_and_a_protected_one_is_never_listed(self):
+        rec = ap.start_job("keep", ["sleep", "61.7"], cwd=self.root, mem_max=None, directory=self.jobs)
+        fake_pg = subprocess.Popen(["bash", "-c", 'exec -a postgres sleep 120'], cwd=self.root, start_new_session=True)
+        self.spawned.append(fake_pg)
+        self.until(lambda: ap.read_proc(fake_pg.pid) is not None and ap.read_proc(fake_pg.pid).argv[0] == "postgres")
+        shutil.rmtree(self.root)  # every cwd above is now deleted
+        found = [i.pid for i, _ in ap.find_orphans(ap.snapshot(), min_age=0)]
+        self.assertNotIn(fake_pg.pid, found)
+        self.assertEqual([p for p in found if ap.read_proc(p).sid == rec.sid], [])
+
+    def test_orphan_reason_rules(self):
+        now = time.time()
+        boot = ap.boot_time()
+        old_ticks = int((now - 5000 - boot) * ap.CLK_TCK)
+        sysd = ap.ProcInfo(777, 1, 777, 777, os.getuid(), "me", "S", 1, "systemd", ("/lib/systemd/systemd", "--user"), "/")
+        base = dict(pid=778, pgid=778, sid=778, uid=os.getuid(), user="me", state="S", start_ticks=old_ticks, comm="x",
+                    argv=("x",))
+        table = {777: sysd}
+        child = ap.ProcInfo(ppid=777, cwd=os.path.join(self.root, "wt"), **base)
+        self.assertIn("systemd", ap.orphan_reason(child, table, 900, now, boot))
+        self.assertIsNone(ap.orphan_reason(ap.ProcInfo(ppid=999, cwd=os.path.join(self.root, "wt"), **base), table, 900, now, boot))
+        self.assertIsNone(ap.orphan_reason(ap.ProcInfo(ppid=777, cwd="/home", **base), table, 900, now, boot))
+        self.assertIn("deleted", ap.orphan_reason(ap.ProcInfo(ppid=999, cwd=os.path.join(self.root, "wt") + " (deleted)",
+                                                              **base), table, 900, now, boot))
 
 
 class KillPidTests(ProcTestCase):
