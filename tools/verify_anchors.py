@@ -94,6 +94,8 @@ CODE_ISLANDS_UNDER_DOCS = [
     "daemons/shack_console/tools",
     # hams_local_relay's Python tools and simulators (rig_simulator, winkeyer_simulator, cw_tone_*, ...): same pruning.
     "daemons/hams_local_relay/tools",
+    # hams_auth_gateway's Python tools (browser_check, client_matrix, install_config, ...): same pruning.
+    "daemons/hams_auth_gateway/tools",
 ]
 
 # Directories every os.walk below prunes before descending -- never real, first-party source or
