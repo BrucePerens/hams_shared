@@ -11,6 +11,7 @@ use sha2::{Digest, Sha256};
 use crate::algos;
 use crate::text::{self, py_ext};
 
+// [@ANCHOR: hams_lint:rules_rule_file_struct]
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuleFile {
@@ -19,6 +20,7 @@ pub struct RuleFile {
     pub checks: Vec<CheckSpec>,
 }
 
+// [@ANCHOR: hams_lint:rules_check_spec_struct]
 #[derive(Debug, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct CheckSpec {
@@ -84,6 +86,7 @@ fn default_on_error() -> String {
     "warn".into()
 }
 
+// [@ANCHOR: hams_lint:rules_file_spec_struct]
 #[derive(Debug, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct FileSpec {
@@ -118,6 +121,7 @@ pub struct FileSpec {
     pub skip_broken_links: bool,
 }
 
+// [@ANCHOR: hams_lint:rules_line_rule_spec_struct]
 #[derive(Debug, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct LineRuleSpec {
@@ -141,6 +145,7 @@ pub struct LineRuleSpec {
     pub post_filter: String,
 }
 
+// [@ANCHOR: hams_lint:rules_example_struct]
 #[derive(Debug, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct Example {
@@ -150,6 +155,7 @@ pub struct Example {
     pub lines: Vec<usize>,
 }
 
+// [@ANCHOR: hams_lint:rules_finding_struct]
 /// One finding: 1-based line and message.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Finding {
@@ -157,6 +163,7 @@ pub struct Finding {
     pub message: String,
 }
 
+// [@ANCHOR: hams_lint:rules_file_result_struct]
 /// What one check concluded about one file.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct FileResult {
@@ -165,12 +172,14 @@ pub struct FileResult {
     pub warning: Option<String>,
 }
 
+// [@ANCHOR: hams_lint:rules_line_rule_struct]
 pub struct LineRule {
     pub spec: LineRuleSpec,
     regex: Option<Regex>,
     unless: Option<Regex>,
 }
 
+// [@ANCHOR: hams_lint:rules_check_struct]
 pub struct Check {
     pub spec: CheckSpec,
     pub fingerprint: String,
@@ -432,6 +441,15 @@ impl Check {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Tests [@ANCHOR: hams_lint:rules_rule_file_struct]
+    // Tests [@ANCHOR: hams_lint:rules_check_spec_struct]
+    // Tests [@ANCHOR: hams_lint:rules_file_spec_struct]
+    // Tests [@ANCHOR: hams_lint:rules_line_rule_spec_struct]
+    // Tests [@ANCHOR: hams_lint:rules_example_struct]
+    // Tests [@ANCHOR: hams_lint:rules_finding_struct]
+    // Tests [@ANCHOR: hams_lint:rules_file_result_struct]
+    // Tests [@ANCHOR: hams_lint:rules_line_rule_struct]
+    // Tests [@ANCHOR: hams_lint:rules_check_struct]
 
     #[test]
     fn name_patterns_take_one_star() {

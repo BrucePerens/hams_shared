@@ -36,9 +36,11 @@ use crate::rules::{Check, FileResult};
 pub const DEFAULT_RULES: &str = include_str!("../rules/checks.toml");
 const EXIT_NOT_CHECKED: i32 = 2;
 
+// [@ANCHOR: hams_lint:main_evaluated_type]
 /// One file's results: its path, (check index, result) pairs, and the bytes read.
 type Evaluated<'a> = (&'a str, Vec<(usize, FileResult)>, usize);
 
+// [@ANCHOR: hams_lint:main_root_result_struct]
 /// One check's results under one root, in the check's report order.
 struct RootResult {
     root: PathBuf,
@@ -46,6 +48,7 @@ struct RootResult {
     files: Vec<(String, FileResult)>,
 }
 
+// [@ANCHOR: hams_lint:main_stats_struct]
 struct Stats {
     walked_roots: usize,
     files_read: usize,
@@ -585,4 +588,18 @@ fn main() {
         other => refuse(&format!("[!] hams_lint: unknown command {other:?}")),
     };
     std::process::exit(code);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    // Tests [@ANCHOR: hams_lint:main_evaluated_type]
+    // Tests [@ANCHOR: hams_lint:main_root_result_struct]
+    // Tests [@ANCHOR: hams_lint:main_stats_struct]
+
+    #[test]
+    fn every_example_of_the_shipped_rules_gives_the_lines_it_names() {
+        let checks = rules::load(DEFAULT_RULES).expect("rules load");
+        assert_eq!(cmd_selftest(&checks), 0);
+    }
 }

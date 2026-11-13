@@ -47,6 +47,7 @@ use std::io::Read;
 use serde::Serialize;
 use syn::spanned::Spanned;
 
+// [@ANCHOR: rust_function_scan:main_function_entry_struct]
 #[derive(Serialize)]
 struct FunctionEntry {
     name: String,
@@ -77,6 +78,7 @@ struct FunctionEntry {
 /// control flow even though the outer expression is a plain `Binary`).
 fn expr_has_control_flow(expr: &syn::Expr) -> bool {
     use syn::visit::Visit;
+    // [@ANCHOR: rust_function_scan:main_finder_struct]
     struct Finder(bool);
     impl<'ast> Visit<'ast> for Finder {
         fn visit_expr(&mut self, e: &'ast syn::Expr) {
@@ -135,6 +137,7 @@ fn block_is_trivial(block: &syn::Block) -> bool {
     true
 }
 
+// [@ANCHOR: rust_function_scan:main_file_result_struct]
 #[derive(Serialize)]
 struct FileResult {
     file: String,
@@ -349,6 +352,9 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Tests [@ANCHOR: rust_function_scan:main_function_entry_struct]
+    // Tests [@ANCHOR: rust_function_scan:main_finder_struct]
+    // Tests [@ANCHOR: rust_function_scan:main_file_result_struct]
 
     fn scan_source(src: &str) -> Vec<FunctionEntry> {
         let file = syn::parse_file(src).expect("test fixture must parse");

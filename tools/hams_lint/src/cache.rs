@@ -14,6 +14,7 @@ use sha2::{Digest, Sha256};
 
 use crate::rules::{hex, FileResult};
 
+// [@ANCHOR: hams_lint:cache_cache_struct]
 pub struct Cache {
     path: PathBuf,
     old: HashMap<String, FileResult>,
@@ -93,5 +94,31 @@ impl Cache {
                 let _ = std::fs::rename(&tmp, &self.path);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    // Tests [@ANCHOR: hams_lint:cache_cache_struct]
+
+    #[test]
+    fn an_entry_saved_by_one_run_is_a_hit_for_the_next() {
+        let dir = std::env::temp_dir().join(format!("hams_lint_cache_test_{}", std::process::id()));
+        let root = dir.join("tree");
+        std::fs::create_dir_all(&root).unwrap();
+        let result = FileResult::default();
+
+        let first = Cache::open(&dir, &root);
+        assert!(first.get("fp", "a.py", "sha").is_none());
+        first.put("fp", "a.py", "sha", &result);
+        first.save();
+
+        let second = Cache::open(&dir, &root);
+        assert_eq!(second.get("fp", "a.py", "sha"), Some(result));
+        assert!(second.get("fp", "a.py", "other").is_none(), "another content hash is a miss");
+        assert!(second.get("fp2", "a.py", "sha").is_none(), "another fingerprint is a miss");
+        assert_eq!(second.hits.load(std::sync::atomic::Ordering::Relaxed), 1);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

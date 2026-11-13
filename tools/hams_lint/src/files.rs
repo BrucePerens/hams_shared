@@ -14,6 +14,7 @@ use std::process::Command;
 
 use rayon::prelude::*;
 
+// [@ANCHOR: hams_lint:files_root_files_struct]
 /// The candidate files of one root, relative to it with `/` separators.
 pub struct RootFiles {
     pub root: PathBuf,
@@ -201,6 +202,7 @@ pub fn py_abspath(given: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Tests [@ANCHOR: hams_lint:files_root_files_struct]
 
     #[test]
     fn walk_order_puts_files_before_subdirectories() {
