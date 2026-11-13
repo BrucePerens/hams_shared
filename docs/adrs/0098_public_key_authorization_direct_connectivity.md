@@ -3,7 +3,7 @@
 ## Status
 Accepted
 
-**Superseded in part 2026-10-23:** hams.com no longer uses ARRL Logbook of the World (LoTW) or TQSL (Bruce's decision); LoTW mentions below are kept as history.
+**Superseded in part 2026-10-23:** hams.com no longer uses ARRL (American Radio Relay League) Logbook of the World (LoTW) or TQSL (Bruce's decision); LoTW mentions below are kept as history.
 
 ## Context
 ADR 0097 (no ham radio function depends on our server) named a real, unresolved tension: caching a

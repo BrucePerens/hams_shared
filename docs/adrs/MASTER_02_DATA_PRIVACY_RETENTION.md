@@ -9,11 +9,11 @@ The platform must balance strict international privacy laws (GDPR/CCPA) with the
 ## Decisions & Mandates
 
 ### 1. Immutable Public RF Records & Infinite Retention
-Amateur Radio contacts (QSOs) were transmitted over public spectrum -- broadcast on the air, for
+Amateur Radio contacts (QSOs: two-way radio contact) were transmitted over public spectrum -- broadcast on the air, for
 anyone with a receiver to hear, at the moment they happened. That is what makes them a public
-record rather than personal data in the GDPR sense: the platform is not the origin of the
+record rather than personal data in the GDPR (the EU General Data Protection Regulation) sense: the platform is not the origin of the
 exposure, it is a durable record of something that was already public the instant it went out
-over RF. Erasing a QSO (radio contact) from the database after the fact would not undo that it was heard; it would
+over RF (radio frequency). Erasing a QSO (radio contact) from the database after the fact would not undo that it was heard; it would
 only make hams.com's own record of amateur radio history less accurate than the airwaves already
 made it.
 * `ham.qso` records are strictly exempt from cascading data destruction. A GDPR erasure request
@@ -66,11 +66,11 @@ made it.
   independently of whether that model's data also happens to be "public record" in the RF sense.
 
 ### 2. GDPR Erasure Separation of Privilege
-When executing a GDPR Right to Erasure request, the system must cascade and hard-delete all standard user data (Websites, Blogs, test progress). To comply with the Zero-Sudo architecture, this operation MUST NOT use `.sudo().unlink()`. Instead, the erasure hook MUST impersonate the `gdpr_service_internal` micro-service account, which possesses the exact granular ACLs required to cascade unlinks across the restricted tables safely.
+When executing a GDPR Right to Erasure request, the system must cascade and hard-delete all standard user data (Websites, Blogs, test progress). To comply with the Zero-Sudo architecture, this operation MUST NOT use `.sudo().unlink()`. Instead, the erasure hook MUST impersonate the `gdpr_service_internal` micro-service account, which possesses the exact granular ACLs (access control list) required to cascade unlinks across the restricted tables safely.
 
 ### 3. Location Data Precision & Geographic Fuzzing
 Location data (Maidenhead Grid Squares) MUST be stored at maximum precision but presented conditionally:
-* **Public RF Records:** Location data derived from DX spots or QSO logs is public and MUST be shown at full resolution.
+* **Public RF Records:** Location data derived from DX (long-distance contact) spots or QSO logs is public and MUST be shown at full resolution.
 * **Third-Party Directory Views:** When viewing a user's `ham.callbook` profile via public API or map, the ORM MUST mathematically truncate their grid to 4 characters and snap the map pin to the center of a regional bounding box, unless the user explicitly opts into `exact` privacy.
 * **Private Dashboards:** Dashboards presented strictly to the authenticated user (e.g., Propagation Maps) MUST use precise, un-fuzzed data.
 

@@ -12,7 +12,7 @@ allowed no exception at all. This ADR allows one narrow, documented, verified ex
 
 ## Context
 
-hams.com runs many daemons that fetch from servers we do not own: government callsign databases (FCC ULS, the Universal Licensing System;
+hams.com runs many daemons that fetch from servers we do not own: government callsign databases (FCC (Federal Communications Commission) ULS: Universal Licensing System, the Universal Licensing System;
 Ofcom, ACMA, ANATEL (Brazil), ISED (Canada), NZ RSM (New Zealand Radio Spectrum Management), BNetzA, the regulators of the other countries), QRZ (the QRZ.com callsign site), POTA/SOTA (Parks on the Air and Summits on the Air, portable-operating award programs), contest and hamfest calendars, club web pages,
 and so on. Until 2026-10-02 several of them sent a Chrome `User-Agent` string by default, and the FCC
 daemon also sent fake `Sec-Fetch-*` navigation headers and a Chrome TLS (Transport Layer Security) fingerprint (`curl_cffi`

@@ -45,7 +45,7 @@ You MUST isolate all distributed cache entries by tenant. Any Redis cache key th
 ### 3. The "Hams.com" Portal Company Definition
 There IS a primary company assigned to the central ham radio portal. The root Hams.com portal operates under the system's default base company (ID `1`), while decentralized "User Websites" operate under dynamically provisioned child companies or discrete websites tied to the base company depending on the user's tier.
 
-Therefore, global shared services (e.g., Space Weather telemetry, FCC syncing) MUST map their default un-scoped data to the root company to ensure global propagation.
+Therefore, global shared services (e.g., Space Weather telemetry, FCC (Federal Communications Commission) syncing) MUST map their default un-scoped data to the root company to ensure global propagation.
 
 ## Consequences
 * **Enhanced Data Isolation:** Prevents SSRF (server-side request forgery) or cache-poisoning attacks where one user website could potentially render data intended for another.

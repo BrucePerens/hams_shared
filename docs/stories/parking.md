@@ -163,7 +163,7 @@ Every anchor of the story has its own entry here (ADR 0113). "The parking servic
 
 ### `parking:COMM_inquiry_controller` [@ANCHOR: parking:COMM_inquiry_controller]
 
-**Purpose:** the single public POST of a parking instance, `ParkingController.inquiry(...)` in `parking/controllers/parking_api.py`, route `/__parking/inquiry` (public auth, CSRF off, no session saved).
+**Purpose:** the single public POST of a parking instance, `ParkingController.inquiry(...)` in `parking/controllers/parking_api.py`, route `/__parking/inquiry` (public auth, CSRF (cross-site request forgery) off, no session saved).
 
 | Field | Meaning |
 |---|---|

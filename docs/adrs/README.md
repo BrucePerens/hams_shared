@@ -7,7 +7,7 @@ This directory contains the Architecture Decision Records (ADRs) that define the
 * [MASTER 01: Security & Zero-Sudo Architecture](MASTER_01_SECURITY_ZERO_SUDO.md)
   Enforces the Service Account pattern, web isolation for daemons, strict limitations on `.sudo()`, View Abstraction, and OS-level Daemon Restrictions.
 * [MASTER 02: Data Privacy, Location & Retention](MASTER_02_DATA_PRIVACY_RETENTION.md)
-  Dictates GDPR erasure procedures, immutable public RF records, and geographic fuzzing.
+  Dictates GDPR (the EU General Data Protection Regulation) erasure procedures, immutable public RF (radio frequency) records, and geographic fuzzing.
 * [MASTER 03: Edge Routing & Threat Mitigation](MASTER_03_EDGE_ROUTING_THREAT_MITIGATION.md)
   Defines Cloudflare edge orchestration, proactive caching, WAF bot verification, and dynamic Nginx tarpitting via silent honeypots.
 * [MASTER 04: Modularity & Shared Services](MASTER_04_MODULARITY_SHARED_SERVICES.md)
@@ -87,7 +87,7 @@ This directory contains the Architecture Decision Records (ADRs) that define the
   our control -- splits these dependencies into data-source (ingest and persist locally, don't just
   proxy live) and capability/verification (diversify across independent paths, never single-source a
   trust decision) shapes, each needing a different defense. `ham_onboarding`'s existing multi-method
-  identity verification (LoTW, official-email OTP, AI/admin license review; the QRZ bio challenge and the Morse challenge were later removed; LoTW is a licence-verification path only, never sign-in) is
+  identity verification (LoTW: Logbook of The World, official-email OTP, AI/admin license review; the QRZ bio challenge and the Morse challenge were later removed; LoTW is a licence-verification path only, never sign-in) is
   a real, already-built instance of the capability-diversification half of this decision.
 * [ADR 0095: Third-Party Credentials Stay on the User's Own System](0095_third_party_credential_locality.md)
   A third-party credential a user entrusts to this platform (eQSL/AllStar/EchoLink/ClubLog

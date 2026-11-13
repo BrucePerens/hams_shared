@@ -13,7 +13,7 @@ as the historical record.
 ## Scope
 This ADR governs how this codebase (`hams_com`, `hams_open`, `hams_shared`) treats its dependence
 on **non-government, commercial third parties** for data or verification capability this platform
-relies on. It explicitly does **not** cover government/regulatory data sources (FCC, ISED, ACMA,
+relies on. It explicitly does **not** cover government/regulatory data sources (FCC: Federal Communications Commission, ISED, ACMA,
 Ofcom, ANATEL, BNetzA, RSM, NCVEC, and similar: the national radio regulators of the United States, Canada, Australia, the United Kingdom, Brazil, Germany and New Zealand, plus NCVEC, the National Conference of Volunteer Examiner Coordinators, which runs the US amateur exam program) -- those already have their own well-established
 sync daemons (`daemons/*_sync`) built on the assumption of long-term, stable public-record access,
 and a government regulator withdrawing access to its own public licensing records is a different
@@ -45,7 +45,7 @@ different defenses:**
 
 1. **Data-source dependencies**: a third party's API returns *data* this platform displays, stores,
    or acts on -- repeater activity (Greyline Fabric), weather overlays (OpenWeatherMap), AIS marine
-   tracking (AISHub), ADS-B aircraft tracking (OpenSky Network), APRS position data (APRS.fi). This
+   tracking (AISHub), ADS-B aircraft tracking (OpenSky Network), APRS (Automatic Packet Reporting System) position data (APRS.fi). This
    data can, in principle, be captured and kept even after the source that produced it disappears.
 2. **Capability/verification dependencies**: a third party's API doesn't hand over data to keep --
    it performs a real-time *action or judgment* this platform's own trust model depends on: ARRL's

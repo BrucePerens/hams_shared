@@ -602,7 +602,7 @@ Each line below cites an anchor (a named tag the lint tools use to link a code f
 
 **Purpose.** The test that a service account who logs in over HTTP is redirected away with an access-denied error and gets no session.
 
-**Scenario.** `test_web_login_interceptor` in `zero_sudo/tests/test_controllers.py` (an HTTP test case: "Verify that service accounts cannot log into the web interface") creates the user "Test Service Block" as a human with a known password, sets `is_service_account` by raw SQL (to skip the password randomisation) and commits. It fetches `/web/login` for a CSRF token, posts the credentials without following redirects, and asserts the answer is a 303 whose location contains `error=access_denied_service`. It also carries the anchors for the login story, the lifecycle journey, `COMM_zero_sudo_security_log_global` and `hams_http_case_url_open`.
+**Scenario.** `test_web_login_interceptor` in `zero_sudo/tests/test_controllers.py` (an HTTP test case: "Verify that service accounts cannot log into the web interface") creates the user "Test Service Block" as a human with a known password, sets `is_service_account` by raw SQL (to skip the password randomisation) and commits. It fetches `/web/login` for a CSRF (cross-site request forgery) token, posts the credentials without following redirects, and asserts the answer is a 303 whose location contains `error=access_denied_service`. It also carries the anchors for the login story, the lifecycle journey, `COMM_zero_sudo_security_log_global` and `hams_http_case_url_open`.
 
 **What it guards.** `COMM_web_login_interceptor` and `COMM_web_login_interceptor_check`.
 

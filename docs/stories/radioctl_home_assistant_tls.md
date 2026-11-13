@@ -14,7 +14,7 @@ the caller retries with backoff (function `radioctl_station_ha_open_stream`, des
 
 ## Scenario: Choosing how to trust the server
 
-The owner sets exactly one of two things: a PEM file (a text format for certificates) with their own certificate authority, or the
+The owner sets exactly one of two things: a PEM (Privacy-Enhanced Mail text encoding for keys and certificates) file (a text format for certificates) with their own certificate authority, or the
 SHA-256 fingerprint of the server's certificate (a "pin"). Setting both, or neither, is a configuration
 error. Verification is never switched off and the system's public roots are never used, because Home
 Assistant is on the owner's own network (function `radioctl_station_tls_connector`, described in the anchor reference below).

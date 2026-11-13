@@ -46,7 +46,7 @@ When adding application-layer validation, developers must respect the core perfo
 * **Fail-Fast Execution:** Validate preconditions at the absolute top of your method. Utilize early returns or raise `odoo.exceptions.ValidationError` immediately to avoid deep architectural nesting and wasted CPU cycles.
 
 ## Consequences
-* **System Stability:** Enforcing O(1) memory mapping during validations prevents Out-Of-Memory (OOM) worker crashes during bulk data imports (e.g., ADIF uploads).
+* **System Stability:** Enforcing O(1) memory mapping during validations prevents Out-Of-Memory (OOM) worker crashes during bulk data imports (e.g., ADIF (Amateur Data Interchange Format) uploads).
 * **Mathematical Integrity:** Data corruption (empty strings or negative system timers) is physically rejected at the lowest level, protecting background daemons from division-by-zero or empty-path execution crashes.
 * **Security Alignment:** Prevents developers from inadvertently introducing privilege escalation vectors via careless `.sudo()` usage in validation routines.
 * **AST Compliance:** Ensures all new data models pass the strict syntax checks enforced by the CI/CD pipeline.

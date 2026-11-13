@@ -17,7 +17,7 @@ confirmed live, 2026-10-01: `pgbackrest backup` as `odoo` fails with `unable to 
 Three privilege-separation options were considered for closing this gap (Bruce's own choice from among
 them, 2026-10-01: "Run the pgbackrest subprocess as postgres specifically"):
 
-1. A narrow POSIX ACL grant (`setfacl -m u:odoo:rX` on the PostgreSQL data directory, plus a default ACL) --
+1. A narrow POSIX ACL (access control list) grant (`setfacl -m u:odoo:rX` on the PostgreSQL data directory, plus a default ACL) --
    narrowest in principle, but still a standing grant of read access to the live database cluster's own
    files to a network-facing, RabbitMQ-driven daemon.
 2. Add `odoo` to the `postgres` OS group and loosen the data directory to `0750` -- broader than option 1,

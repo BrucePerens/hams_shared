@@ -5,7 +5,7 @@
 
 ## Context
 
-As the platform evolves, security against Cross-Site Scripting (XSS) and data injection vulnerabilities becomes a paramount concern, particularly for user-facing applications and auto-generated content (e.g., dynamically generated ICS HTML forms, SVG renderings). 
+As the platform evolves, security against Cross-Site Scripting (XSS) and data injection vulnerabilities becomes a paramount concern, particularly for user-facing applications and auto-generated content (e.g., dynamically generated ICS (Incident Command System) HTML forms, SVG renderings). 
 
 A critical layer of defense against these vulnerabilities is the implementation of a strict Content Security Policy (CSP). A strict CSP typically forbids the use of the `unsafe-inline` directive for both scripts (`script-src`) and styles (`style-src`). 
 
