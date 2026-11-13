@@ -177,14 +177,19 @@ def find_data_structures(path, root=None):
     return missing
 
 
+# Directories the structure scan never enters: dependencies and virtual environments, and `odoo_type_stubs`, the vendored
+# type stubs that mirror Odoo's own API (their classes are Odoo's, not our code, so they get no anchors).
+STRUCTURE_SKIP_DIRS = ("node_modules", "venv", ".venv", "site-packages", "odoo_type_stubs")
+
+
 # [@ANCHOR: anchor_doc_inventory:scan_structures]
 def scan_structures(root):
     """`{relative source path: [(line, kind, name)]}` for every source file under `root` (`.rs .py .js .mjs`) that
     has data-structure definitions without an anchor (see `find_data_structures`). Pruned directories as in
-    `scan_docs`, plus `node_modules` and virtual environments."""
+    `scan_docs`, plus `STRUCTURE_SKIP_DIRS` (`node_modules`, virtual environments, the vendored `odoo_type_stubs`)."""
     found = {}
     for here, dirs, files in _walk_tree_files(root):
-        dirs[:] = sorted(d for d in dirs if not _is_excluded_dir(d) and d not in ("node_modules", "venv", ".venv", "site-packages"))
+        dirs[:] = sorted(d for d in dirs if not _is_excluded_dir(d) and d not in STRUCTURE_SKIP_DIRS)
         for name in sorted(files):
             if name.endswith(SOURCE_SUFFIXES):
                 path = os.path.join(here, name)

@@ -127,6 +127,7 @@ class DataStructureTests(unittest.TestCase):
             write(tmp, "src/a.rs", "struct Bare;\n")
             write(tmp, "target/debug/b.rs", "struct Built;\n")
             write(tmp, "node_modules/p/i.js", "class Vendor {}\n")
+            write(tmp, "tools/odoo_type_stubs/odoo/models.py", "class Mirror:\n    pass\n")
             write(tmp, "ok/c.py", "# %s\nclass Fine:\n    pass\n" % tag("m:Fine"))
             self.assertEqual(inv.scan_structures(tmp), {os.path.join("src", "a.rs"): [(1, "struct", "Bare")]})
 

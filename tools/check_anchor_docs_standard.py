@@ -22,7 +22,7 @@ import os
 import sys
 
 import check_target
-from anchor_doc_inventory import DEFAULT_SHORT_WORDS, SOURCE_SUFFIXES, doc_entries, find_data_structures
+from anchor_doc_inventory import DEFAULT_SHORT_WORDS, SOURCE_SUFFIXES, STRUCTURE_SKIP_DIRS, doc_entries, find_data_structures
 from verify_anchors import _is_excluded_dir, _walk_tree_files
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -70,7 +70,7 @@ def _files_under(root, rel):
         return [full]
     found = []
     for here, dirs, files in _walk_tree_files(full):
-        dirs[:] = sorted(d for d in dirs if not _is_excluded_dir(d) and d not in ("node_modules", "venv", ".venv", "site-packages"))
+        dirs[:] = sorted(d for d in dirs if not _is_excluded_dir(d) and d not in STRUCTURE_SKIP_DIRS)
         found += [os.path.join(here, name) for name in sorted(files)]
     return found
 
