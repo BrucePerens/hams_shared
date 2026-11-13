@@ -102,9 +102,28 @@ mod tests {
     use super::*;
     // Tests [@ANCHOR: hams_lint:cache_cache_struct]
 
+    /// Scratch directory that is removed when dropped, also when a test fails.
+    struct ScratchDir(std::path::PathBuf);
+
+    impl ScratchDir {
+        fn new(name: &str) -> ScratchDir {
+            // temp-dir-helper: `ScratchDir` removes the tree in its Drop, also while a failing test unwinds
+            let dir = std::env::temp_dir().join(format!("{name}_{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            ScratchDir(dir)
+        }
+    }
+
+    impl Drop for ScratchDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     #[test]
     fn an_entry_saved_by_one_run_is_a_hit_for_the_next() {
-        let dir = std::env::temp_dir().join(format!("hams_lint_cache_test_{}", std::process::id()));
+        let scratch = ScratchDir::new("hams_lint_cache_test");
+        let dir = scratch.0.clone();
         let root = dir.join("tree");
         std::fs::create_dir_all(&root).unwrap();
         let result = FileResult::default();
@@ -116,9 +135,14 @@ mod tests {
 
         let second = Cache::open(&dir, &root);
         assert_eq!(second.get("fp", "a.py", "sha"), Some(result));
-        assert!(second.get("fp", "a.py", "other").is_none(), "another content hash is a miss");
-        assert!(second.get("fp2", "a.py", "sha").is_none(), "another fingerprint is a miss");
+        assert!(
+            second.get("fp", "a.py", "other").is_none(),
+            "another content hash is a miss"
+        );
+        assert!(
+            second.get("fp2", "a.py", "sha").is_none(),
+            "another fingerprint is a miss"
+        );
         assert_eq!(second.hits.load(std::sync::atomic::Ordering::Relaxed), 1);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }
