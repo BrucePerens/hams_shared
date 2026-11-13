@@ -85,6 +85,7 @@ def tracked_files(root):
     return [os.path.join(root, name) for name in out.split("\0") if name]
 
 
+# [@ANCHOR: check_doc_references:check_doc_references_knowledge_class]
 class Knowledge:
     """What exists: tracked paths (with every tail), identifiers, unit names, ADR numbers, anchors, env/config words."""
 
