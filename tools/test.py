@@ -146,6 +146,7 @@ def measure_process_tree_memory(runner_pid, exclude_pid):
     return total
 
 
+# [@ANCHOR: test:test_oomwatchdog_class]
 class OOMWatchdog(multiprocessing.Process):
     def __init__(self, target_pid, runner_pid, rss_limit_gb=8.0):
         super().__init__(daemon=True)
@@ -257,6 +258,7 @@ _ODOO_RESULT_PATTERN = re.compile(
 )
 
 
+# [@ANCHOR: test:test__post_fork_safe_log_class]
 class _PostForkSafeLog:
     """Fork-safe stand-in for _logger, for use ONLY inside a subprocess.Popen
     preexec_fn (preexec_child/preexec_redis/preexec_rmq/preexec_odoo below).
@@ -278,6 +280,7 @@ class _PostForkSafeLog:
 _postfork_log = _PostForkSafeLog()
 
 
+# [@ANCHOR: test:test_virtual_clock_thread_class]
 class VirtualClockThread(threading.Thread):
     """
     A CPU-time equivalent clock that suppresses massive jumps in wall-clock time
@@ -383,6 +386,7 @@ def count_test_browser_processes(proc_root="/proc"):
     return count
 
 
+# [@ANCHOR: test:test_resource_monitor_thread_class]
 class ResourceMonitorThread(threading.Thread):
     def __init__(self):
         super().__init__(daemon=True)
@@ -495,6 +499,7 @@ def is_ignored(path, patterns):
     return False
 
 
+# [@ANCHOR: test:test_failure_extractor_class]
 class FailureExtractor:
     """
     State machine that processes log lines in real-time, buffering and extracting
@@ -1931,6 +1936,7 @@ def check_linters(
         if res_burn_one.returncode != 0:
             res_burn_returncode = res_burn_one.returncode
 
+    # [@ANCHOR: test:test__aggregated_burn_result_class]
     class _AggregatedBurnResult:
         def __init__(self, returncode, stdout, stderr):
             self.returncode = returncode
@@ -4221,6 +4227,7 @@ def run_preflight(args):
     check_linters("/usr/bin/python3", base_dir, ignore_filepath, None, target_modules)
 
 
+# [@ANCHOR: test:test__runner_argument_parser_class]
 class _RunnerArgumentParser(argparse.ArgumentParser):
     """argparse's default error is a usage block and exit 2; in a long run's output that is lost.
     End with the cause and the next action as the last lines."""

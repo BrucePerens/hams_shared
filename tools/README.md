@@ -7182,3 +7182,162 @@ Every class of the tools that is not a function, with its fields, who creates it
 
 **Notes.** Dataclass, built by the step builders of the module and only read.
 
+
+### `OOMWatchdog` [@ANCHOR: test:test_oomwatchdog_class]
+
+**Purpose.** Separate process of test.py that watches the memory of the whole test process tree and kills it before the machine runs out of memory: when the total resident memory of the tree is above the limit, or host available memory is under 512 MB, it sets `fired`, prints an alert, kills the runner's children and the target process and ends.
+**Definition.** `class OOMWatchdog(multiprocessing.Process)` in `tools/test.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `target_pid` | `target_pid` | Process id of the test process to kill at the end. |
+| `runner_pid` | `runner_pid` | Process id of the runner whose descendants are measured (the watchdog's own pid is excluded) and killed. |
+| `rss_limit_gb` | `rss_limit_gb` | Limit on the tree's total resident memory in gigabytes; default 8.0. |
+| `fired` | `multiprocessing.Event()` | `multiprocessing.Event` set just before the kills, so the main run can tell an OOM stop from a test failure. |
+
+**Methods.** `__init__(self, target_pid, runner_pid, rss_limit_gb=8.0)`; `run(self)`.
+
+**Notes.** In `run` the watchdog tries to lower its own oom_score_adj to -1000, raise its priority and lock its memory; each failure (it needs root or capabilities) is logged and ignored. It then loops over `measure_process_tree_memory`. A daemon process, started by `main`. Signals only the processes of its own test run's tree and target.
+
+### `_PostForkSafeLog` [@ANCHOR: test:test__post_fork_safe_log_class]
+
+**Purpose.** Fork-safe stand-in for _logger, for use ONLY inside a subprocess.Popen preexec_fn (preexec_child/preexec_redis/preexec_rmq/preexec_odoo below). Python's logging module takes an internal lock (and each Handler its own) that may be held by some OTHER thread in this multi-threaded process (ResourceMonitorThread, VirtualClockThread) at the instant os.fork() runs. The child copy of that lock is frozen 
+**Definition.** `class _PostForkSafeLog` in `tools/test.py`.
+
+**Methods.** `warning(msg)`.
+
+**Notes.** No fields; static methods such as `warning(msg)` write the message straight to a file descriptor. Used by `preexec_child`, `preexec_redis`, `preexec_rmq` and `preexec_odoo`.
+
+### `VirtualClockThread` [@ANCHOR: test:test_virtual_clock_thread_class]
+
+**Purpose.** A CPU-time equivalent clock that suppresses massive jumps in wall-clock time caused by the VM being suspended or heavily timeshared.
+**Definition.** `class VirtualClockThread(threading.Thread)` in `tools/test.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `vtime` | `0.0` | Virtual seconds elapsed, starting at 0.0. |
+| `last_real` | `time.monotonic()` | `time.monotonic()` at the previous step. |
+| `_lock` | `threading.Lock()` | Mutex guarding `vtime`. |
+
+**Methods.** `__init__(self)`; `run(self)`; `time(self)`.
+
+**Notes.** `time()` returns the current virtual time under the lock. Errors in a step are logged and the loop continues. Used for time limits that should measure work rather than suspension.
+
+### `ResourceMonitorThread` [@ANCHOR: test:test_resource_monitor_thread_class]
+
+**Purpose.** Daemon thread of test.py that wakes every 10 seconds during a run and prints a red alert block when memory is low (under 2048 MB available is LOW, under 512 MB CRITICAL) or when more than 40 test browsers are alive, which suggests a leak.
+**Definition.** `class ResourceMonitorThread(threading.Thread)` in `tools/test.py`.
+
+**Methods.** `__init__(self)`; `get_available_memory_mb(self)`; `get_chrome_count(self)`; `run(self)`.
+
+**Notes.** No fields. `get_available_memory_mb()` reads MemAvailable from `/proc/meminfo` (None when unreadable); `get_chrome_count()` counts only browsers started by the test run (Chromium with `--headless` or `--remote-debugging-port`, read from /proc), never a person's own browser. Errors in an iteration are logged and the loop goes on, so the monitor cannot die silently. Started at import as `global_resource_monitor`.
+
+### `FailureExtractor` [@ANCHOR: test:test_failure_extractor_class]
+
+**Purpose.** State machine that processes log lines in real-time, buffering and extracting Tracebacks and error blocks for writing to a filtered log file.
+**Definition.** `class FailureExtractor` in `tools/test.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `cpu_limit_line` | `None` | Class attribute, set by `run_cmd` when the Odoo process died of the CPU-time limit; the run is then not a test verdict. |
+| `signal_line` | `None` | Class attribute, set by `run_cmd` to the summary line when Odoo was killed by a signal. |
+| `child_exit_status` | `None` | Class attribute, set by `run_cmd` to the exit status it returns for the Odoo process; None until a process ran. |
+| `mcp_mode` | `mcp_mode` | True when test.py is run through the MCP tool, which changes how the report is delivered. |
+| `display_path` | `os.path.join(base_dir, report_name)` | Path of the filtered report that is shown to the user, `filtered_test.txt` (with a slot suffix above slot 1) in the log directory (`HAMS_REAL_LOG_DIRECTORY` first). |
+| `log_prefix_pattern` | `re.compile('^(?:\\s*)?\\d{4}-\\d{2}-\\d{2} \\d{2}:` | Compiled regular expression for the timestamp that starts an Odoo log line. |
+| `safe_log_levels` | `re.compile('\\b(INFO|WARNING|DEBUG)\\b')` | Pattern for the INFO, WARNING and DEBUG levels, whose lines never start an error block. |
+| `test_start_pattern` | `re.compile('Starting Test|^test_.*?\\s\\.\\.\\.')` | Pattern that recognizes the start of a test (`Starting Test` or `test_x ...`), which sets the context of what follows. |
+| `current_context` | `'Global / Module Loading'` | Name of the test or module being run, "Global / Module Loading" at first. |
+| `capturing` | `False` | True while an error block is being collected. |
+| `captured_blocks` | `[]` | List of the finished error blocks. |
+| `current_block` | `[]` | Lines of the block being collected. |
+| `_written` | `False` | True once the report has been written, so the exit hook writes it once. |
+| `aborted` | `False` | True when the run was stopped early. |
+| `odoo_result_lines` | `[]` | The `odoo.tests.result:` lines seen anywhere in the stream; there can be several on a multi-module run. They, not the count of blocks, decide pass or fail. |
+| `observation` | `known_red.RunObservation()` | `known_red.RunObservation` holding the tests that started and failed, as named in the log. |
+| `policy_outcome` | `None` | The verdict of the known-red and flake policy (ADR 0118), None until `main` has applied it. |
+| `passed_tests` | `0` | Count of tests seen to pass, shown in the progress file; starts at 0. |
+| `failed_tests` | `0` | Count of tests seen to fail, shown in the progress file; starts at 0. |
+| `current_test` | `'Initializing...'` | Text naming the test now running; "Initializing..." at first. |
+| `output_path` | `os.path.join('/mnt/real_tmp', report_name)` | Where the report file is actually written: under `/mnt/real_tmp` only when that bind mount really exists in an isolated run, else same as `display_path`. |
+| `progress_path` | `os.path.join('/mnt/real_tmp', progress_name)` | Where the live progress file is written, chosen by the same rule. |
+
+**Methods.** `__init__(self, log_dir, disable_atexit=False, mcp_mode=False, slot=1)`; `update_progress(self)`; `set_context(self, context_name)`; `append_diagnostic(self, text)`; `process_line(self, line)`; `_extract_failed_modules(self)`; `finish_and_write(self)`.
+
+**Notes.** Constructor `FailureExtractor(log_dir, disable_atexit=False, mcp_mode=False, slot=1)`; the file names get a slot suffix for slots above 1 (`runner_slots.slot_file_name`); an old report file is removed; unless `disable_atexit` an exit hook writes the report (`finish_and_write`). Fed one line at a time by the thread that reads Odoo's output; not thread-safe.
+
+### `_AggregatedBurnResult` [@ANCHOR: test:test__aggregated_burn_result_class]
+
+**Purpose.** Result object assembled inside test.py's burn-list step, which runs the burn check module by module: it carries the worst exit status and the joined output of all the runs, in the same shape as a `subprocess.CompletedProcess` so the following code treats one run and several alike.
+**Definition.** `class _AggregatedBurnResult` in `tools/test.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `returncode` | `returncode` | The first non-zero exit status of any module's burn run, 0 when all passed. |
+| `stdout` | `stdout` | The standard output of all runs, joined with newlines. |
+| `stderr` | `stderr` | The standard error of all runs, joined with newlines. |
+
+**Methods.** `__init__(self, returncode, stdout, stderr)`.
+
+**Notes.** Defined inside the function that runs the burn check, so it exists only there; created once after the per-module loop and only read.
+
+### `_RunnerArgumentParser` [@ANCHOR: test:test__runner_argument_parser_class]
+
+**Purpose.** argparse's default error is a usage block and exit 2; in a long run's output that is lost. End with the cause and the next action as the last lines.
+**Definition.** `class _RunnerArgumentParser(argparse.ArgumentParser)` in `tools/test.py`.
+
+**Methods.** `error(self, message)`.
+
+**Notes.** No fields. Only `error(message)` is overridden; every other argparse behaviour is the standard one. Created once by `main`.
+
+### `CredentialRefused` [@ANCHOR: wordpress_to_odoo:wordpress_to_odoo_credential_refused_class]
+
+**Purpose.** A credential-looking WordPress option was about to be copied into an export or a report.
+**Definition.** `class CredentialRefused(ValueError)` in `tools/wordpress_to_odoo.py`.
+
+**Notes.** The message names the option, or the output file where a credential-looking value was found. Stops the conversion, so a secret in a dump never reaches the exported files.
+
+### `WordPressSite` [@ANCHOR: wordpress_to_odoo:wordpress_to_odoo_word_press_site_class]
+
+**Purpose.** One site of a (multisite) WordPress dump, by blog id (prefix `wp_8_`; blog 1 has prefix `wp_`).
+**Definition.** `class WordPressSite` in `tools/wordpress_to_odoo.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `dump` | `dump` | The parsed dump (tables to rows), kept for the lookups. |
+| `blogs` | `blogs` | Rows of `wp_blogs`. |
+| `blog_id` | `blog_id` | The blog id; 1 when none is given. |
+| `prefix` | `'wp_' if blog_id == 1 else f'wp_{blog_id}_'` | Table name prefix: `wp_` for blog 1, else `wp_<id>_`. |
+| `blog_domain` | `next((b['domain'] for b in blogs if b['blog_id'] =` | Domain of the blog from `wp_blogs`, None if absent. |
+| `options` | `{r['option_name']: r['option_value'] for r in _row` | Dictionary option name to option value from the site's options table. |
+| `posts` | `_rows(dump, self.prefix + 'posts')` | Rows of the posts table. |
+| `postmeta` | `collections.defaultdict(dict)` | Dictionary post id to a dictionary of meta key to value. |
+| `terms` | `{r['term_id']: r for r in _rows(dump, self.prefix ` | Dictionary term id to its row. |
+| `taxonomy` | `{r['term_taxonomy_id']: r for r in _rows(dump, sel` | Dictionary term taxonomy id to its row. |
+| `relationships` | `collections.defaultdict(list)` | Dictionary object id to the list of term taxonomy ids. |
+| `comments` | `_rows(dump, self.prefix + 'comments')` | Rows of the comments table. |
+| `users` | `{u['ID']: u for u in _rows(dump, 'wp_users')}` | Dictionary user id to its row, from the shared `wp_users` table. |
+
+**Methods.** `__init__(self, dump, blog_id=None)`; `option(self, name, default='')`; `permalink_structure(self)`; `author_name(self, user_id)`; `categories(self, post_id)`; `tags(self, post_id)`; `nav_menu_items(self)`.
+
+**Notes.** Raises ValueError when the dump has no tables with that prefix. `option(name, default="")` refuses a credential-looking name with `CredentialRefused`; `permalink_structure`, `author_name(user_id)` (display name or None) and `categories(post_id)` read from the loaded tables. Everything is held in memory; no database or network is used.
+
+### `Media` [@ANCHOR: wordpress_to_odoo:wordpress_to_odoo_media_class]
+
+**Purpose.** Finds the files posts reference under /wp-content/uploads/ and turns each found file into an attachment.
+**Definition.** `class Media` in `tools/wordpress_to_odoo.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `dirs` | `[d for d in uploads_dirs if d]` | The uploads directories searched, empty names dropped. |
+| `stats` | `stats` | Counter dictionary shared with the converter, for the final report. |
+| `attachments` | `{}` | Dictionary relative path to the attachment row (id assigned in order). |
+| `files` | `{}` | Dictionary attachment id to the source file path. |
+| `missing` | `collections.defaultdict(set)` | Dictionary url path to the set of post ids that reference a file that is not in the snapshot. |
+| `variants` | `collections.defaultdict(set)` | Dictionary relative path to every URL path the content used for it. |
+| `next_id` | `1` | The next attachment id to assign, starting at 1. |
+
+**Methods.** `__init__(self, uploads_dirs, stats)`; `find(self, relative)`; `resolve(self, url_path, referrer)`.
+
+**Notes.** `find(relative)` returns (real path, candidate) or None, also looking in multisite `sites/<n>/` subdirectories. `resolve(url_path, referrer)` returns the new relative URL of an upload or None when the snapshot has no such file, creating the attachment on first use. Reads files under the given directories only.
+
