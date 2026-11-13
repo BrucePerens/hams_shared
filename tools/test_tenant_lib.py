@@ -512,6 +512,16 @@ class BackupAndStatusTests(_Base):
         self.assertEqual(len(os.listdir(self.paths.backup_dir("perens_com"))), 3)
         self.assertEqual(oct(os.stat(os.path.join(directory, "db.dump")).st_mode & 0o777), "0o600")
 
+    def test_a_failed_backup_leaves_no_partial_set_to_crowd_out_good_ones(self):
+        # A pg_dump that failed used to leave its half-written set (no MANIFEST.json) behind; it then counted
+        # toward `keep`, so the next successful night pruned good older sets in its favour.
+        good = lib.backup_tenant(self.spec, self.paths, self.system, keep=2)
+        self.system.clock += datetime.timedelta(hours=1)
+        with mock.patch.object(self.system, "run_to_file", side_effect=RuntimeError("pg_dump failed")):
+            with self.assertRaises(RuntimeError):
+                lib.backup_tenant(self.spec, self.paths, self.system, keep=2)
+        self.assertEqual(os.listdir(self.paths.backup_dir("perens_com")), [os.path.basename(good)])
+
     def test_a_tampered_backup_is_detected(self):
         directory = lib.backup_tenant(self.spec, self.paths, self.system)
         with open(os.path.join(directory, "db.dump"), "ab") as handle:
