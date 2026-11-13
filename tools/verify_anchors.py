@@ -92,6 +92,8 @@ CODE_ISLANDS_UNDER_DOCS = [
     # shack_console's Python tools (stability_jobs, waterfall_fit_check, stt_accuracy/*.py, ...): same pruning. Its
     # README files (tools/stt_accuracy/README.md carries the anchor entries) are read as docs too, see the doc walk.
     "daemons/shack_console/tools",
+    # hams_local_relay's Python tools and simulators (rig_simulator, winkeyer_simulator, cw_tone_*, ...): same pruning.
+    "daemons/hams_local_relay/tools",
 ]
 
 # Directories every os.walk below prunes before descending -- never real, first-party source or
@@ -828,7 +830,7 @@ def find_anchors_in_code(root_dir, repo_root):
             continue
         for root, _dirs, files in os.walk(island_path):
             for file in files:
-                if file.endswith((".py", ".js", ".xml", ".html")):
+                if file.endswith((".py", ".js", ".xml", ".html", ".rs")):
                     full_path = os.path.join(root, file)
                     try:
                         with open(full_path, "r", encoding="utf-8") as f:
