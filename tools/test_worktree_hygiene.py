@@ -89,6 +89,20 @@ class WorktreeHygieneTest(unittest.TestCase):
         self.assertEqual(fresh["stale"], [])
         self.assertEqual({branch for _, branch in fresh["kept"]}, {"dirty", "ahead"})
 
+    def test_a_failed_or_timed_out_git_status_is_treated_as_dirty_not_clean(self):
+        path = self.worktree("unsure", dirty=True)
+        real_run = subprocess.run
+
+        def hung_status(cmd, *args, **kwargs):
+            if "status" in cmd:
+                raise subprocess.TimeoutExpired(cmd, 1)
+            return real_run(cmd, *args, **kwargs)
+
+        with unittest.mock.patch.object(wh.subprocess, "run", hung_status):
+            report = wh.run(self.repo, True, 1800, {}, now=time.time() + 3600)
+        self.assertTrue(os.path.isdir(path))
+        self.assertEqual(report["removed"], [])
+
     def test_a_merged_branch_without_a_worktree_is_deleted_and_an_unmerged_one_is_reported(self):
         _git(self.repo, "branch", "merged-old")
         _git(self.repo, "branch", "unmerged-old", "origin/main")
