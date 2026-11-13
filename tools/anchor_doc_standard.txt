@@ -666,6 +666,8 @@ hams_secret_canary/tests
 hams_shared/docs/adrs/0089_anchor_scheme_reformatting_robustness.md
 hams_shared/docs/stories/pager_duty_domain_updates.md
 hams_shared/scripts
+hams_shared/tools
+hams_shared/tools/README.md
 hams_shared/tools/claude_hooks
 hams_shared/tools/odoo_type_stubs/odoo/addons/base/tests
 hams_shared/tools/restoration_system/e2e
