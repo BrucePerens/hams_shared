@@ -120,6 +120,7 @@ class LayoutTests(unittest.TestCase):
                          [(1, "path", "../../../mod/docs/gone.md")])
 
 
+# Tests [@ANCHOR: check_doc_references:check_doc_references_knowledge_class] (ADR numbers, units, identifiers, words, tracked paths and tails are all read through it)
 class AdrAnchorUnitConfigFunctionTests(unittest.TestCase):
     def setUp(self):
         self.tree = Tree(self, BASE)

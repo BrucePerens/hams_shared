@@ -7624,3 +7624,23 @@ Every class of the tools that is not a function, with its fields, who creates it
 | `functions` | `Vec<FunctionEntry>` | The functions of the file in source order. |
 
 **Notes.** Not the same type as `FileResult` in hams_lint. Created per file and serialized once.
+
+### `Knowledge` [@ANCHOR: check_doc_references:check_doc_references_knowledge_class]
+
+**Purpose.** What exists in the repositories, as the documentation reference checker (`check_doc_references.py`) sees it: every tracked path with every tail, every identifier and word found in tracked source, unit names, ADR numbers and argparse flags. A backticked path, flag, unit, ADR, function or configuration name in a document is a finding only when this object does not know it.
+**Definition.** `class Knowledge` in `tools/check_doc_references.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `roots` | `list` | Repository root paths given to the constructor; used to resolve `hams_shared/...` and sibling-repository references. |
+| `tails` | `dict = {}` | Maps each trailing part of every tracked path (`b/c.py` for `a/b/c.py`) to the full paths that end that way, so a short path in a document still resolves. |
+| `present` | `set = set()` | Tracked files and their directories, decided by git and not by what is on this disk; the answer to "does this path exist". |
+| `identifiers` | `set = set()` | Names defined or used in tracked source files, for function-name references. |
+| `words` | `set = set()` | Environment-variable and configuration-parameter words found in tracked source. |
+| `units` | `set = set()` | systemd unit names, normalised (template instances folded to the template), from file names and script text. |
+| `adrs` | `set = set()` | ADR numbers taken from the file names of the ADR documents. |
+| `_argparse` | `dict = {}` | Cache of the argparse flags parsed per script by `argparse_flags`, filled on first use. |
+
+**Methods.** `__init__(self, files, roots)`, `exists`, `logical_dirs`, `argparse_flags`, and the private `_add_path`, `_add_aliases`, `_add_source`.
+
+**Notes.** Built once per run from the `git ls-files` list (`tracked_files`) and then only read; never serialized. The sets only grow while the constructor runs. Covered by `test_check_doc_references.py` (`Tree` builds one over a throwaway repository, and the ADR, heading, unit, configuration and function tests query it).
