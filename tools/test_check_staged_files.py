@@ -105,6 +105,25 @@ class StagedFilesTests(unittest.TestCase):
         _git(self.repo, "add", "target/x.o")
         self.assertNotEqual(self._check().returncode, 0)  # the checks still apply to ordinary files beside it
 
+    def test_a_symlink_replacing_a_submodule_pointer_is_refused(self):
+        # 2026-11-12: a worktree's hams_shared symlink (made by fix_worktree_symlinks.py) was committed over the hams_shared gitlink.
+        sub = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, sub, True)
+        _init(sub)
+        _write(os.path.join(sub, "s.txt"), b"s")
+        _git(sub, "add", "s.txt")
+        _git(sub, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "s")
+        sha = _git(sub, "rev-parse", "HEAD").stdout.strip()
+        _git(self.repo, "update-index", "--add", "--cacheinfo", f"160000,{sha},sub")
+        _git(self.repo, "commit", "-qm", "add sub")
+        _git(self.repo, "rm", "-q", "--cached", "sub")
+        os.symlink("../elsewhere", os.path.join(self.repo, "sub"))
+        _git(self.repo, "add", "sub")
+        result = self._check()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("sub", result.stderr)
+        self.assertIn("submodule", result.stderr)
+
 
 class HookFailsClosedTests(unittest.TestCase):
     def setUp(self):

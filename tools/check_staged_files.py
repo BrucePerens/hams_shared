@@ -55,6 +55,19 @@ def staged_entries():
     return entries
 
 
+def gitlink_replacements():
+    """Paths whose staged change turns a submodule pointer (mode 160000) into something else, typically a symlink made by
+    fix_worktree_symlinks.py for a worktree (a hams_open PR once replaced the hams_shared entry that way)."""
+    raw = subprocess.run(
+        ["git", "diff", "--cached", "--raw", "--no-abbrev", "--diff-filter=T", "-z"],
+        capture_output=True,
+        check=True,
+    ).stdout.decode("utf-8", "surrogateescape")
+    fields = raw.split("\0")
+    return [fields[i + 1] for i in range(0, len(fields) - 1, 2)
+            if fields[i].startswith(":") and fields[i].split()[0] == ":160000" and fields[i].split()[1] != "160000"]
+
+
 def violations(entries):
     problems = []
     for path, size in entries:
@@ -68,6 +81,8 @@ def violations(entries):
 
 def main():
     problems = violations(staged_entries())
+    problems += [f"{path}: replaces a submodule pointer (gitlink) with a plain entry or symlink; unstage it (git restore --staged {path})"
+                 for path in gitlink_replacements()]
     if not problems:
         return 0
     print("pre-commit: refusing this commit:", file=sys.stderr)
