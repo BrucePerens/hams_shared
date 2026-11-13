@@ -12,10 +12,14 @@ KNOWN LIMIT: the copy is made of hardlinks, so editing a test file in place whil
 run sees. Do not edit the tests or the target during a run (or run it on `cp -r` of the tree).
 
 Each mutant: hardlink-clone of TREE (rsync --link-dest), the target file replaced by an ast.unparse of the mutated
-tree, CMD run in the clone from --cwd (relative to root) with nice 10.
-KILLED = nonzero exit or timeout; SURVIVED = exit 0.
+tree, CMD run in the clone from --cwd (relative to root) with nice 10 and an address-space cap
+(--mem-limit-mb, default 4096). KILLED = nonzero exit (including death by the memory cap) or timeout; SURVIVED = exit 0.
+
+PROCESS TREE (incident 2026-11-12): CMD runs in its own process group; on timeout or any exception (KeyboardInterrupt too) the whole
+group is terminated (TERM, then KILL after a short grace). subprocess.run(shell=True, timeout=) killed only the wrapper shell and left
+infinite-loop mutants (one at 48 GB) running as orphans.
 """
-import argparse, ast, copy, json, os, queue, shutil, subprocess, sys, time, concurrent.futures as cf
+import argparse, ast, copy, json, os, queue, shutil, signal, subprocess, sys, time, concurrent.futures as cf
 
 CMP_SWAP = {ast.Eq: ast.NotEq, ast.NotEq: ast.Eq, ast.Lt: ast.LtE, ast.LtE: ast.Lt, ast.Gt: ast.GtE,
             ast.GtE: ast.Gt, ast.In: ast.NotIn, ast.NotIn: ast.In, ast.Is: ast.IsNot, ast.IsNot: ast.Is}
@@ -149,6 +153,38 @@ def require_inside_copy(path, work):
     return real
 
 
+# [@ANCHOR: mutation_harness:run_group]
+def run_group(test, cwd, env, timeout=None, mem_limit_mb=4096, grace=3.0):
+    """Runs shell command `test` (nice 10, `ulimit -v` of mem_limit_mb) in its own process group. Returns (returncode, output, timed_out).
+    On timeout or any exception the whole group is terminated (TERM, then KILL after `grace` seconds) and reaped."""
+    cap = f"ulimit -v {int(mem_limit_mb) * 1024}; " if mem_limit_mb else ""
+    proc = subprocess.Popen(f"{cap}exec nice -n 10 {test}", shell=True, cwd=cwd, env=env, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, start_new_session=True)
+    try:
+        out, _ = proc.communicate(timeout=timeout)
+        return proc.returncode, out, False
+    except subprocess.TimeoutExpired:
+        _stop_group(proc, grace)
+        return None, b"", True
+    except BaseException:
+        _stop_group(proc, grace)
+        raise
+
+
+def _stop_group(proc, grace):
+    """Terminate the group led by proc (its pid is the group id: start_new_session), wait, then force-end stragglers."""
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+        proc.wait(timeout=grace)
+    except (ProcessLookupError, subprocess.TimeoutExpired):
+        pass
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    proc.communicate()
+
+
 def run_one(args, wid, job):
     desc, ln, key = job
     work = os.path.join(args.work, f"w{wid}")
@@ -160,13 +196,8 @@ def run_one(args, wid, job):
     t0 = time.time()
     env = dict(os.environ)
     env['PYTHONDONTWRITEBYTECODE'] = '1'
-    try:
-        r = subprocess.run(f"nice -n 10 {args.test}", shell=True, cwd=os.path.join(work, args.cwd), env=env,
-                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=args.timeout,
-                           start_new_session=True)
-        status = 'SURVIVED' if r.returncode == 0 else 'KILLED'
-    except subprocess.TimeoutExpired:
-        status = 'KILLED'
+    code, _, timed_out = run_group(args.test, os.path.join(work, args.cwd), env, args.timeout, args.mem_limit_mb)
+    status = 'KILLED' if timed_out or code != 0 else 'SURVIVED'
     os.unlink(path)
     os.link(os.path.join(args.root, args.file), path)
     return desc, ln, status, time.time() - t0
@@ -181,6 +212,7 @@ def main():
     ap.add_argument('--funcs')
     ap.add_argument('--workers', type=int, default=4)
     ap.add_argument('--timeout', type=int, default=120)
+    ap.add_argument('--mem-limit-mb', type=int, default=4096, help='per-mutant address-space cap, 0 = none; dying by it is KILLED')
     ap.add_argument('--work', default=os.path.join(os.path.expanduser('~'), 'workspace', 'tmp', 'mutwork'))
     ap.add_argument('--out')
     ap.add_argument('--list', action='store_true')
@@ -214,11 +246,10 @@ def main():
     os.makedirs(args.work, exist_ok=True)
     for w in range(args.workers):
         clone(args.root, os.path.join(args.work, f"w{w}"))
-    b = subprocess.run(f"nice -n 10 {args.test}", shell=True, cwd=os.path.join(args.work, 'w0', args.cwd),
-                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                       env={**os.environ, 'PYTHONDONTWRITEBYTECODE': '1'})
-    if b.returncode != 0:
-        print("BASELINE FAILS\n" + b.stdout.decode()[-3000:])
+    rc, out, _ = run_group(args.test, os.path.join(args.work, 'w0', args.cwd), {**os.environ, 'PYTHONDONTWRITEBYTECODE': '1'},
+                           None, args.mem_limit_mb)
+    if rc != 0:
+        print("BASELINE FAILS\n" + out.decode()[-3000:])
         sys.exit(2)
     q = queue.Queue()
     for j in jobs:
