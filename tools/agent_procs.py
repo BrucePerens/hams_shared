@@ -20,7 +20,10 @@ pattern search never lists the searcher, its ancestors or its descendants. Pure 
                           | SELECTOR [--all] [--allow-missing])     SELECTOR: --cwd-under/--cmd-contains/--cmd-regex; one match
                           required (several: error listing them, or --all; none: error, or --allow-missing)
                           [--while-pid N] [--timeout S]       exit 0 done, 1 failed, 75 timeout, 2 usage, 3 refused
-    agent_procs.py run    NAME [--tag AGENT] [--cwd DIR] -- COMMAND...     a named job; log in ~/.cache/hams-jobs/NAME.log
+    agent_procs.py run    NAME [--tag AGENT] [--cwd DIR] [--timeout S] [--mem-max SIZE] [--nice N] -- COMMAND...
+                          a named job; log in ~/.cache/hams-jobs/NAME.log; ends after 1800 s (`--timeout 0`: never) and is
+                          capped at 6G (`--mem-max none`: no cap; systemd-run --user scope, else ulimit -v); a timeout stops
+                          the whole process group (exit 124, reason `timeout` in the record); the command dies with its wrapper
     agent_procs.py jobs   [--json]
     agent_procs.py stop   NAME [--grace S] [--force]          SIGTERM the job's process group; SIGKILL only with --force
     agent_procs.py kill-pid PID (--start-time T | --cwd-under PATH) [--grace S] [--force]    one exact, verified pid
@@ -42,6 +45,7 @@ import math
 import os
 import pwd
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -55,6 +59,10 @@ EX_REFUSED = 3
 EX_TIMEOUT = 75
 DEFAULT_WAIT_TIMEOUT = 1800.0
 DEFAULT_GRACE = 10.0
+DEFAULT_TIMEOUT = 1800
+DEFAULT_MEM_MAX = "6G"
+KILL_GRACE = 10
+EX_TIMEOUT_JOB = 124
 POLL_INTERVAL = 0.5
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 PROTECTED_WORDS = (
@@ -114,6 +122,9 @@ class JobRecord:
     exit_code: object = None
     ended_at: object = None
     stopped: object = None
+    timeout: int = 0
+    mem_max: object = None
+    exit_reason: object = None
 
 
 # [@ANCHOR: agent_procs:WaitResult]
@@ -557,42 +568,123 @@ def forward_signal(holder, signum, _frame):
             pass
 
 
+# [@ANCHOR: agent_procs:parse_size]
+def parse_size(text):
+    """Bytes in a size such as `6G`, `512M`, `100K` or `123456` (binary units, case-insensitive); `ProcError` otherwise."""
+    match = re.fullmatch(r"(\d+)([kmgt]?)b?", str(text).strip().lower())
+    if not match:
+        raise ProcError(f"bad size {text!r}: use a number with an optional K, M, G or T (for example 6G), or `none`")
+    unit = match.group(2)
+    return int(match.group(1)) * (1024 ** ("kmgt".index(unit) + 1) if unit else 1)
+
+
+@functools.lru_cache(maxsize=None)
+def user_scope_works():
+    """True when `systemd-run --user --scope` can start a command here (it needs the user manager and a cgroup parent)."""
+    try:
+        return subprocess.run(["systemd-run", "--user", "--scope", "-q", "true"], capture_output=True,
+                              timeout=20).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+# [@ANCHOR: agent_procs:limit_argv]
+def limit_argv(argv, mem_max, nice, have_systemd=None):
+    """The command line the wrapper runs for `argv`: `nice -n NICE` first when `nice` is non-zero; the memory cap `mem_max`
+    (text such as `6G`, or `None` for no cap) as `systemd-run --user --scope -p MemoryMax=... -p MemorySwapMax=0`, or, when
+    that is unavailable (`have_systemd` False; default: `user_scope_works()`), `ulimit -v` in a `sh -c` (address space, a
+    cruder cap)."""
+    argv = list(argv)
+    if mem_max:
+        if have_systemd is None:
+            have_systemd = user_scope_works()
+        if have_systemd:
+            argv = ["systemd-run", "--user", "--scope", "-q", "-p", f"MemoryMax={mem_max}", "-p", "MemorySwapMax=0"] + argv
+        else:
+            argv = ["sh", "-c", f'ulimit -v {parse_size(mem_max) // 1024} && exec "$@"', "sh"] + argv
+    if nice:
+        argv = ["nice", "-n", str(nice)] + argv
+    return argv
+
+
+# [@ANCHOR: agent_procs:stop_group]
+def stop_group(pgid, sid, grace, sleep=time.sleep, clock=time.monotonic):
+    """Wrapper-side stop of its own job: SIGTERM to the process group `pgid` (the wrapper survives it: its handler forwards
+    it), wait up to `grace` seconds for every other member to end, then SIGKILL each remaining member one by one (never the
+    group, which holds the wrapper; each signal checks the start time)."""
+    me = os.getpid()
+    others = lambda: [i for i in group_members(snapshot(), pgid, sid) if i.pid != me]  # noqa: E731
+    os.killpg(pgid, signal.SIGTERM)
+    deadline = clock() + grace
+    while others() and clock() < deadline:
+        sleep(0.1)
+    for info in others():
+        try:
+            signal_same_process(info.pid, info.start_ticks, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+
+def _die_with_parent():
+    """`preexec_fn` of the job's command: SIGTERM when the wrapper (its parent) dies, so a lost wrapper never leaves it."""
+    import ctypes
+    ctypes.CDLL("libc.so.6", use_errno=True).prctl(1, int(signal.SIGTERM))  # PR_SET_PDEATHSIG
+
+
 # [@ANCHOR: agent_procs:wrapper_main]
-def wrapper_main(name, argv, directory=None):
-    """The tiny wrapper that is the leader of a named job's session (`agent_procs.py _wrap NAME -- COMMAND...`).
+def wrapper_main(name, argv, directory=None, timeout=0, kill_grace=KILL_GRACE, mem_max=None, nice=0):
+    """The tiny wrapper that is the leader of a named job's session (`agent_procs.py _wrap NAME [--timeout S] -- COMMAND...`).
 
     Waits for the line `go` on standard input (so the record exists before the command runs), runs `argv` with standard input
     from /dev/null and output inherited (the log), waits for it, and writes `exit_code` (128+N for death by signal N, 127 when
     the program was not found) and `ended_at` into the job's record when the record still names this process. Returns that
-    exit code. SIGTERM, SIGINT, SIGHUP, SIGQUIT, SIGUSR1 and SIGUSR2 (`ALLOWED_SIGNALS`) are forwarded to the command and do not stop the wrapper."""
+    exit code. SIGTERM, SIGINT, SIGHUP, SIGQUIT, SIGUSR1 and SIGUSR2 (`ALLOWED_SIGNALS`) are forwarded to the command and do not
+    stop the wrapper. After `timeout` seconds (0: never) the whole process group is stopped with `stop_group` (SIGTERM, then
+    SIGKILL after `kill_grace`), the exit code is 124 and the record gets `exit_reason` `timeout`. The command asks the kernel
+    for SIGTERM when the wrapper dies (PR_SET_PDEATHSIG). `mem_max` and `nice` are applied with `limit_argv` here, so the
+    wrapper's own command line never names systemd-run."""
     if sys.stdin.readline().strip() != "go":
         return 126
     holder = [None]
     for signum in ALLOWED_SIGNALS.values():
         signal.signal(signum, functools.partial(forward_signal, holder))
+    reason = None
     try:
-        holder[0] = subprocess.Popen(argv, stdin=subprocess.DEVNULL)
-        code = holder[0].wait()
-        code = 128 - code if code < 0 else code
+        full = limit_argv(argv, mem_max, nice) if shutil.which(argv[0]) else list(argv)  # a missing program stays 127
+        holder[0] = subprocess.Popen(full, stdin=subprocess.DEVNULL, preexec_fn=_die_with_parent)
+        try:
+            code = holder[0].wait(timeout=timeout or None)
+        except subprocess.TimeoutExpired:
+            reason = "timeout"
+            print(f"agent_procs: job {name} reached its timeout of {timeout:g}s: stopping its process group",
+                  file=sys.stderr, flush=True)
+            stop_group(os.getpgrp(), os.getsid(0), kill_grace)
+            holder[0].wait()
+            code = EX_TIMEOUT_JOB
+        else:
+            code = 128 - code if code < 0 else code
     except OSError as error:
         print(f"agent_procs: cannot run {argv[0]}: {error}", file=sys.stderr, flush=True)
         code = 127
     rec = read_record(name, directory)
     if rec is not None and rec.pid == os.getpid():
         rec.exit_code = code
+        rec.exit_reason = reason
         rec.ended_at = time.time()
         write_record(rec, directory)
     return code
 
 
 # [@ANCHOR: agent_procs:start_job]
-def start_job(name, argv, tag="", cwd=None, directory=None):
+def start_job(name, argv, tag="", cwd=None, directory=None, timeout=DEFAULT_TIMEOUT, mem_max=DEFAULT_MEM_MAX, nice=0,
+              kill_grace=KILL_GRACE):
     """Start `argv` as the named job `name` in its own session and process group; returns its `JobRecord`.
 
     Output (standard output and error) goes to `<jobs dir>/<name>.log`, truncated. The record names the wrapper's pid,
     process group, session and start time. Holds an exclusive lock on `<name>.lock` while checking and starting, so two
     starts of one name cannot both succeed. Raises `ProcError` for a bad name, an empty command, a `cwd` that is not a directory, or a job of that name that
-    is still running (stop it, or wait for it, first)."""
+    is still running (stop it, or wait for it, first). `timeout` seconds (0: none) and `mem_max` (`6G`; `None`: none) are
+    recorded and enforced (see `wrapper_main`, `limit_argv`); `nice` is the niceness."""
     directory = directory or jobs_dir()
     check_job_name(name)
     if not argv:
@@ -608,12 +700,14 @@ def start_job(name, argv, tag="", cwd=None, directory=None):
         with open(log, "w") as log_handle:
             env = dict(os.environ, AGENT_PROCS_JOB=name)
             child = subprocess.Popen(
-                [sys.executable, os.path.abspath(__file__), "_wrap", name, "--"] + list(argv), stdin=subprocess.PIPE,
+                [sys.executable, os.path.abspath(__file__), "_wrap", name, "--timeout", str(timeout), "--kill-grace",
+                 str(kill_grace), "--mem-max", mem_max or "none", "--nice", str(nice), "--"] + list(argv), stdin=subprocess.PIPE,
                 stdout=log_handle, stderr=subprocess.STDOUT, cwd=cwd, start_new_session=True, env=env,
                 close_fds=True)
         info = read_proc(child.pid)
         rec = JobRecord(name, tag, child.pid, child.pid, child.pid, info.start_ticks if info else 0,
-                        os.path.realpath(cwd or os.getcwd()), list(argv), log, time.time(), user_name(os.getuid()))
+                        os.path.realpath(cwd or os.getcwd()), list(argv), log, time.time(), user_name(os.getuid()),
+                        timeout=timeout, mem_max=mem_max)
         write_record(rec, directory)
         child.stdin.write(b"go\n")
         child.stdin.close()
@@ -938,8 +1032,19 @@ def cmd_wait(args, out=sys.stdout):
 # [@ANCHOR: agent_procs:cmd_run]
 def cmd_run(args, out=sys.stdout):
     """`run` subcommand: starts the named job and prints its name, pid, process group, log path and how to wait for it."""
-    rec = start_job(args.name, args.command, args.tag or "", args.cwd)
+    timeout = DEFAULT_TIMEOUT if args.timeout is None else int(args.timeout)
+    mem = DEFAULT_MEM_MAX if args.mem_max is None else args.mem_max
+    mem = None if mem.lower() == "none" else mem
+    if mem:
+        parse_size(mem)
+    rec = start_job(args.name, args.command, args.tag or "", args.cwd, timeout=timeout, mem_max=mem, nice=args.nice or 0)
     print(f"job {rec.name} started: pid={rec.pid} pgid={rec.pgid} log={rec.log}", file=out)
+    if not timeout:
+        print("  WARNING: NO TIMEOUT (--timeout 0): this job runs until it ends or you stop it", file=out)
+    if not mem:
+        print("  WARNING: NO MEMORY CAP (--mem-max none): this job can use all the memory", file=out)
+    elif not user_scope_works():
+        print(f"  note: systemd-run --user is unavailable, memory cap {mem} is `ulimit -v` (address space) instead", file=out)
     print(f"  wait: agent_procs.py wait --job {rec.name}    stop: agent_procs.py stop {rec.name}", file=out)
     return EX_OK
 
@@ -955,7 +1060,8 @@ def cmd_jobs(args, out=sys.stdout):
     for rec, state in rows:
         code = f" code={rec.exit_code}" if rec.exit_code is not None else ""
         print(f"{rec.name} {state}{code} pid={rec.pid} started={format_start(rec.start_ticks) if state == 'running' else '-'} "
-              f"tag={rec.tag or '-'} cwd={rec.cwd} cmd={' '.join(rec.argv)}", file=out)
+              f"timeout={f'{rec.timeout}s' if rec.timeout else 'none'} mem={rec.mem_max or 'none'}"
+              f"{' reason=' + rec.exit_reason if rec.exit_reason else ''} tag={rec.tag or '-'} cwd={rec.cwd} cmd={' '.join(rec.argv)}", file=out)
     return EX_OK
 
 
@@ -1007,6 +1113,10 @@ def build_parser():
     run.add_argument("name")
     run.add_argument("--tag", metavar="AGENT", help="the owning agent, recorded in the job record")
     run.add_argument("--cwd", metavar="DIR")
+    run.add_argument("--timeout", type=float, metavar="SECONDS",
+                     help=f"stop the whole process group after this long (default {DEFAULT_TIMEOUT}; 0: no timeout)")
+    run.add_argument("--mem-max", metavar="SIZE", help=f"memory cap, e.g. 4G (default {DEFAULT_MEM_MAX}; none: no cap)")
+    run.add_argument("--nice", type=int, metavar="N", help="run under nice -n N")
     jobs = sub.add_parser("jobs", help="list job records")
     jobs.add_argument("--json", action="store_true")
     stop = sub.add_parser("stop", help="stop a named job (its process group)")
@@ -1026,6 +1136,10 @@ def build_parser():
                       help="override the protected-process refusal for your own recorded job")
     wrap = sub.add_parser("_wrap")
     wrap.add_argument("name")
+    wrap.add_argument("--timeout", type=float, default=0)
+    wrap.add_argument("--kill-grace", type=float, default=KILL_GRACE)
+    wrap.add_argument("--mem-max", default="none")
+    wrap.add_argument("--nice", type=int, default=0)
     return parser
 
 
@@ -1051,7 +1165,8 @@ def main(argv=None):
     args = parse_args(argv)
     try:
         if args.cmd == "_wrap":
-            return wrapper_main(args.name, args.command)
+            return wrapper_main(args.name, args.command, timeout=args.timeout, kill_grace=args.kill_grace,
+                            mem_max=None if args.mem_max == "none" else args.mem_max, nice=args.nice)
         handler = {"find": cmd_find, "wait": cmd_wait, "run": cmd_run, "jobs": cmd_jobs, "stop": cmd_stop,
                    "kill-pid": cmd_kill_pid}[args.cmd]
         return handler(args)
