@@ -2,7 +2,7 @@
 
 *Copyright © Bruce Perens K6BP. Licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later).*
 
-### `pager_duty_module_root` [@ANCHOR: pager_duty_module_root]
+### `pager_duty_module_root`
 
 **Purpose.** This anchor marks the `pager_duty` module as a whole, so that module-level tests and the module's stories and journeys can cite one stable id for "the pager duty module" rather than a single function. It has no function of its own in code: it names the module that provides active checks run by external monitoring daemons, incident records with de-duplication and rate limiting, on-call shift lookup from `calendar.event`, and notification of the person on duty.
 

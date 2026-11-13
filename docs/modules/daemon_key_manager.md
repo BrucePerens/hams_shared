@@ -154,7 +154,7 @@ ODOO_RPC_KEY=12345abcd...
 
 **See also.** `cron_rotation_trigger`, test `test_cron_rotate_all_keys`.
 
-### `daemon_self_healing` [@ANCHOR: daemon_self_healing]
+### `daemon_self_healing` [@ANCHOR: daemons:daemon_self_healing]
 
 **Purpose.** The rule that a daemon using a registry key must survive that key being rotated while it runs.
 
@@ -262,7 +262,7 @@ ODOO_RPC_KEY=12345abcd...
 
 **See also.** `COMM_generate_new_key_logic`, `COMM_revoke_old_keys_logic`, `test_rotating_again_revokes_the_previous_key`.
 
-### `COMM_documentation_installed` [@ANCHOR: COMM_documentation_installed]
+### `COMM_documentation_installed`
 
 **Purpose.** A coverage marker for the `daemon_key_manager` module's documentation-installed check: the module's own documentation lists it as verified by the test anchor `test_documentation_installed`, meaning the module's help pages are expected to be present after installation.
 

@@ -154,7 +154,7 @@ Each line below cites an anchor (a named tag the lint tools use to link a code f
 
 ## Anchor reference
 
-### `COMM_documentation_installed` [@ANCHOR: daemon_key_manager:COMM_documentation_installed]
+### `COMM_documentation_installed`
 
 **Purpose.** A coverage marker for the `daemon_key_manager` module's documentation-installed check: the module's own documentation lists it as verified by the test anchor `test_documentation_installed`, meaning the module's help pages are expected to be present after installation.
 

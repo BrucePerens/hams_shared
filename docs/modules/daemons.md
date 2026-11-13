@@ -15,9 +15,9 @@
 * **PowerDNS Sync:** Consumes Odoo DNS zone mutations and synchronizes them to the authoritative PowerDNS SQLite backend `pdns_rabbitmq_consumer`.
 
 ## 3. Scheduled Polling
-* **QSL Synchronization (eQSL):** (a QSL is a confirmation of a radio contact; eQSL is an electronic QSL service) eQSL is no longer polled by a central daemon; the anchor [@ANCHOR: daemon_sync_eqsl_batch] names that retired design, and no code carries it now. Each member's account password stays on the member's own machine: the local hardware relay downloads that member's confirmations there and reports them to Odoo, where a scheduled action applies them to the logbook (anchor `ham_relay_bridge:relay_eqsl_apply_confirmations_cron`).
+* **QSL Synchronization (eQSL):** (a QSL is a confirmation of a radio contact; eQSL is an electronic QSL service) eQSL is no longer polled by a central daemon; the anchor  names that retired design, and no code carries it now. Each member's account password stays on the member's own machine: the local hardware relay downloads that member's confirmations there and reports them to Odoo, where a scheduled action applies them to the logbook (anchor `ham_relay_bridge:relay_eqsl_apply_confirmations_cron`).
 
-* **Space Weather:** Fetches the solar flux index (SFI, the 10.7 cm radio flux) and the K-index (a three-hourly measure of geomagnetic disturbance) from the NOAA Space Weather Prediction Center (SWPC) JSON feeds and writes them to Odoo's `ham.space.weather` records, so logged contacts can be matched to the conditions at the time. It polls every 30 minutes by default (the `POLL_INTERVAL` environment variable overrides it; values under one minute are ignored), not hourly: NOAA publishes new K-index values only every three hours [@ANCHOR: fetch_solar_metrics].
+* **Space Weather:** Fetches the solar flux index (SFI, the 10.7 cm radio flux) and the K-index (a three-hourly measure of geomagnetic disturbance) from the NOAA Space Weather Prediction Center (SWPC) JSON feeds and writes them to Odoo's `ham.space.weather` records, so logged contacts can be matched to the conditions at the time. It polls every 30 minutes by default (the `POLL_INTERVAL` environment variable overrides it; values under one minute are ignored), not hourly: NOAA publishes new K-index values only every three hours [@ANCHOR: ham_logbook:fetch_solar_metrics].
 
 ## 4. Platform Synchronization
 * Executes the regulatory sync cycle `regulatory_sync_cycle` and pushes FCC (US Federal Communications Commission, the amateur licence regulator) batches `odoo_sync_fcc_batch` via `daemon_sync_fcc_batch`.
@@ -42,7 +42,7 @@
 
 **Special concerns.** The header is the only guard, so the relay listens on loopback by default (`FLASK_HOST` overrides); it changes the radio's frequency and mode but does not key the transmitter. Test: `ham_shack/tests/test_webrtc_tour.py`.
 
-### `consume_adif_task` [@ANCHOR: consume_adif_task]
+### `consume_adif_task` [@ANCHOR: adif_processor:consume_adif_task]
 
 **Purpose.** The RabbitMQ consumer that parses uploaded ADIF logs (the standard radio-log file format) outside the web workers: `callback(ch, method, properties, body)` in `daemons/adif_processor/main.py`.
 
@@ -50,7 +50,7 @@
 
 **Special concerns.** Every message is acknowledged in a `finally`, even on error: failures are recorded as the row's `failed` state, so a poison message cannot redeliver forever. At start-up the daemon re-publishes every row still `pending`. Test: `daemons/adif_processor/test_adif_processor.py`.
 
-### `pdns_rabbitmq_consumer` [@ANCHOR: pdns_rabbitmq_consumer]
+### `pdns_rabbitmq_consumer` [@ANCHOR: daemons:pdns_sync_process_dns_update]
 
 **Purpose.** Applies Odoo DNS zone changes to the authoritative PowerDNS server: `process_dns_update(ch, method, properties, body)`, the closure from `get_callback(odoo_client)` in `daemons/pdns_sync/main.py`, triggered by `ham_dns:trigger_pdns_sync`.
 
@@ -58,7 +58,7 @@
 
 **Behaviour and errors.** A body that is not an object, a bad zone name or any malformed record is logged and acknowledged (dropped, never requeued). An upsert PATCHes the zone so PowerDNS holds exactly the supplied rrsets, then reports `done`, `partial` or `failed` to Odoo. A permanent 4xx is dropped; other failures back off and republish with an attempt counter up to `PDNS_SYNC_MAX_ATTEMPTS` (30). The nightly reconcile re-queues what Odoo has. Tests: `ham_dns/tests/test_dns_automation.py`.
 
-### `regulatory_sync_cycle` [@ANCHOR: regulatory_sync_cycle]
+### `regulatory_sync_cycle` [@ANCHOR: fcc_uls_sync:regulatory_sync_cycle]
 
 **Purpose.** One pass of the FCC ULS (Universal Licensing System) amateur-licence download, parse and push: `run_sync()` in `daemons/fcc_uls_sync/main.py`.
 
@@ -68,7 +68,7 @@
 
 **Special concerns.** Runs unattended on a schedule and uses the network and Odoo's JSON-2 API. Tests: `daemons/fcc_uls_sync/test_fcc_sync.py`, `ham_callbook/tests/test_callbook.py`.
 
-### `odoo_sync_fcc_batch` [@ANCHOR: odoo_sync_fcc_batch]
+### `odoo_sync_fcc_batch` [@ANCHOR: ham_callbook:odoo_sync_fcc_batch]
 
 **Purpose.** The Odoo side of the FCC batch push: `ham.callbook.sync_fcc_batch(batch_data)` in `ham_callbook/models/ham_callbook.py`, a `@public_rpc @api.model` method the sync daemons call over JSON-2.
 
@@ -78,7 +78,7 @@
 
 **Special concerns.** Idempotent: re-sending a batch changes nothing. Tests: `ham_callbook/tests/test_callbook.py`, `test_fcc_idempotency.py`.
 
-### `daemon_sync_fcc_batch` [@ANCHOR: daemon_sync_fcc_batch]
+### `daemon_sync_fcc_batch` [@ANCHOR: fcc_uls_sync:daemon_sync_fcc_batch]
 
 **Purpose.** The daemon-side step that streams parsed FCC records to Odoo: inside `_ingest()` in `daemons/fcc_uls_sync/main.py`.
 
@@ -88,7 +88,7 @@
 
 **Special concerns.** Network and Odoo JSON-2 writes; safe to repeat because the Odoo end is idempotent. Test: `daemons/fcc_uls_sync/test_fcc_sync.py`.
 
-### `daemon_sync_tles` [@ANCHOR: daemon_sync_tles]
+### `daemon_sync_tles` [@ANCHOR: daemons:amsat_tle_sync_run_sync]
 
 **Purpose.** Keeps the satellite two-line-element table current for pass prediction: `run_sync(client)` in `daemons/amsat_tle_sync/main.py`.
 

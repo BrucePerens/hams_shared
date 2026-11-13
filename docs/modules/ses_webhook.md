@@ -95,7 +95,7 @@ None beyond the shared `mail.thread`/`mail.blacklist` core models this module's 
 
 **See also.** `ses_webhook:COMM_domain_create`, `ses_webhook:COMM_domain_write`; test `test_ses_webhook.py`.
 
-### `ses_webhook:COMM_cron_truncate_logs` [@ANCHOR: ses_webhook:COMM_cron_truncate_logs]
+### `ses_webhook:COMM_cron_truncate_logs`
 
 **Status.** Retired. In ses_webhook 1.0 this was `ses.webhook.log._cron_truncate_logs`, a daily scheduled action that deleted webhook log rows older than 30 days. In 1.1 the method and its cron `ir_cron_truncate_ses_webhook_logs` were removed under the "retain data forever" policy, so no code carries this anchor today.
 
@@ -107,7 +107,7 @@ None beyond the shared `mail.thread`/`mail.blacklist` core models this module's 
 
 **TODO.** Remove this anchor from the doc and any citation list when the retired-anchor bookkeeping allows.
 
-### `ses_webhook:COMM_cron_truncate_pending_submissions` [@ANCHOR: ses_webhook:COMM_cron_truncate_pending_submissions]
+### `ses_webhook:COMM_cron_truncate_pending_submissions`
 
 **Status.** Retired. In ses_webhook 1.0 this was `ses.webhook.pending_submission._cron_truncate_pending_submissions`, a daily action deleting pending submissions older than 7 days, chosen because those rows hold unauthenticated email content. In 1.1 it was removed under the "retain data forever" policy; no code carries the anchor today.
 
