@@ -67,6 +67,14 @@ def git(repo, *args, check=True):
     return result.stdout.strip()
 
 
+# A failed or timed-out `git status` says nothing about the tree, so it counts as dirty (never remove on a guess).
+def is_dirty(path):
+    try:
+        return bool(git(path, "status", "--porcelain"))
+    except RuntimeError:
+        return True
+
+
 # [@ANCHOR: worktree_hygiene:merged_pull_request_heads]
 def merged_pull_request_heads(repo):
     """{branch name: set of tip shas} of merged pull requests of the repository the working tree belongs to."""
@@ -283,7 +291,7 @@ def nested_worktrees(repo, holders_of=holding_processes):
             continue
         if path in locked:
             why = "locked"
-        elif git(path, "status", "--porcelain", check=False):
+        elif is_dirty(path):
             why = "uncommitted changes"
         else:
             holders = holders_of(path)
@@ -375,7 +383,7 @@ def run(repo, apply, stale_seconds, merged_heads, now=None, only_branch=None, ho
         if path in locked:
             report["held"].append((path, branch, [("locked", "git worktree lock")]))
             continue
-        dirty = bool(git(path, "status", "--porcelain", check=False))
+        dirty = is_dirty(path)
         if branch and not dirty and is_merged(repo, branch, merged_heads) and _idle(now, worktree_activity(path), stale_seconds):
             holders = holders_of(path)
             if holders:
