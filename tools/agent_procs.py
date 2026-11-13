@@ -582,7 +582,11 @@ def parse_size(text):
 
 @functools.lru_cache(maxsize=None)
 def user_scope_works():
-    """True when `systemd-run --user --scope` can start a command here (it needs the user manager and a cgroup parent)."""
+    """True when `systemd-run --user --scope` can start a command here (it needs the user manager and a cgroup parent).
+    AGENT_PROCS_NO_SYSTEMD_SCOPE=1 forces False (the `ulimit -v` fallback): tests that deliberately exceed a cap use it so
+    the kernel OOM killer never fires in a user scope (GNOME shows a desktop toast for each)."""
+    if os.environ.get("AGENT_PROCS_NO_SYSTEMD_SCOPE"):
+        return False
     try:
         return subprocess.run(["systemd-run", "--user", "--scope", "-q", "true"], capture_output=True,
                               timeout=20).returncode == 0
