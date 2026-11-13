@@ -65,7 +65,6 @@ Tests [@ANCHOR: agent_procs:main]
 import io
 import json
 import os
-import pathlib
 import shutil
 import signal
 import subprocess
