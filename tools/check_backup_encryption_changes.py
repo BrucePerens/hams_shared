@@ -46,6 +46,7 @@ GENERATOR_RE = re.compile(r"secrets\.token_|os\.urandom|token_bytes|token_hex|to
 SECRET_NAME_RE = re.compile(r"HAMS_CRYPTO_KEY|hams_crypto|ODOO_BACKUP_CRYPTO_KEY|KOPIA_PASSWORD|kopia_password|kopia_repo|cipher|pgbackrest\.conf|b2_backup\.env|B2_APPLICATION_KEY|application_key", re.IGNORECASE)
 WRITE_RE = re.compile(r"""["'](?:w|a|wb|ab|w\+|r\+)["']|O_TRUNC|O_WRONLY|os\.replace|os\.rename|shutil\.(?:copy|move)|write_text|write_bytes|\.write\(|\btee\b|\bmv\b|\bcp\b|install\s+-m|>\s*\S""")
 APPROVAL_RE = re.compile(r"^\s*[-*]\s*(?P<path>\S+)\s*\|\s*(?P<rules>[\w*,\- ]+?)\s*\|\s*approved by Bruce on (?P<date>\d{4}-\d{2}-\d{2})\b.*$")
+HUNK_RE = re.compile(r"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")
 RULES = ("cipher", "stanza", "kopia-repo", "keygen", "secret-write")
 
 
@@ -62,21 +63,27 @@ def run_git(repo, *args):
 def parse_diff(text):
     """Parse `git diff -U0` text into `{path: [(added_lines, removed_lines), ...]}`, one tuple per hunk (the lines without their `+`/`-`)."""
     files, path, added, removed = {}, None, None, None
+    old_left = new_left = 0  # lines of the current hunk still to come: its body is counted, never guessed from a `+++ ` or `--- ` prefix
 
     def close():
         if path and (added or removed):
             files.setdefault(path, []).append((added, removed))
     for line in text.splitlines():
-        if line.startswith("+++ "):
+        if old_left > 0 and line.startswith("-"):
+            removed.append(line[1:])
+            old_left -= 1
+        elif new_left > 0 and line.startswith("+"):
+            added.append(line[1:])
+            new_left -= 1
+        elif line.startswith("+++ "):
             close()
-            path, added, removed = (line[6:] if line.startswith("+++ b/") else None), [], []
+            # git ends the path with a tab when it holds a space
+            path, added, removed = (line[6:].rstrip("\t") if line.startswith("+++ b/") else None), [], []
         elif line.startswith("@@"):
             close()
             added, removed = [], []
-        elif line.startswith("+") and added is not None:
-            added.append(line[1:])
-        elif line.startswith("-") and not line.startswith("--- ") and removed is not None:
-            removed.append(line[1:])
+            counts = HUNK_RE.match(line)
+            old_left, new_left = (int(counts.group(1) or 1), int(counts.group(2) or 1)) if counts else (0, 0)
     close()
     return files
 

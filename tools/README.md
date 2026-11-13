@@ -3897,7 +3897,7 @@ Purpose: the hook entry point. Reads the hook JSON (`tool_name`, `tool_input.com
 
 Purpose: parse `git diff -U0` text into `{path: [(added_lines, removed_lines), ...]}`, one tuple per hunk, the lines without their `+` or `-`.
 
-Argument `text`: output of `git diff -U0` (no context lines). The path comes from each `+++ b/<path>` line (a deleted file, `+++ /dev/null`, gives no path and is dropped). Every `@@` hunk gives one `(added_lines, removed_lines)` tuple with the `+`/`-` prefix removed, so later rules can look at what a hunk added or removed; the `--- ` header lines are not counted as removals. Returns a dict, `{}` for empty input. Pure. Test: `test_check_backup_encryption_changes.py`.
+Argument `text`: output of `git diff -U0` (no context lines). The path comes from each `+++ b/<path>` line (a deleted file, `+++ /dev/null`, gives no path and is dropped). Every `@@` hunk gives one `(added_lines, removed_lines)` tuple with the `+`/`-` prefix removed, so later rules can look at what a hunk added or removed; the hunk body is taken by the line counts of its `@@` header, so a removed line `-- x` or an added line `++ x` is not mistaken for a file header, and the tab git puts after a path with a space is dropped. Returns a dict, `{}` for empty input. Pure. Test: `test_check_backup_encryption_changes.py`.
 
 ### `[@ANCHOR: check_backup_encryption_changes:relevant_path]` `relevant_path(path)`
 
