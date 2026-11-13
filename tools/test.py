@@ -1107,6 +1107,17 @@ def kill_test_chrome(signal_name):
             _logger.debug("Ignored %s signalling Chrome pid %s", e, process.pid)
 
 
+def _group_has_live_members(pgid):
+    """True if any non-zombie process is still in process group `pgid` (children that outlived, or ignored SIGTERM sent to, the leader)."""
+    for process in psutil.process_iter():
+        try:
+            if process.status() != psutil.STATUS_ZOMBIE and os.getpgid(process.pid) == pgid:
+                return True
+        except (psutil.NoSuchProcess, ProcessLookupError):
+            continue
+    return False
+
+
 # [@ANCHOR: test:robust_reap]
 def robust_reap(pid):
     """
@@ -1135,7 +1146,7 @@ def robust_reap(pid):
         # this review's own VirtualClockThread fix addresses (see virtual_clock_thread.md).
         start_time = time.monotonic()
         while time.monotonic() - start_time < 30.0:
-            if _process_reaped(pid):
+            if _process_reaped(pid) and not _group_has_live_members(pgid):
                 print(f"[*] [REAPER] Process {pid} confirmed dead.")
                 return
             time.sleep(0.5)
