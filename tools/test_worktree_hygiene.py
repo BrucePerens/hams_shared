@@ -13,6 +13,7 @@ import unittest
 import unittest.mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import check_claims_freshness  # noqa: E402
 import worktree_hygiene as wh  # noqa: E402
 
 
@@ -364,8 +365,6 @@ class AnchoredFunctionsTest(unittest.TestCase):
     def test_the_git_helper_and_the_pull_request_lookup_are_hashable_anchored_functions(self):
         # Tests [@ANCHOR: worktree_hygiene:git]
         # Tests [@ANCHOR: worktree_hygiene:merged_pull_request_heads]
-        import check_claims_freshness
-
         with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "worktree_hygiene.py"), encoding="utf-8") as source:
             hashed = check_claims_freshness.function_hashes_from_text(source.read(), "worktree_hygiene.py")
         self.assertIn("worktree_hygiene:git", hashed)
