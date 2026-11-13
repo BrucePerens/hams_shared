@@ -464,6 +464,15 @@ def test_patch_ban_still_flags_a_genuine_non_daemon_test():
     assert len(errors) == 1
 
 
+def test_patch_ban_flags_a_tests_helper_not_named_test_star():
+    # A helper under tests/ (user_websites/tests/open_source_defaults.py) escaped the rule while it only matched test_*.py.
+    assert len(_patch_ban_errors("user_websites/tests/open_source_defaults.py")) == 1
+
+
+def test_patch_ban_exempts_the_safe_patch_implementation():
+    assert _patch_ban_errors("zero_sudo/tests/common.py") == []
+
+
 def test_patch_ban_exempts_hams_com_ingest():
     # ingest/ is this codebase's OTHER directory of entirely standalone,
     # non-Odoo daemon scripts (FUNCTION_TEST_ANCHOR_SWEEP.md's own sweep) --

@@ -25,6 +25,10 @@ import xml.parsers.expat
 import check_target
 from tree_files import tree_walk
 
+# The flags EVERY caller scanning a module (tools/test.py's pre-flight, devbox_tools/cycle_run.py's round pre-flight) must pass
+# besides the directory, so both entry points scan the same file set. The caller adds "--ignore-file <hams_com ignore_list.txt>".
+MODULE_SCAN_FLAGS = ("--scan-daemons-and-tools",)
+
 # Odoo's command-line loading flags. Odoo 19 sets these in `odoo/tools/config.py` and never
 # clears them: nothing in `odoo/modules/loading.py`, `odoo/orm/registry.py`,
 # `odoo/service/server.py` or `odoo/cli/server.py` resets them once `load_modules()` returns
@@ -348,6 +352,9 @@ GENERAL_ERROR_RULES = [
         "CRITICAL ARCHITECTURE: Tests must inherit from HamsTransactionCase or HamsHttpCase. Direct Odoo base class inheritance is forbidden.",
     ),
     (
+        # Applies to every .py under a tests/ directory too, not only test_*.py: a helper such as
+        # user_websites/tests/open_source_defaults.py patches just as natively. zero_sudo/tests/common.py is the one exception: it
+        # IMPLEMENTS safe_patch/safe_patch_object on top of the native patch.
         # Excludes daemons?/ the same way the DAEMON DECOUPLING rule above
         # does: self.safe_patch()/self.safe_patch_object() are methods on
         # zero_sudo's Odoo TestCase-derived HamsTransactionCase/HamsHttpCase
@@ -404,7 +411,7 @@ GENERAL_ERROR_RULES = [
         # unittest.mock.patch directly), the same pattern as every other path in this list.
         # `(?:^|/)tools/` does not already cover this: it anchors to an exact "tools" path SEGMENT, and "devbox_tools" is one segment,
         # not "devbox" + "tools", so it never matched.
-        r"^(?!.*daemons?/)(?!.*(?:^|/)ingest/)(?!.*(?:^|/)tools/)(?!.*(?:^|/)scripts/)(?!.*(?:^|/)\.github/self-hosted-runner/)(?!.*(?:^|/)devbox_tools/).*test_.*\.py$",
+        r"^(?!.*daemons?/)(?!.*(?:^|/)ingest/)(?!.*(?:^|/)tools/)(?!.*(?:^|/)scripts/)(?!.*(?:^|/)\.github/self-hosted-runner/)(?!.*(?:^|/)devbox_tools/)(?!.*(?:^|/)zero_sudo/tests/common\.py$)(?:.*test_.*\.py|.*/tests/.*\.py)$",
         # Mock patching only: a bare `patch(`, `mock.patch(`, `unittest.mock.patch(`, `patch.object(`,
         # or an `@patch` decorator. `(?<![\w.])` keeps an attribute call on any other
         # object (an HTTP session's `session.patch(`, `requests.patch(`) from matching.
