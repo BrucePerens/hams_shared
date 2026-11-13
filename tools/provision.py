@@ -292,7 +292,7 @@ def provision():
         action="store_true",
         help="With --test-environment: skip the closing run_linters.py --changed and test.py -u zero_sudo",
     )
-    args, _ = parser.parse_known_args()
+    args = parser.parse_args()  # an unknown flag (a mistyped --plan) must stop the run, not provision for real
     if (args.git_key or args.workspace or args.no_self_check) and not args.test_environment:
         _logger.error("[!] --git-key, --workspace and --no-self-check only apply with --test-environment")
         sys.exit(1)
