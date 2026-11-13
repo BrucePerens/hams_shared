@@ -1091,7 +1091,9 @@ class LimitTests(ProcTestCase):
 
     def test_a_job_over_its_memory_cap_is_stopped(self):
         code = "import time\nx = []\nwhile True:\n    x.append(b'x' * 50_000_000)\n    time.sleep(0.01)\n"
-        done = cli("run", "hog", "--timeout", "60", "--mem-max", "200M", "--", sys.executable, "-c", code, env=self.env)
+        # ulimit -v fallback: a real 200M systemd scope makes the kernel OOM-kill (desktop toast each run)
+        env = dict(self.env, AGENT_PROCS_NO_SYSTEMD_SCOPE="1")
+        done = cli("run", "hog", "--timeout", "60", "--mem-max", "200M", "--", sys.executable, "-c", code, env=env)
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(cli("wait", "--job", "hog", "--timeout", "50", env=self.env).returncode, 1)
         rec = ap.read_record("hog", self.jobs)
@@ -1134,6 +1136,14 @@ class LimitTests(ProcTestCase):
         fallback = ap.limit_argv(["x"], "1G", 0, have_systemd=False)
         self.assertEqual(fallback[0], "sh")
         self.assertIn("ulimit -v 1048576", fallback[2])
+
+    def test_the_no_scope_switch_selects_the_ulimit_fallback_without_starting_a_scope(self):
+        ap.user_scope_works.cache_clear()
+        with mock.patch.dict(os.environ, {"AGENT_PROCS_NO_SYSTEMD_SCOPE": "1"}), \
+                mock.patch.object(ap.subprocess, "run") as run:
+            self.assertEqual(ap.limit_argv(["x"], "1G", 0)[0], "sh")
+        run.assert_not_called()
+        ap.user_scope_works.cache_clear()
 
 
 class ReapTests(ProcTestCase):
