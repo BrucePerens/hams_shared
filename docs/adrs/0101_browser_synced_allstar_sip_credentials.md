@@ -3,7 +3,7 @@
 ## Status
 Accepted
 
-**Superseded in part (2026-10-23, 2026-10-24):** hams.com removed every ARRL Logbook of the World (LoTW) and TQSL (ARRL's signing tool for Logbook of the World) use on 2026-10-23 and restored LoTW on 2026-10-24 only as a licence-verification method for a signed-in member (never sign-in; Bruce's decisions). LoTW verification mentions below apply again; LoTW sign-in, log sync and TQSL mentions are history.
+**Superseded in part (2026-10-23, 2026-10-24):** hams.com removed every ARRL (American Radio Relay League) Logbook of the World (LoTW) and TQSL (ARRL's signing tool for Logbook of the World) use on 2026-10-23 and restored LoTW on 2026-10-24 only as a licence-verification method for a signed-in member (never sign-in; Bruce's decisions). LoTW verification mentions below apply again; LoTW sign-in, log sync and TQSL mentions are history.
 
 ## Context
 Bruce's direction of 2026-09-21: the browser goes to an AllStar repeater's own gateway directly, with no

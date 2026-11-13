@@ -2052,6 +2052,14 @@ this one call, as the runner does for worktrees), or "" on any failure. Never ra
 
 Purpose: writes a state, cache or stamp file so a crash or power loss leaves the old file or the complete new one (docs/reviews/DURABILITY_AUDIT_2026-11-12.md). `data` is str (UTF-8) or bytes; the data goes to a temporary file in the same directory, is fsynced, renamed over `path`, and the directory is fsynced. `mode` sets the permission bits (default 0600 from mkstemp; pass 0o644 for a shared file). Raises `OSError` (old file untouched, temporary removed) when anything fails before the rename.
 
+### `[@ANCHOR: gloss_first_use:find_missing]` `find_missing(text, terms)`
+
+Purpose: finds the terms whose first prose use in one Markdown document has no gloss. `terms` maps a term (case-sensitive) to its expansion, loaded by `load_terms` from `tools/gloss_first_use_terms.txt` (lines `TERM | expansion`). Returns `[(term, offset, inside_parentheses)]` in document order. Prose excludes front matter, headings, fenced and indented code, tables, HTML comments and tags, inline code, links, URLs, paths and any line holding an anchor tag; a use joined to other text by `-`, `/` or `.` is not a use. A gloss exists when `(` or `is`/`means`/`stands for` follows the use, or the expansion occurs earlier in the document. Command line: `python3 tools/gloss_first_use.py [--terms FILE] [PATH ...]` lists `path:line TERM` and exits 1 when anything is missing (no paths: the README, ADR, design, runbook and story files under the current directory). Test: `test_gloss_first_use.py`.
+
+### `[@ANCHOR: gloss_first_use:apply_glosses]` `apply_glosses(text, terms)`
+
+Purpose: the `--apply` mode. Returns `text` with each missing first use rewritten as `TERM (expansion)`, or `TERM: expansion` when the use is inside parentheses so they never nest; nothing else changes and a second run changes nothing. Test: `test_gloss_first_use.py`.
+
 ### `[@ANCHOR: known_red:write_results]` `write_results(path, outcome, commit, observation)`
 
 Purpose: writes `test_results.json`. `path` is the file (its directory must exist), `outcome` a `PolicyOutcome`, `commit` a string, `observation` the first run's `RunObservation`
@@ -2663,7 +2671,7 @@ the coordinator runs those.
 
 ### `[@ANCHOR: infrastructure:test_environment_apt_packages]` `MANIFEST["test_environment_apt_packages"]`
 
-Purpose: the apt packages a test runner needs beyond MANIFEST `apt_packages`: socat (HamsHttpCase's TLS proxy),
+Purpose: the apt packages a test runner needs beyond MANIFEST `apt_packages`: socat (HamsHttpCase's TLS: Transport Layer Security proxy),
 iproute2, nodejs and npm, chromium and fonts, golang-go, the Rust crates' and the relay's build dependencies,
 python3-lxml-html-clean and the daemons' test libraries. Kept out of `apt_packages` on purpose: `test.py`'s pre-flight
 requires every `apt_packages` entry on every host (the dev box included), and production needs none of these.
@@ -7015,7 +7023,7 @@ Every class of the tools that is not a function, with its fields, who creates it
 
 ### `ThrowawayKms` [@ANCHOR: smoketest_relay_signer:smoketest_relay_signer_throwaway_kms_class]
 
-**Purpose.** The two Cloud KMS calls relay_signer makes, answered by a random software key made at start.
+**Purpose.** The two Cloud KMS (key management service) calls relay_signer makes, answered by a random software key made at start.
 **Definition.** `class ThrowawayKms` in `tools/smoketest_relay_signer.py`.
 
 | Field | Type / initial | Meaning |
@@ -7024,7 +7032,7 @@ Every class of the tools that is not a function, with its fields, who creates it
 
 **Methods.** `__init__(self)`; `get_public_key(self, request, timeout=None)`; `asymmetric_sign(self, request, timeout=None)`.
 
-**Notes.** `get_public_key(request, timeout=None)` returns an object with the key's PEM and its CRC32C. `asymmetric_sign(request, timeout=None)` signs the supplied SHA-256 digest (prehashed ECDSA) and returns the name, signature and CRC32C with `verified_digest_crc32c` true. Passed to the daemon's `main` as `kms_client`; no network or key storage.
+**Notes.** `get_public_key(request, timeout=None)` returns an object with the key's PEM (Privacy-Enhanced Mail text encoding for keys and certificates) and its CRC32C. `asymmetric_sign(request, timeout=None)` signs the supplied SHA-256 digest (prehashed ECDSA) and returns the name, signature and CRC32C with `verified_digest_crc32c` true. Passed to the daemon's `main` as `kms_client`; no network or key storage.
 
 ### `StaticPaths` [@ANCHOR: static_site_ctl:static_site_ctl_static_paths_class]
 

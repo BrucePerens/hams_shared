@@ -246,7 +246,7 @@ turns the deadline off for the tools tests (two files already did, per test), th
 
 `pytest daemons/hams_simulated_bots/tests` was one process of 947 tests, 540 s serial (dev box, 2026-11-03; no pytest-xdist in that
 daemon's venv, and adding a dependency needs approval): 25 tests of 10-50 s each, real aiortc connections whose time is waiting
-(`SFU_OPENING_OFFER_WAIT_S`, ICE, a four-minute over transcribed in chunks), so the machine was idle for most of it. The directory
+(`SFU_OPENING_OFFER_WAIT_S`, ICE: Interactive Connectivity Establishment, a four-minute over transcribed in chunks), so the machine was idle for most of it. The directory
 is now `daemon_shards` in `tools/lint_test_durations.json`: `lint_test_durations.daemon_shards` splits its files into 4 sessions
 balanced by recorded seconds per file, run by `run_linters.py` as the steps `pytest daemons/hams_simulated_bots/tests[NofM]`
 (`--only "pytest daemons/hams_simulated_bots/tests"` still selects all four). Measured: the four sessions run side by side,

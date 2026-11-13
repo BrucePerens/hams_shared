@@ -3,13 +3,13 @@
 ## Status
 Accepted
 
-**Superseded in part 2026-10-23:** hams.com no longer uses ARRL Logbook of the World (LoTW) or TQSL (Bruce's decision); LoTW mentions below are kept as history.
+**Superseded in part 2026-10-23:** hams.com no longer uses ARRL (American Radio Relay League) Logbook of the World (LoTW) or TQSL (Bruce's decision); LoTW mentions below are kept as history.
 
 ## Context
 `ham_logbook/models/res_users.py` originally stored six Fernet-encrypted credential fields on `res.users` --
 `lotw_password`, `eqsl_password`, `allstar_password`, `echolink_password`, `clublog_password`,
 `clublog_api_key` -- third-party passwords/API keys a ham entrusts to this platform so it can sync
-their logbook with LoTW, eQSL, AllStar, EchoLink, and ClubLog. Today only the AllStar password
+their logbook with LoTW, eQSL (electronic confirmation-card service), AllStar, EchoLink, and ClubLog. Today only the AllStar password
 (`allstar_password_crypt`, read back only by its owner) and `adif_api_secret` remain there. A real bug-hunt pass found these
 fields' compute-method guard trusted **any** service account platform-wide to decrypt and read every
 user's credentials, rather than one specific, narrowly-scoped account -- and while investigating

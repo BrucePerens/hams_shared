@@ -3,7 +3,7 @@
 ## Status
 Accepted
 
-**Superseded in part 2026-10-23:** hams.com no longer uses ARRL Logbook of the World (LoTW) or TQSL (Bruce's decision); LoTW mentions below are kept as history.
+**Superseded in part 2026-10-23:** hams.com no longer uses ARRL (American Radio Relay League) Logbook of the World (LoTW) or TQSL (Bruce's decision); LoTW mentions below are kept as history.
 
 ## Context
 Bruce's own words, verbatim, stated as a requirement to make true, not just an aspiration: "no ham
@@ -13,7 +13,7 @@ should be able to control your radios, your friends and clubs authorized radios,
 that are reachable via the Internet and for which you are authorized."
 
 This lands the same night as several real, concrete instances of the opposite pattern being found
-and fixed: the former central `lotw_eqsl_sync` and `clublog_sync` daemons (both removed; the relay now does the ClubLog and eQSL work, `clublog.rs`, `eqsl.rs`) centrally decrypting and using a user's
+and fixed: the former central `lotw_eqsl_sync` and `clublog_sync` daemons (both removed; the relay now does the ClubLog and eQSL (electronic confirmation-card service) work, `clublog.rs`, `eqsl.rs`) centrally decrypting and using a user's
 own third-party credentials from hams.com's own server (ADR 0095), and `ham_shack`'s WebRTC-direct-
 client-offload path handing an AllStar/EchoLink password to the browser from the server on every
 connection (`docs/proposals/ALLSTAR_ECHOLINK_RELAY_INTEGRATION.md`). Those are two concrete

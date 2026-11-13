@@ -25,7 +25,7 @@ To prevent CPU/RAM exhaustion, all heavy lifting MUST be distributed asynchronou
 * Direct integrations with Redis or RabbitMQ inside controllers MUST use module-level connection pooling to prevent TCP handshake exhaustion.
 
 ### 4. Bounded Chunking & O(1) Memory Mapping
-* Unbounded array loops (like GDPR erasures) MUST chunk operations using `limit` and loop iteratively, explicitly committing `env.cr.commit()` inside the loop to release database locks.
+* Unbounded array loops (like GDPR (the EU General Data Protection Regulation) erasures) MUST chunk operations using `limit` and loop iteratively, explicitly committing `env.cr.commit()` inside the loop to release database locks.
 * JSON data exports MUST stream via Python generators (`yield`) to maintain a flat memory footprint.
 * Nested ORM queries are forbidden. Related data MUST be pre-fetched into memory-mapped dictionaries outside of the loop.
 

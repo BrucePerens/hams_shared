@@ -1,0 +1,70 @@
+# Term | expansion. One per line. Used by gloss_first_use.py (case-sensitive terms).
+CW | continuous wave, Morse code
+TLS | Transport Layer Security
+ARRL | American Radio Relay League
+STUN | Session Traversal Utilities for NAT
+ADIF | Amateur Data Interchange Format
+TURN | Traversal Using Relays around NAT
+ICE | Interactive Connectivity Establishment
+SDR | software-defined radio
+RTP | Real-time Transport Protocol
+SIP | Session Initiation Protocol
+DNSSEC | DNS Security Extensions
+HSTS | HTTP Strict Transport Security
+AXFR | DNS full zone transfer
+TSIG | transaction signature
+CRL | certificate revocation list
+KMS | key management service
+HSM | hardware security module
+FCC | Federal Communications Commission
+ULS | Universal Licensing System
+CAT | computer-aided transceiver control
+PTT | push-to-talk
+DX | long-distance contact
+SWR | standing wave ratio
+ALC | automatic level control
+IARU | International Amateur Radio Union
+QSL | contact confirmation
+LoTW | Logbook of The World
+eQSL | electronic confirmation-card service
+POTA | Parks on the Air
+SOTA | Summits on the Air
+NCS | net control station
+ICS | Incident Command System
+VFO | variable frequency oscillator, the tuning control
+QSO | two-way radio contact
+DXCC | DX Century Club award
+FT8 | a weak-signal digital mode
+CQ | general call to any station
+RTTY | radio teletype
+HF | high frequency, 3 to 30 MHz
+VHF | very high frequency, 30 to 300 MHz
+LSB | lower sideband
+SSB | single sideband
+QTH | station location
+APRS | Automatic Packet Reporting System
+PSK31 | a narrow phase-shift-keying digital mode
+SDP | Session Description Protocol
+DTLS | Datagram Transport Layer Security
+NAT | network address translation
+VOX | voice-operated transmit
+WWV | the NIST time-signal station
+NOAA | National Oceanic and Atmospheric Administration
+RST | signal report of readability, strength and tone
+RF | radio frequency
+TX | transmit
+RX | receive
+GDPR | the EU General Data Protection Regulation
+WCAG | Web Content Accessibility Guidelines
+CSRF | cross-site request forgery
+TTL | time to live
+PEM | Privacy-Enhanced Mail text encoding for keys and certificates
+PKCS | Public-Key Cryptography Standards
+ACL | access control list
+M17 | an open digital voice protocol
+FFT | fast Fourier transform
+RTS | request to send
+DTR | data terminal ready
+MCP | Model Context Protocol
+CSP | Content Security Policy
+SES | Amazon Simple Email Service

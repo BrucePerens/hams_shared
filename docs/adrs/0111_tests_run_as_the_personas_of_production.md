@@ -9,7 +9,7 @@ Two incidents in one week passed a green suite because the suite ran code as som
 
 1. **The event cron.** `ham_events.ir_cron_event_series_generate` runs a code server action as `ham_events.user_event_service`. Odoo refuses a code
    action to a user without write access to the action's model (`ir.actions.server._can_execute_action_on_records`, "Forbidden server action"), and
-   the ACL row of that service account was read-only. The cron failed five times and Odoo switched it off on 2026-10-13. The test called the model
+   the ACL (access control list) row of that service account was read-only. The cron failed five times and Odoo switched it off on 2026-10-13. The test called the model
    method as that user, which skips the check.
 2. **The pager link.** The record rule of `pager.incident` compared `website_id` with `user.website_id.id`. Every internal administrator has no
    website, so the rule hid every incident that carries one and `/mail/view` fell back to Discuss. Test users were created with a website.

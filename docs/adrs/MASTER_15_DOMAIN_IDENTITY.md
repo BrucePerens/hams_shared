@@ -3,7 +3,7 @@
 ## Status
 Accepted (Consolidates ADRs 0019, 0064)
 
-**Superseded in part (2026-10-23, 2026-10-24):** hams.com removed every ARRL Logbook of the World (LoTW) and TQSL (ARRL's signing tool for Logbook of the World) use on 2026-10-23 and restored LoTW on 2026-10-24 only as a licence-verification method for a signed-in member (never sign-in; Bruce's decisions). LoTW verification mentions below apply again; LoTW sign-in, log sync and TQSL mentions are history.
+**Superseded in part (2026-10-23, 2026-10-24):** hams.com removed every ARRL (American Radio Relay League) Logbook of the World (LoTW) and TQSL (ARRL's signing tool for Logbook of the World) use on 2026-10-23 and restored LoTW on 2026-10-24 only as a licence-verification method for a signed-in member (never sign-in; Bruce's decisions). LoTW verification mentions below apply again; LoTW sign-in, log sync and TQSL mentions are history.
 
 ## Context & Philosophy
 Domain-specific rules for verifying Amateur Radio operator identities securely without exposing internal ERP models.
@@ -15,7 +15,7 @@ Domain-specific rules for verifying Amateur Radio operator identities securely w
     1. Cryptographic LoTW (the ARRL's Logbook of The World; Golden Path)
     2. Knowledge-based (Ham-CAPTCHA, a test of amateur-radio knowledge, or a challenge on the applicant's QRZ.com profile)
     3. Skill-based (Dynamic Morse Code Challenge)
-    4. Regulatory (Official FCC Email OTP, a one-time password sent to the email address on the regulator's public record)
+    4. Regulatory (Official FCC (Federal Communications Commission) Email OTP, a one-time password sent to the email address on the regulator's public record)
     5. Manual ID Upload
 
 ### 2. Shadow Profile Indexing (Search Indexes)

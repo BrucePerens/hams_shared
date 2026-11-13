@@ -100,7 +100,7 @@ Each entry below was read from the code in `hams_helpdesk` (views, tours, `contr
 
 **Purpose:** the QWeb template `portal_ticket_detail`, rendered by `HelpdeskPortal.portal_ticket_detail` at `/my/ticket/<int:ticket_id>`. It shows one of the member's tickets: title, status badge, callsign, priority, description and the message thread ("Communication History", `portal.message_thread`), where the member reads operator replies.
 
-**Access control:** the controller redirects to `/my` when the ticket does not exist, belongs to another partner, or belongs to a different website than the current one, so a member can never read another member's ticket by guessing ids. A "Close Ticket" form (a POST with a CSRF token) appears only while the ticket is not closed.
+**Access control:** the controller redirects to `/my` when the ticket does not exist, belongs to another partner, or belongs to a different website than the current one, so a member can never read another member's ticket by guessing ids. A "Close Ticket" form (a POST with a CSRF (cross-site request forgery) token) appears only while the ticket is not closed.
 
 **See also:** `hams_helpdesk:COMM_helpdesk_portal_close`, `hams_helpdesk:COMM_helpdesk_portal_tour`.
 
