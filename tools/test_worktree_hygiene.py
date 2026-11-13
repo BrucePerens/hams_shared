@@ -124,6 +124,32 @@ class WorktreeHygieneTest(unittest.TestCase):
         with unittest.mock.patch.object(wh.subprocess, "run", side_effect=FileNotFoundError("gh")):
             self.assertEqual(wh.merged_pull_request_heads(self.repo), {})
 
+    def _hung_command(self, name):
+        """A directory holding a fake `name` that never answers; returns the PATH that finds it first."""
+        directory = os.path.join(self.tmp.name, "hung-" + name)
+        os.makedirs(directory)
+        path = os.path.join(directory, name)
+        with open(path, "w") as handle:
+            handle.write("#!/bin/sh\nexec sleep 60\n")
+        os.chmod(path, 0o755)
+        return directory + os.pathsep + os.environ["PATH"]
+
+    def test_a_gh_that_never_answers_gives_no_merged_heads_instead_of_hanging(self):
+        with unittest.mock.patch.dict(os.environ, {"PATH": self._hung_command("gh")}), \
+                unittest.mock.patch.object(wh, "GH_TIMEOUT_SECONDS", 1):
+            started = time.monotonic()
+            self.assertEqual(wh.merged_pull_request_heads(self.repo), {})
+        self.assertLess(time.monotonic() - started, 30)
+
+    def test_a_git_fetch_that_never_answers_stops_with_an_error_or_an_empty_answer(self):
+        with unittest.mock.patch.dict(os.environ, {"PATH": self._hung_command("git")}), \
+                unittest.mock.patch.object(wh, "GIT_TIMEOUT_SECONDS", 1):
+            started = time.monotonic()
+            self.assertEqual(wh.git(self.repo, "fetch", "-q", "origin", check=False), "")
+            with self.assertRaises(RuntimeError):
+                wh.git(self.repo, "fetch", "-q", "origin")
+        self.assertLess(time.monotonic() - started, 30)
+
     def test_the_exit_status_is_one_when_something_is_stale(self):
         path = self.worktree("ahead")
         with open(os.path.join(path, "old"), "w") as handle:

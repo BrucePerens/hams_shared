@@ -420,7 +420,11 @@ class LintBatch:
     def __call__(self, batch_id, members, log_path):
         batch_queue.reap_orphan_trees(self.repo, self.kind, self.repo_name, environ=self.environ)
         if self.fetch:
-            subprocess.run(["git", "-C", self.repo, "fetch", "-q", "origin"], capture_output=True, text=True)
+            try:
+                subprocess.run(["git", "-C", self.repo, "fetch", "-q", "origin"], capture_output=True, text=True, timeout=300)
+            except subprocess.TimeoutExpired:
+                # Lint what is here: a fetch that hangs must not hang the batch.
+                print("lint_batch: git fetch did not answer in 300 s; using the refs already here", file=sys.stderr)
         owners, finder = self.tokens(members)
 
         def attribute(failures, live):
