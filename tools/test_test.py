@@ -66,8 +66,8 @@ class RobustReapGroupTests(unittest.TestCase):
         leader = subprocess.Popen([sys.executable, "-c", script], stdout=subprocess.PIPE, text=True, start_new_session=True)
         child_pid = int(leader.stdout.readline())
         time.sleep(0.5)  # let the child install its SIGTERM handler
-        # A fake monotonic clock jumps 10 s per call so the 30 s SIGTERM window ends at once.
-        with patch.object(_test_runner, "kill_test_chrome"), patch.object(_test_runner.time, "monotonic", side_effect=itertools.count(0, 10.0)):
+        # A fake monotonic clock jumps 2 s per call so the 30 s SIGTERM window ends in about 8 s.
+        with patch.object(_test_runner, "kill_test_chrome"), patch.object(_test_runner.time, "monotonic", side_effect=itertools.count(0, 2.0)):
             _test_runner.robust_reap(leader.pid)
         leader.wait()
         deadline = time.time() + 5
