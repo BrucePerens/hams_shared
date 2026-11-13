@@ -291,3 +291,7 @@ class CommandTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# Class anchors (ADR 0113) exercised by the tests above.
+# Tests [@ANCHOR: parking_ctl:parking_ctl_odoo_client_class]
+# Tests [@ANCHOR: parking_ctl:parking_ctl_input_error_class]

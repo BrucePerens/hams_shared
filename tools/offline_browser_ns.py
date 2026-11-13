@@ -190,6 +190,7 @@ def _run_ip(*args, check=True):
 # ---------------------------------------------------------------------------
 
 
+# [@ANCHOR: offline_browser_ns:offline_browser_ns_tcp_forwarder_class]
 class TcpForwarder:
     """A plain TCP relay: accept on (bind_host, bind_port), connect to (dst).
 
@@ -379,6 +380,7 @@ RELAY_MANUAL_BODY = b"<html>OFFLINE_NS_LOCAL_RELAY_MANUAL</html>"
 RELAY_PROBE_BODY = b"OFFLINE_NS_LOCAL_RELAY_REACHABLE"
 
 
+# [@ANCHOR: offline_browser_ns:offline_browser_ns__relay_stub_handler_class]
 class _RelayStubHandler(BaseHTTPRequestHandler):
     # Real CORS headers: the page is on the Odoo origin and the relay is a
     # different origin, exactly as in production, where the relay's own axum
@@ -440,6 +442,7 @@ class _RelayStubHandler(BaseHTTPRequestHandler):
         _logger.debug(log_format, *args)
 
 
+# [@ANCHOR: offline_browser_ns:offline_browser_ns__relay_stub_server_class]
 class _RelayStubServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
@@ -463,6 +466,7 @@ class _RelayStubServer(ThreadingHTTPServer):
 # ---------------------------------------------------------------------------
 
 
+# [@ANCHOR: offline_browser_ns:offline_browser_ns__broker_class]
 class _Broker:
     def __init__(self, config):
         self.config = config
@@ -809,6 +813,7 @@ class _Broker:
 # ---------------------------------------------------------------------------
 
 
+# [@ANCHOR: offline_browser_ns:offline_browser_ns_offline_namespace_client_class]
 class OfflineNamespaceClient:
     """Minimal client for the broker's control socket.
 

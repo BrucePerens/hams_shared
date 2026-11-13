@@ -38,6 +38,7 @@ TTYPath=/dev/ttyS0
 """
 
 
+# [@ANCHOR: verify:verify_check_class]
 @dataclasses.dataclass
 class Check:
     name: str
@@ -45,6 +46,7 @@ class Check:
     detail: str = ""
 
 
+# [@ANCHOR: verify:verify_report_class]
 class Report:
     def __init__(self):
         self.checks = []
@@ -172,6 +174,7 @@ def qemu_argv(disk, modules_disk, memory_mb, smp, log_path, kvm, canary_port, ne
     return argv
 
 
+# [@ANCHOR: verify:verify_canary_class]
 class Canary:
     """A listener on the host (TCP and UDP, all addresses) that no packet from the isolated VM may ever reach. verify FAILS if one does."""
 

@@ -42,6 +42,7 @@ def newest_by_tag(snapshots, kind):
     return out
 
 
+# [@ANCHOR: sources:sources_kopia_repo_class]
 class KopiaRepo:
     """A read-only connection to one kopia repository, living in `state_dir` (0700, removed by close())."""
 
@@ -86,6 +87,7 @@ class KopiaRepo:
             self.connected = False
 
 
+# [@ANCHOR: sources:sources_source_check_class]
 class SourceCheck:
     """The refusals that apply to every source: missing, empty, not encrypted."""
 
@@ -140,6 +142,7 @@ def segment_name(timeline, number):
     return "%08X%08X%08X" % (timeline, number // 0x100, number % 0x100)
 
 
+# [@ANCHOR: sources:sources_pg_back_rest_repo_class]
 class PgBackRestRepo:
     """A pgBackRest repository, local (posix) or S3 (Backblaze), opened through a private config file in `state_dir` (0700).
 

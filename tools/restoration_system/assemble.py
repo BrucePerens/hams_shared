@@ -21,6 +21,7 @@ SHARE_REL = "usr/local/share/hams-restore"
 FILES_AT_TOP = ("EXCLUDE.txt", "RESTORE.md", "RESTORATION_META.json")
 
 
+# [@ANCHOR: assemble:assemble_chroot_class]
 class Chroot:
     """Runs commands inside the image in a private mount namespace (assemble needs root)."""
 
