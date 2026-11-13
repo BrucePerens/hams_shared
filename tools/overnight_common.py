@@ -15,7 +15,6 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 import time
 import tomllib
 
@@ -24,6 +23,7 @@ sys.path.insert(0, HERE)
 
 import agent_procs  # noqa: E402
 import dispatch_ok  # noqa: E402
+import atomic_io
 
 DEFAULT_REPORTS = os.path.join(os.path.expanduser("~"), "workspace", "tmp", "reports")
 MIN_MEM_AVAILABLE_GB = 6.0  # below this the idle-fill work stops (the load display's own HOLD limit is 10 GB; this is the hard floor)
@@ -55,11 +55,7 @@ def write_json(path, data):
     """Writes `data` as JSON to `path` through a temporary file and `os.replace`, so a reader never sees half a file."""
     directory = os.path.dirname(os.path.abspath(path))
     os.makedirs(directory, exist_ok=True)
-    handle_fd, temporary = tempfile.mkstemp(dir=directory, prefix=".tmp-", suffix=".json")
-    with os.fdopen(handle_fd, "w", encoding="utf-8") as handle:
-        json.dump(data, handle, indent=1, sort_keys=True)
-        handle.write("\n")
-    os.replace(temporary, path)
+    atomic_io.atomic_write(path, json.dumps(data, indent=1, sort_keys=True) + "\n", mode=0o644)
 
 
 def read_json(path, default=None):

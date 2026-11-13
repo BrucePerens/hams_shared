@@ -60,6 +60,7 @@ import xmlrpc.client
 from urllib.parse import urlsplit
 
 import wp_leftovers
+import atomic_io
 
 
 # [@ANCHOR: odoo_site_migrate:odoo_site_migrate__no_redirect_class]
@@ -646,10 +647,7 @@ class Exporter:
     # -- small io helpers
     def _write_json(self, name, data):
         path = os.path.join(self.out, name)
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as handle:  # audit-ignore-path
-            json.dump(data, handle, indent=2, sort_keys=True)
-        os.replace(tmp, path)
+        atomic_io.atomic_write(path, json.dumps(data, indent=2, sort_keys=True), mode=0o644)
 
     def _load_state(self):
         try:
@@ -1057,10 +1055,7 @@ class Importer:
     def _save_idmap(self):
         if not self.apply:
             return
-        tmp = self.idmap_path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as handle:  # audit-ignore-path
-            json.dump(self.idmap, handle, indent=1, sort_keys=True)
-        os.replace(tmp, self.idmap_path)
+        atomic_io.atomic_write(self.idmap_path, json.dumps(self.idmap, indent=1, sort_keys=True), mode=0o644)
 
     def mapped(self, model, source_id):
         source_id = m2o_id(source_id)

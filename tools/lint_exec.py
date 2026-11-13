@@ -35,6 +35,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 import hang_guard
+import atomic_io
 
 # Directories no scanner descends into (heavy, generated, or other sessions' worktrees). Used
 # only to fingerprint step inputs and to enumerate changed files; the checkers keep their own
@@ -658,10 +659,7 @@ class Cache:
         directory = os.path.dirname(self.path)
         try:
             os.makedirs(directory, exist_ok=True)
-            tmp_path = f"{self.path}.{os.getpid()}.tmp"
-            with open(tmp_path, "w", encoding="utf-8") as handle:
-                json.dump(self.data, handle)
-            os.replace(tmp_path, self.path)
+            atomic_io.atomic_write(self.path, json.dumps(self.data), mode=0o644)
         except OSError as error:
             print(f"(lint cache not saved: {error})", file=sys.stderr)
 

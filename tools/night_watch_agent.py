@@ -32,7 +32,7 @@ import fcntl
 import json
 import os
 import sys
-import tempfile
+import atomic_io
 
 DEFAULT_STATE_PATH = os.path.expanduser("~/.local/state/night-watch/agent.json")
 STATES = ("working", "idle")
@@ -73,12 +73,7 @@ def read_state(path):
 
 
 def _write_state(path, state):
-    directory = os.path.dirname(path)
-    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".agent.", suffix=".json")
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump(state, f, indent=2, sort_keys=True)
-        f.write("\n")
-    os.replace(tmp, path)
+    atomic_io.atomic_write(path, json.dumps(state, indent=2, sort_keys=True) + "\n", mode=0o644)
 
 
 def describe(state, now=None):

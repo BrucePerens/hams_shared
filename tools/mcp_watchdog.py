@@ -20,6 +20,7 @@ if sys.platform == "linux":
 else:
     pyinotify = None
 import logging
+import atomic_io
 # Requires mcp>=2 (standardized system-wide, 2026-10-02, after both this dev box's own system-wide
 # install and hams1's were found to have drifted independently -- see
 # night_shift_history.md's 2026-09-01 entry for the original broken-install finding, and
@@ -210,8 +211,7 @@ def load_persisted_states(self_agent_id):
 def save_persisted_states(states, self_agent_id):
     state_file = get_state_file(self_agent_id)
     os.makedirs(os.path.dirname(state_file), exist_ok=True)
-    with open(state_file, "w") as f:
-        json.dump(states, f)
+    atomic_io.atomic_write(state_file, json.dumps(states), mode=0o644)
 
 def get_mtime(path):
     try:

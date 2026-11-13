@@ -52,6 +52,7 @@ import signal
 import subprocess
 import sys
 import time
+import atomic_io
 
 CLK_TCK = os.sysconf("SC_CLK_TCK")
 EX_OK = 0
@@ -489,11 +490,7 @@ def record_path(name, directory=None):
 def write_record(rec, directory=None):
     """Write `rec` (a `JobRecord`) atomically: a temporary file in the same directory, then `os.replace`."""
     path = record_path(rec.name, directory)
-    temp = f"{path}.{os.getpid()}.tmp"
-    with open(temp, "w") as handle:
-        json.dump(dataclasses.asdict(rec), handle, indent=1)
-        handle.write("\n")
-    os.replace(temp, path)
+    atomic_io.atomic_write(path, json.dumps(dataclasses.asdict(rec), indent=1) + "\n", mode=0o644)
 
 
 # [@ANCHOR: agent_procs:read_record]

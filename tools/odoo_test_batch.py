@@ -39,6 +39,7 @@ import time
 import batch_queue
 import lint_batch
 import runner_slots
+import atomic_io
 
 KIND = "test"
 RUNNER_ENV = "HAMS_TEST_BATCH_RUNNER"
@@ -303,10 +304,7 @@ def _write_seconds_table(path, table):
     """Write `table` as JSON at `path` atomically (temporary file, then rename); a failed write is ignored."""
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        tmp = path + ".tmp-%d" % os.getpid()
-        with open(tmp, "w", encoding="utf-8") as handle:
-            json.dump(table, handle)
-        os.replace(tmp, path)
+        atomic_io.atomic_write(path, json.dumps(table), mode=0o644)
     except OSError:
         pass
 
@@ -370,9 +368,8 @@ def write_pass_record(tip, modules, batch_id, environ=None, with_tips=()):
     try:
         os.makedirs(directory, exist_ok=True)
         path = os.path.join(directory, tip)
-        with open(path, "w", encoding="utf-8") as handle:
-            handle.write("tests %s modules=%s batch=%s%s\n" % (time.strftime("%Y-%m-%dT%H:%M:%S"), ",".join(modules), batch_id,
-                                                              batch_queue.with_field(with_tips)))
+        atomic_io.atomic_write(path, "tests %s modules=%s batch=%s%s\n" % (
+            time.strftime("%Y-%m-%dT%H:%M:%S"), ",".join(modules), batch_id, batch_queue.with_field(with_tips)), mode=0o644)
         return path
     except OSError:
         return None

@@ -232,7 +232,7 @@ class MainIntegrationTests(unittest.TestCase):
         shutil.copy(_SCRIPT, os.path.join(self.tools_dir, "scan_ui_vulnerabilities.py"))
         # lint_exec (imported by the script) lives outside the scanned tree: its docstrings hold the very tags this scan flags.
         self.lib = tempfile.mkdtemp()
-        for name in ("lint_exec.py", "hang_guard.py", "agent_procs.py"):  # lint_exec imports hang_guard, which imports agent_procs
+        for name in ("atomic_io.py", "lint_exec.py", "hang_guard.py", "agent_procs.py"):  # lint_exec imports hang_guard, which imports agent_procs
             shutil.copy(os.path.join(os.path.dirname(_SCRIPT), name), os.path.join(self.lib, name))
 
     def tearDown(self):

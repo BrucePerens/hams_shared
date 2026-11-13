@@ -23,6 +23,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import atomic_io
 
 RUST_SUFFIXES = (".rs", "Cargo.toml", "Cargo.lock")
 JS_SUFFIXES = (".js", ".mjs", ".cjs")
@@ -142,10 +143,7 @@ def inherit_stamp(repo, tip, passed_dir, base="origin/main", log=print):
             line = handle.read().strip()
         text = "%s inherited-from=%s\n" % (line, old)
         os.makedirs(passed_dir, exist_ok=True)
-        part = "%s.%d.tmp" % (target, os.getpid())
-        with open(part, "w", encoding="utf-8") as handle:
-            handle.write(text)
-        os.replace(part, target)
+        atomic_io.atomic_write(target, text, mode=0o644)
         return text
     log("stamp inheritance: no stamped commit between %s and %s" % (base, tip[:9]))
     return None

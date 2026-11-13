@@ -62,6 +62,7 @@ Tests [@ANCHOR: agent_procs:parse_args]
 Tests [@ANCHOR: agent_procs:main]
 """
 
+import dataclasses
 import io
 import json
 import os
@@ -416,6 +417,19 @@ class JobRecordTests(ProcTestCase):
         for bad in ("", ".hidden", "-x", "a/b", "a b", "A" * 65, "../x", None, "guard"):
             with self.assertRaises(ap.ProcError, msg=repr(bad)):
                 ap.check_job_name(bad)
+
+    @unittest.skipIf(os.geteuid() == 0, "root ignores directory permissions")
+    def test_write_record_failure_keeps_old_record(self):
+        # Tests [@ANCHOR: agent_procs:write_record]
+        rec = ap.JobRecord("one", "agent-1", 11, 11, 11, 5, "/w", ["x", "y"], "/l", 100.0, "bruce")
+        ap.write_record(rec, self.jobs)
+        os.chmod(self.jobs, 0o555)
+        try:
+            with self.assertRaises(OSError):
+                ap.write_record(dataclasses.replace(rec, pid=99), self.jobs)
+        finally:
+            os.chmod(self.jobs, 0o700)
+        self.assertEqual(ap.read_record("one", self.jobs), rec)
 
     def test_write_read_list_roundtrip_and_bad_files(self):
         rec = ap.JobRecord("one", "agent-1", 11, 11, 11, 5, "/w", ["x", "y"], "/l", 100.0, "bruce")

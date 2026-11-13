@@ -28,6 +28,7 @@ import subprocess
 import sys
 import time
 from tree_files import tree_files
+import atomic_io
 
 # "site-packages" matches any virtualenv by its structurally-guaranteed lib/pythonX.Y/
 # site-packages/ subdirectory regardless of the venv's own outer directory name (".venv"/"venv"
@@ -197,12 +198,10 @@ def store_pass(key, now=None, environ=None):
     if cache_hours(environ) == 0:
         return False
     directory = _cache_directory(environ)
-    temporary = os.path.join(directory, "%s.%d.tmp" % (key, os.getpid()))
     try:
         os.makedirs(directory, exist_ok=True)
-        with open(temporary, "w", encoding="utf-8") as handle:
-            json.dump({"passed_at": time.time() if now is None else now}, handle)
-        os.replace(temporary, os.path.join(directory, key + ".json"))
+        atomic_io.atomic_write(os.path.join(directory, key + ".json"),
+                               json.dumps({"passed_at": time.time() if now is None else now}), mode=0o644)
     except OSError:
         return False
     return True

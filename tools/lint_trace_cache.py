@@ -46,6 +46,7 @@ import subprocess
 import sys
 import threading
 import time
+import atomic_io
 
 SCHEMA = 1
 MAX_AGE_SECONDS = 24 * 3600
@@ -697,10 +698,7 @@ class TraceCache:
             fcntl.flock(lock, fcntl.LOCK_EX)
             entries = [e for e in self._load(key) if e.get("manifest") != manifest]
             entries = ([entry] + entries)[:KEEP_ENTRIES]
-            tmp = "%s.%d.tmp" % (path, os.getpid())
-            with open(tmp, "w", encoding="utf-8") as handle:
-                json.dump({"schema": SCHEMA, "entries": entries}, handle)
-            os.replace(tmp, path)
+            atomic_io.atomic_write(path, json.dumps({"schema": SCHEMA, "entries": entries}), mode=0o644)
         return True
 
 

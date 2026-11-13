@@ -2048,6 +2048,10 @@ Argument `first`: the observation of the first run (an object with `failures`, r
 Purpose: the commit under test, recorded as `first_seen` hints, flake `last_commit` and in `test_results.json`. Returns the full 40-character id from `git rev-parse HEAD` (with `safe.directory` set for
 this one call, as the runner does for worktrees), or "" on any failure. Never raises; 20 second timeout.
 
+### `[@ANCHOR: atomic_io:atomic_write]` `atomic_write(path, data, mode=None)`
+
+Purpose: writes a state, cache or stamp file so a crash or power loss leaves the old file or the complete new one (docs/reviews/DURABILITY_AUDIT_2026-11-12.md). `data` is str (UTF-8) or bytes; the data goes to a temporary file in the same directory, is fsynced, renamed over `path`, and the directory is fsynced. `mode` sets the permission bits (default 0600 from mkstemp; pass 0o644 for a shared file). Raises `OSError` (old file untouched, temporary removed) when anything fails before the rename.
+
 ### `[@ANCHOR: known_red:write_results]` `write_results(path, outcome, commit, observation)`
 
 Purpose: writes `test_results.json`. `path` is the file (its directory must exist), `outcome` a `PolicyOutcome`, `commit` a string, `observation` the first run's `RunObservation`

@@ -23,10 +23,10 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 import time
 
 import batch_queue
+import atomic_io
 
 VERSION = 1
 ENV_SWITCH = "HAMS_LINT_BASELINE"
@@ -283,15 +283,7 @@ def write_baseline(key, main, items, environ=None, previous=None, now=time.time)
 def _store(doc, key, environ=None):
     directory = baseline_dir(environ)
     os.makedirs(directory, exist_ok=True)
-    handle, temp = tempfile.mkstemp(dir=directory, prefix=key + ".", suffix=".tmp")
-    try:
-        with os.fdopen(handle, "w", encoding="utf-8") as out:
-            json.dump(doc, out, indent=1, sort_keys=True)
-        os.replace(temp, baseline_path(key, environ))
-    except BaseException:
-        if os.path.exists(temp):
-            os.unlink(temp)
-        raise
+    atomic_io.atomic_write(baseline_path(key, environ), json.dumps(doc, indent=1, sort_keys=True), mode=0o644)
 
 
 # [@ANCHOR: lint_baseline:renew]

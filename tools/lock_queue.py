@@ -106,6 +106,8 @@ def _write_atomic(qdir, final_name, payload):
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(payload, f)
+            f.flush()
+            os.fsync(f.fileno())
         try:
             os.link(tmp, os.path.join(qdir, final_name))
         except FileExistsError:
