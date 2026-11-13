@@ -287,7 +287,7 @@ Each anchor below has its own entry, in the template of ADR 0113: purpose, call 
 **See also:** `cf_nocache_routes`; tests in `edge_cache/tests/test_edge_cache_headers.py` and `test_edge_cache_cookies.py`.
 
 
-### `cf_nocache_routes` [@ANCHOR: cf_nocache_routes]
+### `cf_nocache_routes` [@ANCHOR: edge_cache:cf_nocache_routes]
 
 **Purpose:** the list of URL prefixes that must never be stored at Cloudflare's edge, inside `ir.http._post_dispatch` in the `edge_cache` module.
 

@@ -209,7 +209,7 @@ Test in `tests/test_helpdesk_core.py` (code tag `COMM_test_02_shift_handoff_wiza
 
 `hams_helpdesk.shift_handoff.action_confirm_handoff(self)` (`@public_rpc`, `models/shift_handoff.py`; code tag `COMM_helpdesk_handoff_execution`). The wizard is a transient model with fields `ticket_id`, `old_user_id` (read-only), `new_user_id` (required) and `handoff_notes` (required text). On confirmation it switches to the `hams_helpdesk.user_helpdesk_service` environment, writes the new assignee with `mail_notrack`, and posts a briefing (who relinquished, who accepted, the notes, escaped through `markupsafe`) with subtype `mail.mt_note` so it stays internal and never shows in the customer's portal thread; the new assignee is notified through `partner_ids`. Returns `{"type": "ir.actions.act_window_close"}`. Raises if the service account is missing (fail fast). It is not idempotent: each call posts another briefing.
 
-### `helpdesk_doc_injection` [@ANCHOR: helpdesk_doc_injection]
+### `helpdesk_doc_injection`
 
 Doc/test id, no function in this module. The module's `__manifest__.py` lists pages under `knowledge_docs` (the member manual "Getting help: Support tickets", the internal "Hams Helpdesk" page and the lifecycle, creation and incident stories); the `zero_sudo` documentation facility reads that key on install and publishes the pages to the knowledge base, so this module needs no privileged code of its own. Only the member manual is marked `public`. Tested for the member manual by `test_member_manual_is_a_published_member_article` (`tests/test_member_manual.py`).
 
