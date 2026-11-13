@@ -325,6 +325,12 @@ class ProvisionPlanModeTests(ProvisionTestCase):
         _, mock_subprocess = self.run_provision(["--plan", "--force-reset"], os_id="ubuntu", patch_open=False)
         mock_subprocess.run.assert_not_called()
 
+    def test_a_mistyped_flag_is_refused_instead_of_provisioning_for_real(self):
+        """`--plna` is not `--plan`: ignoring it would run the real provisioning the operator meant to only preview."""
+        with self.assertRaises(SystemExit) as raised:
+            self.run_provision(["--plna"], os_id="debian")
+        self.assertEqual(raised.exception.code, 2)
+
     def test_plan_defaults_to_off_and_opt_in_units_are_forwarded(self):
         mock_infra, _ = self.run_provision(
             ["--enable-opt-in", "code.review.sweep.timer"], os_id="ubuntu", patch_open=False
