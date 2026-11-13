@@ -9,7 +9,8 @@ Anchor documentation standard gate (step 2 of night_shift_todo/low/document-ever
 Reads `tools/anchor_doc_standard.txt`, a list of paths relative to a repository root (one per line, `#` comments). For each
 listed path that exists under `<repo_root>`:
 
-  - a documentation file (`.md`, listed by name): every anchor's share of its entry must be at least `MIN_WORDS` words (no stubs);
+  - a documentation file (`.md`, listed by name): every anchor's share of its entry must be at least `MIN_WORDS` words (no stubs), and
+    no table of an entry may be empty (a header and separator with no row: the shape check of the argument and field tables);
   - a source file or a directory: every data structure in it (Rust struct/enum/type/union, Python or JavaScript class)
     must carry an anchor (`anchor_doc_inventory.find_data_structures`).
 
@@ -45,13 +46,16 @@ def read_list(path=LIST_FILE):
 # [@ANCHOR: anchor_docs_standard:doc_findings]
 def doc_findings(path, rel, min_words=MIN_WORDS):
     """Findings for one markdown file: a list of strings, one per anchor entry whose share (entry words divided by the
-    anchors it covers) is under `min_words`. `rel` is the name used in the message."""
+    anchors it covers) is under `min_words`, and one per entry with a table that has no body row. `rel` is the name used in the message."""
     found = []
     for entry in doc_entries(path):
         share = entry["shape"]["words"] / len(entry["anchors"])
         if share < min_words:
             found.append(f"{rel}:{entry['line']} entry for {', '.join(entry['anchors'])} has {share:.0f} words per anchor "
                          f"(under {min_words}): write the full entry (purpose, arguments, return, errors, special concerns)")
+        if entry["shape"]["empty_table"]:
+            found.append(f"{rel}:{entry['line']} entry for {', '.join(entry['anchors'])} has a table with a header and no rows: "
+                         "fill the argument or field table, or remove it")
     return found
 
 

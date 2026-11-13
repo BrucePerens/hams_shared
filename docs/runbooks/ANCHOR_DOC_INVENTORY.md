@@ -21,8 +21,8 @@ ordered relay first, then radioctl, the console, and everything else, and inside
 The first line gives the totals.
 
 ### `anchor_doc_inventory:entry_shape`
-`entry_shape(text) -> {"words", "table", "labelled"}`. `words` counts the words of the entry outside anchor tags (a word is a run of
-letters, digits, backticks, `_`, `'`, `.` and `-`), `table` is True if any line starts with `|`, `labelled` counts `**Label:**`
+`entry_shape(text) -> {"words", "table", "empty_table", "labelled"}`. `words` counts the words of the entry outside anchor tags (a word is a run of
+letters, digits, backticks, `_`, `'`, `.` and `-`), `table` is True if any line starts with `|`, `empty_table` is True if a table of the entry has a header and no body row (`check_anchor_docs_standard.py` reports it), `labelled` counts `**Label:**`
 paragraphs (the "Errors:", "Concurrency:" paragraphs ADR 0113 asks for). Pure; never raises. Test:
 `EntryShapeTests` in `tools/test_anchor_doc_inventory.py`.
 

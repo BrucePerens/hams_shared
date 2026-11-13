@@ -40,10 +40,21 @@ TEST_PATH = re.compile(r"(^|/)(tests?|test_[^/]*|[^/]*_tests?\.[a-z]+|[^/]*\.tes
 
 # [@ANCHOR: anchor_doc_inventory:entry_shape]
 def entry_shape(text):
-    """Measures one documentation entry: `{"words", "table", "labelled"}`. `words` counts words outside anchor
-    tags; `table` is True when the entry has a markdown table row; `labelled` counts `**Label:**` paragraphs."""
+    """Measures one documentation entry: `{"words", "table", "empty_table", "labelled"}`. `words` counts words outside
+    anchor tags; `table` is True when the entry has a markdown table row; `empty_table` is True when a table of the
+    entry has a header (and separator) but no body row, which is how an argument or field table is left empty;
+    `labelled` counts `**Label:**` paragraphs."""
     clean = ANCHOR_PATTERN.sub("", text)
+    blocks, block = [], []
+    for line in clean.splitlines() + [""]:
+        if line.lstrip().startswith("|"):
+            block.append(line)
+        elif block:
+            blocks.append(block)
+            block = []
+    separator = re.compile(r"^\s*\|[\s:|-]+\|?\s*$")
     return {
+        "empty_table": any(len([row for row in table[1:] if not separator.match(row)]) == 0 for table in blocks),
         "words": len(re.findall(r"[A-Za-z0-9_`'.-]+", clean)),
         "table": any(line.lstrip().startswith("|") for line in clean.splitlines()),
         "labelled": len(re.findall(r"^\s*(?:[*-]\s+)?\*\*[^*\n]+:\*\*", clean, re.MULTILINE)),
