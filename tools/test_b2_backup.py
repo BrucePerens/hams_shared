@@ -17,8 +17,10 @@ import json
 import os
 import shutil
 import subprocess
+import tarfile
 import tempfile
 import unittest
+from unittest import mock
 
 import b2_backup as bb
 
@@ -268,6 +270,91 @@ class SingleFileBackupTests(_Env):
         with self.assertRaises(bb.ConfigError):
             bb.load_config(self.config(paths=[{"name": "dup", "path": self.tmp}],
                                        files=[{"name": "dup", "path": self.secret}]))
+
+
+class ConfigSetTests(_Env):
+    """Tests [@ANCHOR: b2_backup:config_set], [@ANCHOR: b2_backup:config_set_tar] and [@ANCHOR: b2_backup:restore_config_set]:
+    the system configuration set goes up as one tar, keeps the settings, leaves key and credential files out, redacts
+    secret values, and the restore test fails when a secret value is in the snapshot."""
+
+    @classmethod
+    def setUpClass(cls):
+        _require("kopia")
+
+    def put(self, rel, text):
+        path = self.t("root", rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def members(self, tar_path):
+        with tarfile.open(tar_path) as tar:
+            return {m.name: (tar.extractfile(m).read().decode() if m.isreg() else None) for m in tar}
+
+    def make_root(self):
+        self.put("etc/odoo/odoo.conf", "[options]\ndb_host = localhost\ndb_password = hunter2\nadmin_passwd = s3cret\nworkers = 4\n")
+        self.put("etc/pgbackrest/pgbackrest.conf",
+                 "[global]\nrepo2-cipher-pass=CIPHERPHRASE\nrepo2-s3-key=KEYID\nrepo2-s3-key-secret=KEYSECRET\nrepo2-path=/hams_prod_enc\n")
+        self.put("etc/postgresql/18/main/postgresql.conf", "password_encryption = scram-sha-256\nmax_connections = 100\n")
+        self.put("etc/postgresql/18/main/environment", "AWS_SECRET_ACCESS_KEY=B2RAWKEY\n")
+        self.put("etc/nginx/sites-enabled/hams", "server { listen 80; }\n")
+        self.put("etc/nginx/ssl/hams.key", "-----BEGIN PRIVATE KEY-----\n")
+        self.put("etc/redis/redis.conf", "requirepass REDISPW\nport 6379\n")
+        self.put("etc/wireguard/wg0.conf", "[Interface]\nPrivateKey = WGPRIVATE\nAddress = 10.0.0.1/24\n")
+        self.put("etc/sudoers.d/hams", "odoo ALL=(root) NOPASSWD: /bin/true\n")
+        self.put("etc/cloudflared/cert.pem", "TUNNELCERT\n")
+        self.put("etc/pagerduty/key", "PDKEY\n")
+        self.put("etc/shadow", "root:$6$HASH:::\n")
+
+    def test_the_set_keeps_settings_and_leaves_secrets_out(self):
+        self.make_root()
+        with open(self.t("out.tar"), "wb") as out:
+            names = bb.write_config_tar(out, root=self.t("root"))
+        members = self.members(self.t("out.tar"))
+        self.assertIn("etc/odoo/odoo.conf", names)
+        self.assertIn("workers = 4", members["etc/odoo/odoo.conf"])
+        self.assertIn("db_password = <redacted>", members["etc/odoo/odoo.conf"])
+        self.assertIn("repo2-path=/hams_prod_enc", members["etc/pgbackrest/pgbackrest.conf"])
+        self.assertIn("repo2-cipher-pass=<redacted>", members["etc/pgbackrest/pgbackrest.conf"])
+        self.assertIn("password_encryption = scram-sha-256", members["etc/postgresql/18/main/postgresql.conf"])
+        self.assertIn("requirepass <redacted>", members["etc/redis/redis.conf"])
+        self.assertIn("PrivateKey = <redacted>", members["etc/wireguard/wg0.conf"])
+        self.assertIn("NOPASSWD", members["etc/sudoers.d/hams"])
+        everything = "\n".join(v or "" for v in members.values()) + "\n".join(members)
+        for secret in ("hunter2", "s3cret", "CIPHERPHRASE", "KEYID", "KEYSECRET", "B2RAWKEY", "REDISPW", "WGPRIVATE",
+                       "TUNNELCERT", "PDKEY", "$6$HASH"):
+            self.assertNotIn(secret, everything)
+        for left_out in ("etc/postgresql/18/main/environment", "etc/nginx/ssl/hams.key", "etc/cloudflared", "etc/shadow"):
+            self.assertNotIn(left_out, members)
+
+    def test_backup_and_restore_test_cover_the_set(self):
+        self.make_root()
+        cfg_path = self.config(config_set=True, config_root=self.t("root"))
+        cfg = bb.load_config(cfg_path)
+        self.assertEqual([s.name for s in bb.build_sources(cfg)], ["system_config"])
+        self.assertEqual(self.run_main(cfg_path, "init")[0], 0)
+        code, out, err = self.run_main(cfg_path, "backup")
+        self.assertEqual(code, 0, out + err)
+        code, out, err = self.run_main(cfg_path, "restore-test")
+        self.assertEqual(code, 0, out + err)
+        entry = _load(cfg.restore_status_path)["files"][0]
+        self.assertEqual(entry["config"], "system_config")
+        self.assertGreater(entry["members"], 5)
+
+    def test_off_by_default(self):
+        self.assertEqual(bb.build_sources(bb.load_config(self.config())), [])
+
+    def test_restore_test_fails_when_a_secret_value_is_in_the_snapshot(self):
+        self.make_root()
+        cfg_path = self.config(config_set=True, config_root=self.t("root"))
+        cfg = bb.load_config(cfg_path)
+        self.assertEqual(self.run_main(cfg_path, "init")[0], 0)
+        with mock.patch.object(bb, "redact_secrets", lambda text: text):
+            self.assertEqual(self.run_main(cfg_path, "backup")[0], 0)
+        code, out, err = self.run_main(cfg_path, "restore-test")
+        self.assertNotEqual(code, 0, out + err)
+        self.assertIn("unredacted secret", out + err + json.dumps(_load(cfg.restore_status_path)))
+        self.assertNotIn("hunter2", out + err + json.dumps(_load(cfg.restore_status_path)))
 
 
 if __name__ == "__main__":

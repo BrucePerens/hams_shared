@@ -4710,6 +4710,12 @@ class B2BackupManifestTests(unittest.TestCase):
         self.assertEqual([f["path"] for f in config["files"]], ["/var/lib/odoo/hams_crypto.secret"])
         self.assertNotIn("/var/lib/odoo", [p["path"] for p in config["paths"]])
 
+    def test_config_enables_the_system_config_set(self):
+        """[@ANCHOR: b2_backup:config_set]: the off-site set carries the system configuration (secrets stripped by the tool)."""
+        spec = [s for s in self._specs() if s["path"].endswith("b2_backup/config.json")][0]
+        config = json.loads(spec["content"].replace("{{", "{").replace("}}", "}"))
+        self.assertIs(config["config_set"], True)
+
     def test_services_run_the_root_owned_deployed_tool(self):
         services = [s for s in self._specs() if s["path"].endswith(".service")]
         self.assertEqual(len(services), 3)

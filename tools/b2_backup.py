@@ -31,6 +31,10 @@ What goes up (all of it encrypted on this host before it leaves, so B2 only ever
     hams_prod. Without it a restored database has unreadable encrypted fields. It is read by root and uploaded
     on stdin like a database dump (no copy is staged on disk); `restore-test` brings it back and compares
     its sha256 with the live file. The directory around it (the Odoo home, with the filestore) is NOT a source;
+  * the system configuration set (config.json "config_set": true; kind "config", source name system_config): one tar of
+    odoo.conf, postgresql, pgbackrest.conf, nginx, sudoers, cron, ssh daemon config, systemd units, package list and the
+    other config the MANIFEST does not carry (CONFIG_SET_PATHS), with key and credential files left out and secret values
+    redacted (CONFIG_SET_EXCLUDE, CONFIG_SET_SECRET_RE). `restore-test` restores it and fails if a secret value is in it;
   * /opt/hams/etc (daemon keys, signer public material, host configuration), with the repository
     password and B2 key file itself excluded: backing up the key to the lock it opens protects nothing.
 
@@ -61,7 +65,9 @@ import argparse
 import dataclasses
 import datetime
 import fcntl
+import fnmatch
 import hashlib
+import io
 import json
 import os
 import random  # audit-ignore-weak-random: picks which files to spot-check; unpredictability is not a security property
@@ -70,6 +76,8 @@ import secrets
 import shutil
 import subprocess
 import sys
+import tarfile
+import tempfile
 
 DEFAULT_CONFIG = "/opt/hams/etc/b2_backup/config.json"
 
@@ -89,6 +97,31 @@ RECORDINGS_SOURCE = "qso_recordings"
 # kopia's "keep" counts are numbers of snapshots; this is far more snapshots than there will ever be nights.
 KEEP_EVERYTHING = 100000
 DEFAULT_RECORDINGS_SAMPLE_FILES = 6
+
+# The system configuration set (config.json "config_set": true): one tar stream of the files the MANIFEST does not carry,
+# so a rebuilt host does not depend on the local /storage copy. Paths are relative to /. A path missing on a host is
+# skipped. /opt/hams/etc (its own source) and /var/lib/odoo/hams_crypto.secret (its own source) are NOT repeated here.
+# [@ANCHOR: b2_backup:config_set]
+CONFIG_SET_SOURCE = "system_config"
+CONFIG_SET_PATHS = (
+    "opt/hams/systemd", "etc/odoo", "etc/pgbackrest", "etc/postgresql", "etc/nginx", "etc/systemd/system", "etc/hams",
+    "etc/letsencrypt/renewal", "etc/redis", "etc/rabbitmq", "etc/wireguard", "etc/ssh/sshd_config", "etc/ssh/sshd_config.d",
+    "etc/sudoers", "etc/sudoers.d", "etc/cron.d", "etc/crontab", "var/spool/cron/crontabs", "etc/fstab", "etc/hosts",
+    "etc/nftables.conf", "etc/logrotate.d", "usr/local/sbin", "etc/passwd", "etc/group", "etc/subuid", "etc/subgid",
+    "var/lib/dpkg/status", "etc/apt/sources.list", "etc/apt/sources.list.d", "opt/hams/src/DEPLOYED_COMMITS",
+)
+# Never in the set, whatever directory they sit in: key and credential files (matched against the path or the file name).
+# etc/shadow, ssh host keys, etc/cloudflared (tunnel credentials), etc/pagerduty (integration key) and the Let's Encrypt
+# live/archive keys are simply not in CONFIG_SET_PATHS. The B2 key in /etc/postgresql/<v>/main/environment is excluded here.
+CONFIG_SET_EXCLUDE = (
+    "etc/postgresql/*/*/environment", "*.key", "*.pem", "*.p12", "*.pfx", "*.keytab", "*.env", "*.password", "*.secret",
+    "*.token", "*credentials*", "id_*",
+)
+# A secret VALUE inside an otherwise wanted config file (odoo.conf admin_passwd/db_password, pgbackrest.conf
+# repo2-cipher-pass and repo2-s3-key, WireGuard PrivateKey, redis requirepass) is replaced by <redacted>; the key name stays.
+CONFIG_SET_SECRET_RE = re.compile(
+    r"^(?![ \t]*password_encryption)([ \t]*[\w.-]*(?:pass|secret|token|s3-key|api_?key|private_?key|preshared_?key)[\w.-]*[ \t]*[=:][ \t]*|"
+    r"[ \t]*(?:requirepass|masterauth)[ \t]+)(\S.*)$", re.IGNORECASE | re.MULTILINE)
 
 
 # [@ANCHOR: b2_backup:b2_backup_config_error_class]
@@ -125,6 +158,8 @@ class Config:
     restore_verify_percent: int
     restore_database: bool
     restore_recordings_files: int
+    config_set: bool = False   # also snapshot the system configuration set (CONFIG_SET_PATHS) as one tar stream
+    config_root: str = "/"     # where the set is read from; only tests change it
 
     @property
     def lock_path(self):
@@ -225,6 +260,8 @@ def load_config(path):
         restore_verify_percent=int(restore.get("verify_percent", 1)),
         restore_database=bool(restore.get("database", True)),
         restore_recordings_files=int(restore.get("recordings_files", DEFAULT_RECORDINGS_SAMPLE_FILES)),
+        config_set=bool(raw.get("config_set", False)),
+        config_root=raw.get("config_root", "/"),
     )
 
 
@@ -260,7 +297,7 @@ def fingerprint(password):
 @dataclasses.dataclass(frozen=True)
 class Source:
     name: str          # stable key; the snapshot's virtual path derives from it
-    kind: str          # "path", "file" or "db"
+    kind: str          # "path", "file", "config" (the system configuration set as a tar stream) or "db"
     path: str = ""     # for "path" and "file"
     database: str = ""  # for "db"
     exclude: tuple = ()
@@ -274,6 +311,8 @@ class Source:
             return self.path
         if self.kind == "file":
             return f"/hams-b2-virtual/file/{self.name}"
+        if self.kind == "config":
+            return f"/hams-b2-virtual/config/{self.name}"
         return f"/hams-b2-virtual/db/{self.database}"
 
 
@@ -314,6 +353,8 @@ def build_sources(cfg):
             print(f"note: optional source {item['name']} skipped, {item['path']} does not exist", file=sys.stderr)
             continue
         sources.append(Source(name=item["name"], kind="file", path=item["path"]))
+    if cfg.config_set:
+        sources.append(Source(name=CONFIG_SET_SOURCE, kind="config", path=cfg.config_root))
     for name in discover_tenants(cfg):
         sources.append(Source(
             name=f"tenant_{name}_filestore", kind="path",
@@ -590,6 +631,54 @@ def dump_database(cfg, source, runner):
     return directory
 
 
+def _config_excluded(rel):
+    return any(fnmatch.fnmatch(rel, pat) or fnmatch.fnmatch(os.path.basename(rel), pat) for pat in CONFIG_SET_EXCLUDE)
+
+
+def redact_secrets(text):
+    """The text with the value of every secret-looking setting replaced by <redacted>."""
+    return CONFIG_SET_SECRET_RE.sub(lambda m: m.group(1) + "<redacted>", text)
+
+
+# [@ANCHOR: b2_backup:config_set_tar]
+def write_config_tar(out, root="/", paths=CONFIG_SET_PATHS):
+    """Writes the system configuration set under `root` to the open binary file `out` as a tar; returns the member names.
+    Files matching CONFIG_SET_EXCLUDE are left out and secret values inside the others are redacted, so no key,
+    passphrase or credential reaches the repository. Only plain files, directories and symlinks are stored."""
+    names = []
+    with tarfile.open(fileobj=out, mode="w") as tar:
+        def add(rel):
+            if _config_excluded(rel):
+                return
+            full = os.path.join(root, rel)
+            info = tar.gettarinfo(full, arcname=rel)
+            if info is None:
+                return
+            if info.isreg():
+                with open(full, "rb") as f:  # audit-ignore-path
+                    data = f.read()
+                try:
+                    text = data.decode("utf-8")
+                except UnicodeDecodeError:
+                    text = None  # not text: stored as is
+                if text is not None:
+                    data = redact_secrets(text).encode("utf-8")
+                info.size = len(data)
+                tar.addfile(info, io.BytesIO(data))
+            elif info.isdir() or info.issym():
+                tar.addfile(info)
+                if info.isdir():
+                    for child in sorted(os.listdir(full)):
+                        add(os.path.join(rel, child))
+            else:
+                return
+            names.append(rel)
+        for rel in paths:
+            if os.path.lexists(os.path.join(root, rel)):
+                add(rel)
+    return names
+
+
 def snapshot_source(cfg, env, source, runner):
     """One kopia snapshot of one source. Returns the snapshot id, or None in plan mode."""
     if source.kind == "path":
@@ -608,6 +697,16 @@ def snapshot_source(cfg, env, source, runner):
                 raise BackupError(f"source file {source.path} cannot be read: {exc}") from None
             with handle as f:
                 runner.run(snapshot_argv(cfg, source, stdin_file=name), env=env, stdin=f, capture=True)
+    elif source.kind == "config":
+        # One redacted tar of the configuration set on stdin, from an anonymous temporary file (never a named copy on disk).
+        argv = snapshot_argv(cfg, source, stdin_file=CONFIG_SET_SOURCE + ".tar")
+        if runner.plan:
+            runner.say(f"PLAN {' '.join(argv)} < tar of {len(CONFIG_SET_PATHS)} configuration paths under {source.path}")
+        else:
+            with tempfile.TemporaryFile(dir=cfg.state_dir) as tmp:
+                write_config_tar(tmp, root=source.path)
+                tmp.seek(0)
+                runner.run(argv, env=env, stdin=tmp, capture=True)
     else:
         directory = dump_database(cfg, source, runner)
         try:
@@ -946,6 +1045,29 @@ def restore_file_test(cfg, env, source, snap, runner, scratch):
     return {"file": source.name, "compared": True}
 
 
+# [@ANCHOR: b2_backup:restore_config_set]
+def restore_config_test(cfg, env, source, snap, runner, scratch):
+    """Restores the newest configuration tar, checks it lists members and holds no unredacted secret value.
+    Names and counts only are reported."""
+    target = os.path.join(scratch, f"config_{source.name}")
+    runner.run([cfg.kopia, "restore", f"{snap['rootEntry']['obj']}/{CONFIG_SET_SOURCE}.tar", target], env=env, capture=True)
+    members = leaks = 0
+    try:
+        with tarfile.open(target) as tar:
+            for member in tar:
+                members += 1
+                if member.isreg():
+                    text = tar.extractfile(member).read().decode("utf-8", "replace")
+                    leaks += sum(1 for m in CONFIG_SET_SECRET_RE.finditer(text) if m.group(2) != "<redacted>")
+    except (OSError, tarfile.TarError):
+        raise BackupError(f"{source.name}: the restore did not produce a readable tar") from None
+    if not members:
+        raise BackupError(f"{source.name}: the restored configuration tar is empty")
+    if leaks:
+        raise BackupError(f"{source.name}: {leaks} unredacted secret setting(s) in the snapshot")
+    return {"config": source.name, "members": members}
+
+
 # [@ANCHOR: b2_backup:restore_test]
 def cmd_restore_test(cfg, runner, seed=None):
     ensure_dirs(cfg, runner)
@@ -1006,6 +1128,12 @@ def cmd_restore_test(cfg, runner, seed=None):
                 if source.kind == "file" and source.name in snaps:
                     try:
                         report["files"].append(restore_file_test(cfg, env, source, snaps[source.name], runner, scratch))
+                    except BackupError as exc:
+                        problems.append(str(exc))
+            for source in sources:
+                if source.kind == "config" and source.name in snaps:
+                    try:
+                        report["files"].append(restore_config_test(cfg, env, source, snaps[source.name], runner, scratch))
                     except BackupError as exc:
                         problems.append(str(exc))
             db_sources = [s for s in sources if s.kind == "db"]
