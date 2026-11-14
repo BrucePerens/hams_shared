@@ -67,6 +67,9 @@ STEPS_THAT_CANNOT_READ_PYTHON = {
     "pytest scripts/",
     "pytest ingest/",
     "pytest devbox_tools/",
+    # Per-directory suites of uncollected_tests.py: their inputs are their own directory.
+    "pytest hams_shared/tools/usability_audit/",
+    "pytest hams_shared/tools/audio_card_characterize/",
 }
 
 
