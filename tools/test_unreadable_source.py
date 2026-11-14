@@ -16,7 +16,8 @@ from source_text import read_source
 HERE = os.path.dirname(os.path.abspath(__file__))
 CHECKERS = ("check_async_lock_scope", "check_boundary_hazards", "check_burn_list", "check_cache_invalidation", "check_fake_network_listener",
             "check_float_isfinite", "check_int_float_overflow", "check_manifest_dependencies", "check_model_extension_collisions",
-            "check_registry_test_cr_usage", "check_secret_storage", "check_self_writeable_field_tests")
+            "check_registry_test_cr_usage", "check_secret_storage", "check_self_writeable_field_tests",
+            "check_gdpr_erasure_uses_service_utility", "check_js_syntax", "check_rabbitmq_pool")
 
 
 def _write(root, rel, data):

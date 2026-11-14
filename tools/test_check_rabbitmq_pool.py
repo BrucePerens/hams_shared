@@ -108,17 +108,19 @@ class CheckRabbitmqTests(unittest.TestCase):
         _write(os.path.join(self.tmp, "foo.py"), "params = pika.URLParameters(url)\n")
         self.assertEqual(chk.check_rabbitmq(self.tmp), [])
 
-    def test_a_binary_file_with_invalid_utf8_is_skipped_without_crashing(self):
+    def test_a_binary_file_with_invalid_utf8_is_reported_without_crashing(self):
         p = os.path.join(self.tmp, "data.py")
         with open(p, "wb") as f:
             f.write(b"\xff\xfe\x00\x01 not valid utf-8")
-        self.assertEqual(chk.check_rabbitmq(self.tmp), [])
+        found = chk.check_rabbitmq(self.tmp)
+        self.assertEqual(len(found), 1)
+        self.assertIn("data.py", found[0])
 
     def test_a_clean_file_using_the_pool_is_not_flagged(self):
         _write(os.path.join(self.tmp, "foo.py"), "conn = env['hams_rabbitmq.pool'].get()\n")
         self.assertEqual(chk.check_rabbitmq(self.tmp), [])
 
-    def test_a_broken_symlink_is_skipped_without_crashing(self):
+    def test_a_broken_symlink_is_reported_without_crashing(self):
         # A broken symlink (target doesn't exist) with a .py extension makes open() raise
         # FileNotFoundError, which must be caught -- otherwise the entire scan crashes on one
         # unreadable file. Real, reachable repo state (see
@@ -127,7 +129,9 @@ class CheckRabbitmqTests(unittest.TestCase):
             os.path.join(self.tmp, "does_not_exist.py"),
             os.path.join(self.tmp, "broken.py"),
         )
-        self.assertEqual(chk.check_rabbitmq(self.tmp), [])
+        found = chk.check_rabbitmq(self.tmp)
+        self.assertEqual(len(found), 1)
+        self.assertIn("broken.py", found[0])
 
 
 class MainIntegrationTests(unittest.TestCase):

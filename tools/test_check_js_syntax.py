@@ -125,9 +125,10 @@ class CheckFileTests(unittest.TestCase):
         _file_path, err_msg = result
         self.assertIn("ARCHITECTURE TRAP", err_msg)
 
-    def test_an_unreadable_file_returns_none_without_crashing(self):
-        with self.assertLogs(level="WARNING"):
-            self.assertIsNone(chk.check_file(os.path.join(self.tmp, "does_not_exist.js")))
+    def test_an_unreadable_file_is_a_failure_that_names_it_without_crashing(self):
+        path = os.path.join(self.tmp, "does_not_exist.js")
+        self.assertEqual(chk.check_file(path)[0], path)
+        self.assertIn("cannot read", chk.check_file(path)[1])
 
     def test_an_invalid_hoot_matcher_is_flagged_in_a_test_js_file(self):
         p = self._test_js_path("test('x', () => {\n    expect(foo).toBeUndefined();\n});\n")

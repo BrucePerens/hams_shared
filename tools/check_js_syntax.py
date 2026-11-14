@@ -10,6 +10,7 @@ import json
 import logging
 import check_target
 from tree_files import tree_walk
+from source_text import read_source
 
 
 def load_ignore_file(filepath):
@@ -72,12 +73,9 @@ _INVALID_HOOT_MATCHERS = {
 def audit_file(file_path):
     """The Odoo-architecture rules that run before the syntax check. Returns (code, failure): `failure` is a
     (path, message) pair or None; `code` is the source text, None when the file could not be read."""
-    try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            code = f.read()
-    except (OSError, UnicodeDecodeError) as e:
-        logging.warning("Failed to read %s: %s", file_path, e)
-        return None, None
+    code, problem = read_source(file_path)
+    if problem:
+        return None, (file_path, problem)
 
     # --- Custom Odoo Architecture Checks ---
     if file_path.endswith(".test.js"):
