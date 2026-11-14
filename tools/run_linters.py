@@ -240,6 +240,7 @@ STEP_META = {
     "check_test_depends": {"suffixes": frozenset({".py"})},
     "check_registry_test_cr_usage": {"suffixes": _PY},
     "check_gdpr_erasure_uses_service_utility": {"suffixes": _PY},
+    "check_service_account_acl": {"suffixes": frozenset({".py", ".xml", ".csv"})},
     # night_shift_history.py check: the night_shift_history/ directory (one markdown file per entry) and its stub file.
     "check_night_shift_history": {"suffixes": frozenset({".md"})},
     # ADR 0114 enforcement: the relay's Rust sources, its installers and release scripts, the ADR and dependency_watch.json.
@@ -2239,6 +2240,18 @@ def main():
         os.path.join(dir_path, "tools", "check_gdpr_erasure_uses_service_utility.py"),
         dir_path,
     ],
+    )
+
+    # check_service_account_acl -- a call made as a zero_sudo service account (with_user(svc_uid), _get_service_env)
+    # must be covered by an ir.model.access row of that account's groups. Found by hand twice on 2026-11-14 (the
+    # AccessError was swallowed and a security mail never went out). Scans both repos' full source, like step 34.
+    _add(
+        "check_service_account_acl",
+        [
+            python_exec,
+            os.path.join(dir_path, "tools", "check_service_account_acl.py"),
+            dir_path,
+        ],
     )
 
     # check_night_shift_history -- the night-shift log is one markdown file per entry in night_shift_history/ (so that two

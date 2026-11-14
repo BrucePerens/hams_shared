@@ -5338,6 +5338,9 @@ def scan_file(filepath, is_odoo_module=False):
                 # user_websites/models/res_users.py's
                 # _execute_gdpr_erasure().
                 "audit-ignore-gdpr-hand-rolled-unlink",
+                # check_service_account_acl.py's escape hatch for a call made as a service account whose ACL
+                # row is real but invisible to a static scan (see that file's docstring).
+                "audit-ignore-service-acl",
                 # `_get_service_uid()`'s narrow, single-call-site escape hatch
                 # from the "CRITICAL FAST FAIL" try/except ban above
                 # (visit_Try, has_ham_base branch). Decision recorded in
