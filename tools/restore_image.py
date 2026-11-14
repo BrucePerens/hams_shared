@@ -64,7 +64,13 @@ def main(argv=None):
             bld.build_image(args.source, os.path.abspath(args.out), profile, Runner(), Secrets(), args.target_time)
             return 0
         image = os.path.abspath(args.image)
-        expected = json.load(open(args.expected)) if args.expected else None
+        expected = None
+        if args.expected:
+            try:
+                with open(args.expected, encoding="utf-8") as handle:
+                    expected = json.load(handle)
+            except (OSError, ValueError) as exc:
+                raise RestorationError(f"cannot read --expected {args.expected}: {exc}") from exc
         work = tempfile.mkdtemp(prefix=".verify-", dir=args.work or os.path.dirname(image))
         try:
             report = ver.verify_image(image, profile, work, expected)

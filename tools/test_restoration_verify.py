@@ -266,6 +266,15 @@ def test_guest_http_check_does_not_follow_a_redirect():
         server.server_close()
     assert result[0]["status"] == 302
 
+def test_verify_with_a_missing_or_bad_expected_file_exits_2_not_a_traceback(tmp_path, capsys):
+    import restore_image
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not json")
+    for expected in (str(tmp_path / "missing.json"), str(bad)):
+        assert restore_image.main(["verify", str(tmp_path / "image"), "--expected", expected]) == 2
+        assert "cannot read --expected" in capsys.readouterr().err
+
+
 # Class anchors (ADR 0113) exercised by the tests above.
 # Tests [@ANCHOR: verify:verify_canary_class]
 # Tests [@ANCHOR: verify:verify_report_class]
