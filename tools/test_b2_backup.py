@@ -201,6 +201,27 @@ class PlanModeTests(_Env):
         self.assertNotIn(PASSWORD, out)
 
 
+class DumpStagingCleanupTests(_Env):
+    """A failed pg_dump or pg_restore --list must not leave the (partial) dump in the staging directory until the next night."""
+
+    def _dump_with(self, pg_prefix):
+        cfg = bb.load_config(self.config(pg_prefix=pg_prefix))
+        source = bb.Source(name="db_x", kind="db", database="x")
+        with self.assertRaises(bb.BackupError):
+            bb.dump_database(cfg, source, bb.Runner(plan=False))
+        return os.path.join(cfg.staging_dir, "db_x")
+
+    def test_failed_pg_dump_leaves_no_staging_directory(self):
+        # Tests [@ANCHOR: b2_backup:backup]
+        # `sh -c 'exit 1' --` stands in for a failing `pg_dump`: argv is pg_prefix + ["pg_dump", ...].
+        self.assertFalse(os.path.exists(self._dump_with(["sh", "-c", "echo partial; exit 1", "--"])))
+
+    def test_dump_that_pg_restore_cannot_read_leaves_no_staging_directory(self):
+        # The dump step succeeds (the fake writes bytes), the real pg_restore --list rejects them.
+        _require("pg_restore")
+        self.assertFalse(os.path.exists(self._dump_with(["sh", "-c", "echo not-a-dump", "--"])))
+
+
 class SingleFileBackupTests(_Env):
     """Tests [@ANCHOR: b2_backup:restore_file]: a single-file source (hams1's hams_crypto.secret) is uploaded on stdin,
     comes back with the same sha256 in the restore test, and is skipped when absent."""
