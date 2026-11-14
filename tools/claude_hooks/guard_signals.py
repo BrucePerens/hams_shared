@@ -403,15 +403,21 @@ def check_kill(words, via_xargs, verdict, table=None):
     """Judge a `kill` command (`words[0]` is kill): SIGKILL is denied, every pid must be a literal number (or `%job`, or
     `$!`), and pids supplied by an `xargs` pipe are denied. `kill -l` and a `kill` with no pid are allowed. A literal pid
     adds a reminder note to print its ps line first."""
-    pids, i, listing = [], 1, False
+    pids, i, listing, signalled = [], 1, False, False
     while i < len(words):
         text = words[i].text
+        if signalled and re.fullmatch(r"-\d+", text):
+            pids.append(words[i])  # after the signal, `-1` / `-123` is a negative pid: every process / a process group
+            i += 1
+            continue
         if text in ("-s", "-n", "--signal", "-sig") and i + 1 < len(words):
+            signalled = True
             if signal_is_kill(words[i + 1].text):
                 verdict.reasons.append("SIGKILL (kill -s KILL) is forbidden")
             i += 2
             continue
         if text.startswith("--signal="):
+            signalled = True
             if signal_is_kill(text.split("=", 1)[1]):
                 verdict.reasons.append("SIGKILL (kill --signal=KILL) is forbidden")
         elif text in ("-l", "-L", "--list", "--table"):
@@ -420,6 +426,7 @@ def check_kill(words, via_xargs, verdict, table=None):
             pids.extend(words[i + 1:])
             break
         elif re.fullmatch(r"-(\d+|[A-Za-z][A-Za-z0-9]*)", text):
+            signalled = True
             if signal_is_kill(text) or (text[:2] in ("-s", "-n") and signal_is_kill(text[2:])):
                 verdict.reasons.append("SIGKILL (kill -9 / -KILL) is forbidden: a SIGKILLed PostgreSQL backend crashes the "
                                        "whole shared cluster")
