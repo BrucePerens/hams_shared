@@ -21,6 +21,7 @@ import time
 from . import classify as cl
 from . import units as un
 from .runner import RestorationError
+from typing import Any
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SERIAL_MARK = "HAMSVERIFY "
@@ -218,7 +219,9 @@ def parse_serial(text):
     a phase wins; "_order" lists the phases in the order they arrived."""
     import base64
     import binascii
-    out, order, pending = {}, [], {}
+    out: dict[str, Any] = {}
+    order: list[str] = []
+    pending: dict[str, Any] = {}
     for line in text.splitlines():
         idx = line.find(SERIAL_MARK)
         if idx < 0:
@@ -306,7 +309,8 @@ def evaluate(phases, hits, profile, meta, expected_counts, report, external_unit
     units = phases.get("units", {})
     report.add("system reached a running or degraded state", units.get("system") in ("running", "degraded"), str(units.get("system")))
     states = units.get("units", {})
-    real, expected_failures = [], []
+    real: list[Any] = []
+    expected_failures: list[Any] = []
     for unit in units.get("failed", []):
         info = states.get(unit, {})
         category, reason = cl.classify(dict(info.get("state", {}), ActiveState="failed"), info.get("journal", ""))

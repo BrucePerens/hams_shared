@@ -69,7 +69,7 @@ def derive_ids(claims, observed):
             else:
                 table[name] = number
     for table, kind in ((users, "uid"), (groups, "gid")):
-        seen = {}
+        seen: dict[int, str] = {}
         for name, number in table.items():
             if number in seen and seen[number] != name:
                 conflicts.append("%s %d is used by both %s and %s" % (kind, number, seen[number], name))

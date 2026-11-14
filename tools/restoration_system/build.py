@@ -72,7 +72,7 @@ def config_member_text(runner, archive, member):
 def restore_files(bs, items, stage, work, runner, say):
     """Restore every FileItem into the staging tree (a mirror of /). Config archives are extracted there too, except the package database and
     the account files, which stay the image's own. Returns the archive paths (their member lists are read again for owners)."""
-    archives = []
+    archives: list[str] = []
     for item in items:
         if item.kind == "config_tar":
             dest = os.path.join(work, "config-" + str(len(archives)))

@@ -125,6 +125,7 @@ class SourceCheck:
 def next_segment(name):
     """Next 16 MiB WAL segment name on the same timeline."""
     m = WAL_RE.match(name)
+    assert m is not None, name
     tl, log, seg = (int(g, 16) for g in m.groups())
     seg += 1
     if seg == 0x100:
@@ -134,6 +135,7 @@ def next_segment(name):
 
 def segment_number(name):
     m = WAL_RE.match(name)
+    assert m is not None, name
     _, log, seg = (int(g, 16) for g in m.groups())
     return log * 0x100 + seg
 
