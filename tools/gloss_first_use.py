@@ -19,8 +19,9 @@ Check mode lists `path:line TERM` for every missing gloss and exits 1 if there i
 import argparse
 import os
 import re
-import subprocess
 import sys
+
+from tree_files import git_listed
 
 DEFAULT_TERMS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gloss_first_use_terms.txt")
 SCOPE_DIRECTORIES = {"adrs", "design", "runbooks", "stories"}
@@ -135,9 +136,8 @@ def apply_glosses(text, terms):
 
 def default_documents(root):
     """README, ADR, design, runbook and story Markdown files under `root` (tracked, not symlinks)."""
-    listing = subprocess.run(["git", "ls-files", "*.md"], cwd=root, capture_output=True, text=True, check=True)
     documents = []
-    for name in listing.stdout.splitlines():
+    for name in git_listed(root, "ls-files", "*.md"):
         path = os.path.join(root, name)
         parts = name.split("/")
         in_scope = os.path.basename(name).startswith("README") or SCOPE_DIRECTORIES & set(parts[:-1])

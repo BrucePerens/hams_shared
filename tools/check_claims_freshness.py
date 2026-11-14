@@ -50,6 +50,7 @@ import tokenize
 
 import claim_normalizers as cn  # noqa: E402
 import verify_anchors as va  # noqa: E402
+from tree_files import git_listed  # noqa: E402
 from check_function_test_anchors import (  # noqa: E402
     _direct_functions,
     _function_span,
@@ -80,20 +81,13 @@ class GitListingError(RuntimeError):
 
 def _git_tracked_files(repo_root, suffix):
     try:
-        result = subprocess.run(
-            ["git", "-C", repo_root, "ls-files", f"*{suffix}"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
+        names = git_listed(repo_root, "ls-files", f"*{suffix}")
     except (subprocess.CalledProcessError, OSError) as error:
         detail = getattr(error, "stderr", None) or str(error)
-        raise GitListingError(f"cannot list the files of {repo_root}: {str(detail).strip()}") from error
-    return [
-        os.path.join(repo_root, line)
-        for line in result.stdout.splitlines()
-        if line.strip()
-    ]
+        if isinstance(detail, bytes):
+            detail = detail.decode("utf-8", "replace")
+        raise GitListingError(f"cannot list the files of {repo_root}: {detail.strip()}") from error
+    return [os.path.join(repo_root, name) for name in names]
 
 
 def parse_claim_frontmatter(content):
