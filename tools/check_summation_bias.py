@@ -149,9 +149,10 @@ def main():
         repo_root = repo_root_res.stdout.strip()
 
         # Get list of modified files against HEAD
-        diff_command = ["git", "diff", "--name-only"] + (["--cached"] if staged else ["HEAD"])
+        # -z: without it git quotes a non-ASCII name ("\303\251.md"), which then does not exist on disk and is skipped as "deleted"
+        diff_command = ["git", "diff", "--name-only", "-z"] + (["--cached"] if staged else ["HEAD"])
         res = subprocess.run(diff_command, capture_output=True, text=True, check=True)
-        modified_files = [f for f in res.stdout.strip().split("\n") if f]
+        modified_files = [f for f in res.stdout.split("\0") if f]
     except subprocess.CalledProcessError as error:
         # A repository with no commit yet has no HEAD to compare with: nothing to measure a reduction against, which is the
         # one legitimate "no diff". Anything else (not a git repository, a diff git cannot compute) means the checker could not
