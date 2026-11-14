@@ -384,6 +384,13 @@ class VerifyTests(SnapshotTestBase):
         self.assertTrue(any("com is behind origin/main" in p for p in self.problems()))
 
     # Tests [@ANCHOR: gate_snapshot:only_notes_ahead]
+    def test_a_non_ascii_note_name_is_still_a_note(self):
+        com = self.ws.path("hams_com")
+        old = git(com, "rev-parse", "HEAD")
+        self.push_com("night_shift_todo/caf\u00e9.md")
+        self.assertTrue(gs.only_notes_ahead(com, old, git(com, "rev-parse", "HEAD")))
+
+    # Tests [@ANCHOR: gate_snapshot:only_notes_ahead]
     def test_notes_tolerance_is_only_for_hams_com_and_only_when_the_snapshot_is_an_ancestor(self):
         com = self.ws.path("hams_com")
         old = git(com, "rev-parse", "HEAD")

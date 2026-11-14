@@ -415,7 +415,8 @@ def only_notes_ahead(repo, snapshot, head):
                               capture_output=True, timeout=600)
     if ancestor.returncode != 0:
         return False
-    paths = _git(repo, "diff", "--name-only", snapshot, head, check=False).splitlines()
+    paths = _git(repo, "diff", "--name-only", "-z", snapshot, head, check=False).split("\0")
+    paths = [path for path in paths if path]
     return bool(paths) and all(path.startswith(NOTE_PATHS) for path in paths)
 
 

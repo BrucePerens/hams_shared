@@ -149,6 +149,10 @@ class RepoTests(unittest.TestCase):
         self.write("tools/new_backup_tool.py", "run(['pgbackrest', 'stanza-create'])\n")
         self.assertTrue(chk.check_repo(self.repo))
 
+    def test_an_untracked_file_with_a_non_ascii_name_is_scanned(self):
+        self.write("tools/caf\u00e9_backup.py", "run(['pgbackrest', 'stanza-create'])\n")
+        self.assertTrue(chk.check_repo(self.repo))
+
     def test_an_entry_added_in_the_same_change_approves_it(self):
         self.write("tools/provision.py", "k = secrets.token_bytes(32)  # HAMS_CRYPTO_KEY\n")
         self.write("docs/APPROVED_BACKUP_ENCRYPTION_CHANGES.md", "# approvals\n" + APPROVAL + "\n")
