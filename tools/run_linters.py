@@ -31,6 +31,7 @@ import lint_layout
 import lint_lock
 import lint_remote
 import lint_test_durations
+import uncollected_tests
 import atomic_io
 
 
@@ -2462,6 +2463,20 @@ def main():
             # `-rs` lists every skipped test with its reason in the output: a lint host without a tool (chromium, nginx) skips
             # the tests that need it, and that must show in the run, not pass silently (2026-11-07).
             env=dict(os.environ, HAMS_OPEN_TREE=os.path.realpath(community_dir)) if community_dir else None,
+        )
+
+    # 41c. every other test_*.py (uncollected_tests.py: generic discovery, so a new suite in a new directory runs without editing this file).
+    # One step per directory, cwd = that directory, as the suites import their neighbours bare. Directories that cannot run on a plain lint
+    # host are listed with the reason in uncollected_tests.BASELINE.
+    uncollected_run, _uncollected_baselined = uncollected_tests.find_uncollected(repo_root)
+    for rel_dir, names in sorted(uncollected_run.items()):
+        suite_dir = os.path.join(repo_root, rel_dir)
+        _add(
+            f"pytest {rel_dir or 'root'}/",
+            [python_exec, "-m", "pytest", "-q", "-p", "no:cacheprovider"] + [os.path.join(suite_dir, n) for n in names],
+            cwd=suite_dir,
+            fail_header=f"❌ {rel_dir or 'root'}/ unit test failures:",
+            inputs=((os.path.realpath(suite_dir),), None),
         )
 
     # 42. check_owl_templates -- real, standalone Owl QWeb template compile verification via a
