@@ -206,6 +206,14 @@ class ProvisionDebianDummyPackageTests(ProvisionTestCase):
             "python3-pypdf2 package that depends on it, not after",
         )
 
+    def test_dummy_package_is_built_in_a_private_directory_not_a_predictable_tmp_name(self):
+        _, mock_subprocess = self.run_provision([], os_id="debian")
+        commands_run = [c.args[0] for c in mock_subprocess.run.call_args_list]
+        flat = [part for cmd in commands_run for part in cmd]
+        self.assertFalse([p for p in flat if p in ("/tmp/python3-pypdf2_1.0_all.deb", "/tmp/python3-pypdf2.control")], flat)
+        build_cwd = [c.kwargs.get("cwd") for c in mock_subprocess.run.call_args_list if c.args[0][:1] == ["equivs-build"]]
+        self.assertNotIn("/tmp", build_cwd)
+
     def test_skips_the_dummy_pypdf2_package_on_ubuntu(self):
         _, mock_subprocess = self.run_provision([], os_id="ubuntu", patch_open=False)
         commands_run = [c.args[0] for c in mock_subprocess.run.call_args_list]
