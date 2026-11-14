@@ -13,6 +13,7 @@ import io
 import tokenize
 import check_target
 from tree_files import tree_walk
+from source_text import read_source
 
 def _code_hits(text, pattern):
     """1-based line numbers where `pika.BlockingConnection` / `pika.SelectConnection` appears in CODE.
@@ -78,9 +79,11 @@ def check_rabbitmq(repo_dir, stats=None):
             if stats is not None:
                 stats["files"] = stats.get("files", 0) + 1
 
+            text, problem = read_source(file_path)
+            if problem:
+                violations.append(problem)
+                continue
             try:
-                with open(file_path, "r", encoding="utf-8") as f:
-                    text = f.read()
                 lines = text.splitlines()
                 for i in _code_hits(text, pattern):
                     if "# burn-ignore-pika" not in lines[i - 1]:

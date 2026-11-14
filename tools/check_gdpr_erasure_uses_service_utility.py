@@ -54,6 +54,7 @@ import check_target
 import lint_exec
 import sys
 from tree_files import tree_walk
+from source_text import read_source
 
 SKIP_DIRS = {"node_modules", "__pycache__", ".git", "daemons", "tools", "radae"}
 IGNORE_MARKER = "audit-ignore-gdpr-hand-rolled-unlink"
@@ -104,15 +105,9 @@ def _unignored_unlink_calls(node, source_lines):
 
 def _check_file(path, repo_root):
     violations = []
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            source = f.read()
-    except (OSError, UnicodeDecodeError) as e:
-        # OSError alongside UnicodeDecodeError: a file listed by os.walk() can still vanish (a
-        # concurrent delete) or be unreadable (permissions, a broken symlink) by the time this
-        # opens it -- every sibling checker in this tree pairs these two for exactly that reason.
-        print(f"Warning: could not read {path}: {e}")
-        return violations
+    source, problem = read_source(path)
+    if problem:
+        return [problem]
 
     try:
         tree = ast.parse(source, filename=path)

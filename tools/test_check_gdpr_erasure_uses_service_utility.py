@@ -184,14 +184,15 @@ class CheckGdprErasureUsesServiceUtilityTests(unittest.TestCase):
         violations = cge.check_gdpr_erasure_uses_service_utility(self.tmp)
         self.assertEqual(violations, [])
 
-    def test_a_file_with_invalid_utf8_bytes_is_skipped_with_a_warning_not_a_crash(self):
+    def test_a_file_with_invalid_utf8_bytes_is_reported_not_a_crash(self):
         path = self._write("some_module/models/broken_encoding.py", "")
         with open(path, "wb") as f:
             f.write(b"# -*- coding: utf-8 -*-\nx = '\xff\xfe broken bytes'\n")
         violations = cge.check_gdpr_erasure_uses_service_utility(self.tmp)
-        self.assertEqual(violations, [])
+        self.assertEqual(len(violations), 1)
+        self.assertIn("broken_encoding.py", violations[0])
 
-    def test_an_unreadable_file_is_skipped_with_a_warning_not_a_crash(self):
+    def test_an_unreadable_file_is_reported_not_a_crash(self):
         """`_check_file`'s own open() only caught UnicodeDecodeError -- a file that os.walk()
         lists but that becomes unreadable by the time it's opened (permissions, a broken symlink,
         a concurrent delete) raises OSError instead, which was uncaught and would crash the whole
@@ -200,7 +201,7 @@ class CheckGdprErasureUsesServiceUtilityTests(unittest.TestCase):
         os.chmod(path, 0o000)
         try:
             violations = cge.check_gdpr_erasure_uses_service_utility(self.tmp)
-            self.assertEqual(violations, [])
+            self.assertEqual(len(violations), 1 if os.geteuid() else 0)
         finally:
             # Restore permissions before tearDown's shutil.rmtree runs -- an addCleanup callback
             # would fire AFTER tearDown, too late (the path is already gone by then).
