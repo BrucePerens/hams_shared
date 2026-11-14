@@ -41,6 +41,7 @@ import sys
 
 import check_target
 import lint_cache
+from source_text import read_source  # noqa: E402
 from tree_files import tree_files
 
 IGNORE_DIR_NAMES = {
@@ -101,8 +102,9 @@ def _handler_catches_overflow(handler):
 
 def check_file(path):
     """Returns a list of (line_num, message) findings for one .py file."""
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
-        source = f.read()
+    source, problem = read_source(path)
+    if problem:
+        return [(0, problem)]
     try:
         tree = ast.parse(source, filename=path)
     except SyntaxError:

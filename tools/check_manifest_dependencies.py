@@ -16,6 +16,7 @@ import sys
 import ast
 import re
 import check_target
+from source_text import read_source  # noqa: E402
 from tree_files import tree_walk
 
 
@@ -152,9 +153,12 @@ def main():
                 # cross a multi-line destructured import list's own newlines -- see
                 # import_pattern's own comment above for why a per-line scan silently missed
                 # exactly the class of violation this checker exists to catch.
+                content, problem = read_source(filepath)
+                if problem:
+                    print(f"🚨 UNREADABLE JS FILE: {problem}")
+                    errors_found = True
+                    continue
                 try:
-                    with open(filepath, "r", encoding="utf-8") as f:
-                        content = f.read()
                     for match in import_pattern.finditer(content):
                         line_no = content[: match.start()].count("\n") + 1
                         imported_mod = match.group(1)
