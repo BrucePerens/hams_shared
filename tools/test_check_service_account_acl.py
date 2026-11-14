@@ -135,6 +135,14 @@ class CheckServiceAccountAclTests(unittest.TestCase):
         self.assertEqual(len(found), 1)
         self.assertIn("no create ACL on mail.message", found[0])
 
+    def test_mail_unlink_needs_mail_message_unlink(self):
+        found = self._setup(
+            "r,r,model_mail_mail,mod.group_svc,1,0,0,1\n",
+            "        self.env['mail.mail'].with_user(svc_uid).unlink()\n",
+        )
+        self.assertEqual(len(found), 1)
+        self.assertIn("no unlink ACL on mail.message", found[0])
+
     def test_helper_method_returning_the_service_uid(self):
         found = self._setup(
             "r,r,model_thing_a,mod.group_svc,1,0,0,0\n",

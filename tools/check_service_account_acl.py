@@ -70,6 +70,8 @@ PERM_OF_OP = {
 # get_param/set_param are not checked: ham_base's ir.config_parameter override hands every call from a service
 # account to the config service account (ham* keys and its allow-lists), so the caller's own ACL is not used.
 EXTRA_PERMS = {}
+# mail.mail.unlink() also deletes the parent mail.message of a mail that is not a notification.
+CASCADE = {("mail.mail", "unlink"): ("mail.message", "unlink")}
 KEEP_MODEL_OPS = {"search", "browse", "filtered", "sorted", "with_context", "exists", "with_prefetch", "ensure_one", "with_company", "create", "limit"}
 SEED_FIELDS = {"partner_id": "res.partner", "user_id": "res.users", "company_id": "res.company"}
 
@@ -365,6 +367,8 @@ class FileScan:
             else:
                 for perm in EXTRA_PERMS.get(op) or (PERM_OF_OP[op],):
                     yield (node.lineno, end, rec[0], rec[1], perm)
+                    if (rec[1], perm) in CASCADE:
+                        yield (node.lineno, end, rec[0], *CASCADE[(rec[1], perm)])
 
 
 def check_file(path, repo_root, acl, fields=None):
