@@ -11,6 +11,7 @@ import os
 import re
 import sys
 import subprocess
+import tempfile
 import logging
 
 # This script lives at hams_shared/tools/provision.py, and infrastructure.py is
@@ -448,11 +449,12 @@ def provision():
             "Depends: python3-pypdf\n"
             "Description: Dummy python3-pypdf2 package for Ubuntu compatibility\n"
         )
-        if not args.plan:
-            with open("/tmp/python3-pypdf2.control", "w") as f:
-                f.write(equivs_config)
-        run_sys(["equivs-build", "python3-pypdf2.control"], cwd="/tmp")
-        run_sys(["dpkg", "-i", "/tmp/python3-pypdf2_1.0_all.deb"])
+        with tempfile.TemporaryDirectory(prefix="python3-pypdf2-") as build_dir:
+            if not args.plan:
+                with open(os.path.join(build_dir, "python3-pypdf2.control"), "w") as f:
+                    f.write(equivs_config)
+            run_sys(["equivs-build", "python3-pypdf2.control"], cwd=build_dir)
+            run_sys(["dpkg", "-i", os.path.join(build_dir, "python3-pypdf2_1.0_all.deb")])
 
     if args.test or not args.test_environment:
         infrastructure.provision_environment(
