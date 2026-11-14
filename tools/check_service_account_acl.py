@@ -108,6 +108,7 @@ def _manifest_depends(root):
     return deps
 
 
+# [@ANCHOR: check_service_account_acl:acl_class]
 class Acl:
     """Groups of each service user and the permissions each group has on each model."""
 
@@ -236,6 +237,7 @@ def field_models(roots):
     return {name: next(iter(models)) for name, models in found.items() if len(models) == 1}
 
 
+# [@ANCHOR: check_service_account_acl:filescan_class]
 class FileScan:
     def __init__(self, tree, source_lines, fields=None):
         self.fields = fields or {}
