@@ -547,7 +547,13 @@ class System:
         directory = os.path.dirname(path)
         os.makedirs(directory, exist_ok=True)
         tmp = f"{path}.tmp"
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+        # A temp file left by an earlier run keeps its old mode (and owner) under O_CREAT, and the text would be written
+        # into it before the chmod below: remove it and create a fresh one, which is `mode` from its first byte.
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(text)
         os.chmod(tmp, mode)
