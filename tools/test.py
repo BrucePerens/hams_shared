@@ -4388,6 +4388,13 @@ def build_arg_parser():
         "at the end, whether it passed, failed or was stopped (ADR 0116). The kept database is replaced by the next "
         "run in the same slot; drop it yourself when done. No effect with one slot, which keeps its database as before.",
     )
+    parser.add_argument(
+        "--test-order",
+        choices=["reverse"],
+        default=None,
+        help="Run the tests in REVERSE order (finds tests that leak state or depend on an earlier test). "
+        "Compare with a normal run.",
+    )
     parser.add_argument("--slot-held", type=int, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--internal-ns-init", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--preflight-done", action="store_true", help=argparse.SUPPRESS)
@@ -4399,6 +4406,11 @@ def parse_runner_args(argv=None):
     """Parse and cross-check the command line; exits 2 with the cause as the last line."""
     parser = build_arg_parser()
     args = parser.parse_args(argv)
+    if args.test_order == "reverse":
+        # Every re-exec'd phase parses the same argv, so the final odoo process gets the environment too.
+        hook_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_order_hook")
+        os.environ["HAMS_TEST_ORDER"] = "reverse"
+        os.environ["PYTHONPATH"] = os.pathsep.join(filter(None, [hook_dir, os.environ.get("PYTHONPATH")]))
     if args.slots is not None:
         try:
             args.slots = runner_slots.parse_slot_count(args.slots, "--slots")
