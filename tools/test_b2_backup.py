@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+import unittest.mock
 
 import b2_backup as bb
 
@@ -256,6 +257,28 @@ class SingleFileBackupTests(_Env):
         status = _load(self.cfg.status_path)
         self.assertTrue(status["ok"])
         self.assertNotIn("unit-test-key-material", json.dumps(status) + out + err)
+
+    def test_a_source_whose_snapshot_list_is_not_json_fails_alone_and_the_status_is_written(self):
+        # Tests [@ANCHOR: b2_backup:tool]
+        second = self.t("second.secret")
+        fd = os.open(second, os.O_WRONLY | os.O_CREAT, 0o400)
+        with os.fdopen(fd, "w") as f:
+            f.write("another-unit-test-file")
+        cfg_path = self.config(files=[{"name": "first", "path": self.secret, "optional": True},
+                                      {"name": "second", "path": second, "optional": True}])
+        real = bb.snapshot_source
+
+        def flaky(cfg, env, source, runner):
+            if source.name == "first":
+                raise json.JSONDecodeError("Expecting value", "kopia warning text", 0)
+            return real(cfg, env, source, runner)
+
+        with unittest.mock.patch.object(bb, "snapshot_source", flaky):
+            code, out, err = self.run_main(cfg_path, "backup")
+        self.assertNotEqual(code, 0, out + err)
+        by_name = {r["source"]: r for r in _load(self.cfg.status_path)["sources"]}
+        self.assertFalse(by_name["first"]["ok"])
+        self.assertTrue(by_name["second"]["ok"])
 
     def test_restore_test_compares_the_sha256_with_the_live_file(self):
         self.assertEqual(self.run_main(self.cfg_path, "backup")[0], 0)
