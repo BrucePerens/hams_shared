@@ -50,6 +50,7 @@ import subprocess
 import sys
 
 import check_target  # noqa: E402
+from tree_files import git_listed  # noqa: E402
 import verify_anchors as va  # noqa: E402
 from check_function_test_anchors import _is_base_anchor_declaration  # noqa: E402
 
@@ -78,17 +79,11 @@ def _git_tracked_rust_files(repo_root):
     `_git_tracked_python_files`/`_git_tracked_js_files` use `git ls-files`
     over a raw `os.walk`."""
     try:
-        out = subprocess.run(
-            ["git", "ls-files", "*.rs"],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout
+        names = git_listed(repo_root, "ls-files", "*.rs")
     except (subprocess.CalledProcessError, FileNotFoundError):
         return []
     files = []
-    for rel in out.splitlines():
+    for rel in names:
         parts = rel.split("/")
         if any(p in EXCLUDE_DIRS for p in parts):
             continue

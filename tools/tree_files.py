@@ -29,6 +29,16 @@ def _ls_files(root, args, suffixes):
     return [rel for rel in done.stdout.decode("utf-8", "replace").split("\0") if rel]
 
 
+# [@ANCHOR: tree_files:git_listed]
+def git_listed(root, *git_args):
+    """Repository-relative names printed by `git <git_args>` in `root`, read with -z and decoded with the file-system
+    encoding. Without -z git quotes a non-ASCII name (`"caf\\303\\251.py"`), which names no file, so a checker that
+    reads the plain output skips the file and can miss a finding in it. Raises `subprocess.CalledProcessError` /
+    `OSError` when git fails, as `check=True` does."""
+    done = _run(["git", "-C", root, *git_args[:1], "-z", *git_args[1:]], capture_output=True, check=True, timeout=120)
+    return [os.fsdecode(name) for name in done.stdout.split(b"\0") if name]
+
+
 def _submodule_paths(root):
     try:
         done = _run(["git", "-C", root, "ls-files", "-z", "--stage"], capture_output=True, check=True, timeout=120)
