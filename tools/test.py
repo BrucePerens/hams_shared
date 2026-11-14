@@ -5026,6 +5026,12 @@ def main():
         with open(coverage_rcfile, "w") as f:
             f.write("[run]\nrelative_files = True\n")
 
+    coverage_source_dirs = [base_dir]
+    for _sibling_name in ("hams_open", "hams_com"):
+        _sibling_dir = anchor_scan_sibling_dir(base_dir, _sibling_name)
+        if _sibling_dir and _sibling_dir != base_dir and _sibling_dir not in coverage_source_dirs:
+            coverage_source_dirs.append(_sibling_dir)
+
     def get_odoo_test_cmd(suffix=""):
         cmd = [python_exec]
         if args.profile:
@@ -5058,7 +5064,9 @@ def main():
                     "run",
                     f"--rcfile={coverage_rcfile}",
                     "--parallel-mode",
-                    f"--source={base_dir}",
+                    # Both repositories: a run from hams_com names hams_open modules too (and the
+                    # reverse), and their files would otherwise be missing from the report.
+                    f"--source={','.join(coverage_source_dirs)}",
                     "--data-file",
                     coverage_data_file,
                 ]
