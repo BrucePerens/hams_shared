@@ -588,6 +588,18 @@ class ChangedFilesNegativeControlTests(unittest.TestCase):
             handle.write("x = 2\n")
         self.assertEqual({os.path.basename(p) for p in run_linters.changed_files(repo, "HEAD")}, {"a.py"})
 
+    def test_non_ascii_file_names_are_listed_unquoted(self):
+        # plain git output quotes them ("caf\303\251.py"), a path that does not exist, so the changed file was never linted
+        repo = self._repo()
+        for name in ("café.py", "new ü.py"):
+            with open(os.path.join(repo, name), "w") as handle:
+                handle.write("x = 2\n")
+        subprocess.run(["git", "-C", repo, "add", "café.py"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", repo, "commit", "-qm", "two"], check=True, capture_output=True)
+        with open(os.path.join(repo, "café.py"), "w") as handle:
+            handle.write("x = 3\n")
+        self.assertEqual({os.path.basename(p) for p in run_linters.changed_files(repo, "HEAD~1")}, {"café.py", "new ü.py"})
+
     def test_a_failed_git_diff_is_not_an_empty_change_set(self):
         from unittest import mock
         repo = self._repo()

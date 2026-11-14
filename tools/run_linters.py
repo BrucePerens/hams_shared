@@ -646,7 +646,8 @@ def _git_lines(repo, *args):
         return None
     if res.returncode != 0:
         return None
-    return [line for line in res.stdout.split("\n") if line]
+    # With -z the names are NUL-separated and unquoted; without it git quotes a non-ASCII name ("caf\303\251.py"), a path that does not exist
+    return [line for line in res.stdout.split("\0" if "-z" in args else "\n") if line]
 
 
 def changed_files(repo, base):
@@ -659,8 +660,8 @@ def changed_files(repo, base):
     root = os.path.realpath(top[0] if top else repo)
     # A moved submodule pointer is a change even where `submodule.<name>.ignore=all` is set (hams_open clones set it); only untracked files inside
     # a submodule are left out.
-    diff = _git_lines(repo, "diff", "--ignore-submodules=untracked", "--name-only", "--no-renames", mb[0])
-    untracked = _git_lines(repo, "ls-files", "--others", "--exclude-standard")
+    diff = _git_lines(repo, "diff", "--ignore-submodules=untracked", "--name-only", "-z", "--no-renames", mb[0])
+    untracked = _git_lines(repo, "ls-files", "--others", "--exclude-standard", "-z")
     if diff is None or untracked is None:
         # A failed `git diff` is not "nothing changed": that skipped every step that depends on a changed file and still wrote a pass stamp.
         return None
