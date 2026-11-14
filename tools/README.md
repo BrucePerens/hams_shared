@@ -7644,3 +7644,35 @@ Every class of the tools that is not a function, with its fields, who creates it
 **Methods.** `__init__(self, files, roots)`, `exists`, `logical_dirs`, `argparse_flags`, and the private `_add_path`, `_add_aliases`, `_add_source`.
 
 **Notes.** Built once per run from the `git ls-files` list (`tracked_files`) and then only read; never serialized. The sets only grow while the constructor runs. Covered by `test_check_doc_references.py` (`Tree` builds one over a throwaway repository, and the ADR, heading, unit, configuration and function tests query it).
+
+### `Acl` [@ANCHOR: check_service_account_acl:acl_class]
+
+**Purpose.** The access picture of the zero_sudo service users that check_service_account_acl reads from the XML and CSV data files of the scanned modules: which groups each service user belongs to, which groups imply others, and which permissions every group has on every model.
+**Definition.** `class Acl` in `tools/check_service_account_acl.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `user_groups` | `dict = {}` | Service user xml id mapped to the set of group xml ids the user belongs to. |
+| `implied` | `dict = {}` | Group xml id mapped to the set of group xml ids it implies (`implied_ids`). |
+| `rows` | `dict = {}` | Model key mapped to a list of `(group xml id or "", {perm, ...})` pairs from `ir.model.access` rows; an empty group means the row applies to everyone. |
+
+**Methods.** `__init__(self)`, `add_xml(self, path, module)`, `add_csv(self, path, module)`, `groups_of(self, user)`, `missing(self, user, model, perm)`.
+
+**Notes.** Filled once by `load_acl` and then only read; never serialized. `missing` answers whether a service user lacks a permission on a model, following implied groups. Covered by `test_check_service_account_acl.py`.
+
+### `FileScan` [@ANCHOR: check_service_account_acl:filescan_class]
+
+**Purpose.** The per-file scan state of check_service_account_acl: it works out which calls in one Python file run as a service user and which model each call touches, so `check_file` can compare them with the `Acl`.
+**Definition.** `class FileScan` in `tools/check_service_account_acl.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `fields` | `fields or {}` | Relational field name mapped to its single target model, from `field_models`; used to resolve `record.field` to a model. |
+| `cls_model` | `None` | Model name of the class whose method is being scanned; `check_file` sets it per function, `None` until then. |
+| `consts` | `_module_constants(tree)` | Module-level string constants, so a service uid given as a constant resolves to its xml id. |
+| `lines` | `source_lines` | Source lines of the file as passed in by `check_file`; kept with the scan for the caller's bypass-tag lookup. |
+| `helpers` | `{}` | Function name mapped to the service uid xml id it returns, for helpers such as `_svc_uid()`. |
+
+**Methods.** `__init__(self, tree, source_lines, fields=None)`, `uid_of`, `recset_of`, `calls`, and the private `_xml_id`, `_service_call_id`, `_model_of`, `_bind`.
+
+**Notes.** Built once per file by `check_file` and discarded; the constructor only fills `helpers` by walking the tree. Covered by `test_check_service_account_acl.py`.

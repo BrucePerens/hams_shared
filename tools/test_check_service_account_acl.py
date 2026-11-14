@@ -189,3 +189,8 @@ class CheckServiceAccountAclTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# Tests [@ANCHOR: check_service_account_acl:acl_class]
+# Tests [@ANCHOR: check_service_account_acl:filescan_class]
+# Both classes are exercised through csa.check_service_account_acl in the cases above.
