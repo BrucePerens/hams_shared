@@ -202,7 +202,10 @@ def parse_start_time(value):
         when = datetime.datetime.strptime(text.replace(" ", "T"), "%Y-%m-%dT%H:%M:%S")
     except ValueError:
         raise ProcError(f"cannot read the start time {value!r}; expected {START_TIME_FORMAT}") from None
-    low = round((when.timestamp() - boot_time()) * CLK_TCK)
+    try:
+        low = round((when.timestamp() - boot_time()) * CLK_TCK)
+    except (OverflowError, OSError, ValueError):  # a year the platform cannot convert (0001-01-01 ...) is before boot too
+        low = -1
     if low < 0:
         raise ProcError(f"the start time {value!r} is before this machine booted; expected {START_TIME_FORMAT}")
     return (low, low + CLK_TCK)

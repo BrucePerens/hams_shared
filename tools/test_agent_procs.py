@@ -63,6 +63,7 @@ Tests [@ANCHOR: agent_procs:main]
 """
 
 import dataclasses
+import datetime
 import io
 import json
 import os
@@ -75,6 +76,9 @@ import threading
 import time
 import unittest
 from unittest import mock
+
+from hypothesis import given as hypothesis_given, settings
+from hypothesis import strategies as st
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import agent_procs as ap  # noqa: E402
@@ -1399,6 +1403,19 @@ class MainTests(ProcTestCase):
         text = cli("--help").stdout
         for word in ("find", "wait", "run", "jobs", "stop", "kill-pid"):
             self.assertIn(word, text)
+
+
+class ParseStartTimeProperties(unittest.TestCase):
+    # Tests [@ANCHOR: agent_procs:parse_start_time]
+    @settings(max_examples=40, deadline=None)
+    @hypothesis_given(st.datetimes(min_value=datetime.datetime(1, 1, 1), max_value=datetime.datetime(1971, 1, 1)))
+    def test_a_timestamp_before_boot_is_a_proc_error_never_a_crash(self, when):
+        with self.assertRaises(ap.ProcError):
+            ap.parse_start_time(when.strftime("%Y-%m-%dT%H:%M:%S"))
+
+    def test_year_one_is_a_proc_error(self):
+        with self.assertRaises(ap.ProcError):
+            ap.parse_start_time("0001-01-01T00:00:00")
 
 
 if __name__ == "__main__":
