@@ -23,6 +23,7 @@ import sys
 import xml.parsers.expat
 
 import check_target
+from source_text import read_source
 from tree_files import tree_walk
 
 # The flags EVERY caller scanning a module (tools/test.py's pre-flight, devbox_tools/cycle_run.py's round pre-flight) must pass
@@ -5882,9 +5883,13 @@ def main():
                 continue
 
             if file == "__manifest__.py":
+                manifest_content, problem = read_source(filepath)
+                if problem and os.path.exists(filepath):
+                    total_errors += 1
+                    print(f"  ❌ ERROR: {problem}")
                 try:
-                    with open(filepath, "r", encoding="utf-8") as f:
-                        manifest_content = f.read()
+                    if manifest_content is None:
+                        raise OSError(problem)
                     tree = ast.parse(manifest_content, filename=filepath)
                     for node in tree.body:
                         if isinstance(node, ast.Expr) and isinstance(
@@ -5923,9 +5928,11 @@ def main():
                     and re.search(r"(?:^|[/\\])(?:tour[^/\\]*|[^/\\]*_tour)\.js$", filepath)
                 ):
                     try:
-                        with open(filepath, "r", encoding="utf-8") as f:
-                            js_tour_content = f.read()
-                        if re.search(
+                        js_tour_content, problem = read_source(filepath)
+                        if problem:
+                            total_errors += 1
+                            print(f"  ❌ ERROR: {problem}")
+                        elif re.search(
                             r"registry\.category\(\s*['\"]web_tour\.tours['\"]\s*\)\.add\(",
                             js_tour_content,
                         ):
@@ -5934,8 +5941,11 @@ def main():
                         pass
                 if file.endswith(".py"):
                     try:
-                        with open(filepath, "r", encoding="utf-8") as f:
-                            lines = f.readlines()
+                        text, problem = read_source(filepath)
+                        if problem and os.path.exists(filepath):
+                            errors.append(problem)  # (a broken symlink was already reported by scan_file)
+                        if text is not None:
+                            lines = text.splitlines(True)
                             if lines:
                                 first_line = lines[0]
                                 filepath_forward = filepath.replace("\\", "/")
@@ -6170,23 +6180,23 @@ def main():
             filepath = os.path.join(root, file)
             rel_path = os.path.relpath(filepath, target_dir)
             if file.endswith(".xml"):
-                try:
-                    with open(filepath, "r", encoding="utf-8") as f:
-                        content = f.read()
+                content, problem = read_source(filepath)
+                if problem:
+                    total_errors += 1
+                    print(f"  ❌ ERROR: {problem}")
+                else:
                     for cls in re.findall(r"o_tour_[a-zA-Z0-9_-]+", content):
                         xml_tour_classes.setdefault(cls, set()).add(rel_path)
                     xml_content_all += content
-                except (SyntaxError, OSError):
-                    pass
             elif file.endswith(".js"):
-                try:
-                    with open(filepath, "r", encoding="utf-8") as f:
-                        content = f.read()
+                content, problem = read_source(filepath)
+                if problem:
+                    total_errors += 1
+                    print(f"  ❌ ERROR: {problem}")
+                else:
                     for cls in re.findall(r"o_tour_[a-zA-Z0-9_-]+", content):
                         js_tour_targets.setdefault(cls, set()).add(rel_path)
                     js_content_all += content
-                except (SyntaxError, OSError):
-                    pass
 
     for cls, found_in in sorted(xml_tour_classes.items()):
         if cls not in js_content_all:

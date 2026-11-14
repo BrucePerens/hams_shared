@@ -5,6 +5,7 @@ import ast
 import os
 import sys
 import check_target
+from source_text import read_source  # noqa: E402
 from tree_files import tree_walk
 
 
@@ -36,8 +37,10 @@ def _own_scope_nodes(node):
 
 
 def check_file(filepath):
-    with open(filepath, "r", encoding="utf-8") as f:
-        tree = ast.parse(f.read(), filename=filepath)
+    source, problem = read_source(filepath)
+    if problem:
+        return [f"{filepath}:1 - {problem}"]
+    tree = ast.parse(source, filename=filepath)
 
     errors = []
 
