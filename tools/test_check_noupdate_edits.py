@@ -162,6 +162,13 @@ class NoupdateEditTests(unittest.TestCase):
         self.commit("rename and edit")
         self.assertEqual(self.warnings(), [("mod/data/b.xml", "r1")])
 
+    def test_a_non_ascii_file_name_is_checked(self):
+        # plain git output quotes such a name, which then no longer ended in ".xml" and the file was never looked at
+        self.start("mod/data/café.xml", _wrap(self.RECORD.format("old")))
+        self.write("mod/data/café.xml", _wrap(self.RECORD.format("new")))
+        self.commit("edit")
+        self.assertEqual(self.warnings(), [("mod/data/café.xml", "r1")])
+
     def test_main_prints_and_exits_zero_unless_strict(self):
         self.start("mod/data/a.xml", _wrap(self.RECORD.format("old")))
         self.write("mod/data/a.xml", _wrap(self.RECORD.format("new")))
