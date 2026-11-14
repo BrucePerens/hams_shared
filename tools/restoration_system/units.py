@@ -70,7 +70,8 @@ def link_units(tree, units):
 
 def enablement_plan(tree, units):
     """(to_enable, kept): the units that should be enabled and are not yet in the image, and those already enabled as restored."""
-    to_enable, kept = [], []
+    to_enable: list[str] = []
+    kept: list[str] = []
     for unit, info in sorted(units.items()):
         if not info["enabled"]:
             continue

@@ -48,7 +48,7 @@ def parse_dpkg_status(text):
 
 def package_list(infra, profile, backup_packages=None):
     """{package: [where it came from]}: MANIFEST apt_packages (production), the profile's extras, and the backups' dpkg status if they carry one."""
-    out = {}
+    out: dict[str, list[str]] = {}
     if profile.get("use_manifest", True):
         for item in infra.MANIFEST.get("apt_packages", []):
             if "prod" in item.get("environments", []) or "early_prod" in item.get("environments", []):

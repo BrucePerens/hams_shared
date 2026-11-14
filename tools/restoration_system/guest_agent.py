@@ -13,6 +13,7 @@ import socket
 import subprocess
 import sys
 import time
+from typing import Any
 
 CONFIG = "/usr/local/lib/hams-verify/config.json"
 TARGETS_TCP = [("1.1.1.1", 443), ("8.8.8.8", 443), ("9.9.9.9", 53), ("93.184.216.34", 80)]
@@ -195,7 +196,7 @@ def database_checks(cfg):
             if not in_recovery:
                 break
         time.sleep(3)
-    result = {"in_recovery": in_recovery, "counts": {}, "newest": None}
+    result: dict[str, Any] = {"in_recovery": in_recovery, "counts": {}, "newest": None}
     if in_recovery is False:
         for table in db.get("count_tables", []):
             value = psql(db["name"], 'select count(*) from "%s"' % table)

@@ -13,6 +13,7 @@ import shutil
 from .runner import RestorationError
 from . import secrets_input as si
 from . import sources as src
+from typing import Any
 
 STAT_RE = re.compile(r"^(\d+) (\d+),(\d+) (\d+):(\d+)$")
 
@@ -45,8 +46,8 @@ class BackupSet:
         self.kind, self.runner, self.secrets, self.profile, self.work = kind, runner, secrets, profile, work
         self.kopia = None
         self.pg = None
-        self.pg_info = None
-        self.pg_backup = None
+        self.pg_info: Any = None
+        self.pg_backup: Any = None
         self.kopia_snapshots = []
         self.stream_snapshots = {}
 
