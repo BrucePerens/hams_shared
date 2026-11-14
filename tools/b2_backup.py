@@ -750,7 +750,7 @@ def cmd_backup(cfg, runner, only=None):
                     if entry["errors"]:
                         entry["ok"] = False
                         entry["error"] = f"{entry['errors']} file errors in the snapshot"
-            except (BackupError, OSError, ConfigError) as exc:
+            except (BackupError, OSError, ConfigError, ValueError) as exc:  # ValueError: kopia's `snapshot list --json` was not JSON
                 entry["error"] = str(exc)
             entry["finished"] = now_utc().isoformat()
             results.append(entry)
