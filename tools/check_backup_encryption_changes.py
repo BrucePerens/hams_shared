@@ -151,8 +151,8 @@ def check_repo(repo, base="origin/main", today=None):
     if code != 0:
         return []
     files = parse_diff(diff)
-    code, untracked = run_git(repo, "ls-files", "--others", "--exclude-standard")
-    for name in untracked.splitlines() if code == 0 else []:
+    code, untracked = run_git(repo, "ls-files", "--others", "--exclude-standard", "-z")
+    for name in (n for n in untracked.split("\0") if n) if code == 0 else []:
         try:
             with open(os.path.join(repo, name), encoding="utf-8") as handle:
                 files.setdefault(name, []).append((handle.read().splitlines(), []))
