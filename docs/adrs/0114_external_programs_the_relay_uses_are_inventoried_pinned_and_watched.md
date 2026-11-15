@@ -50,7 +50,7 @@ a download is trusted only through hams.com's reviewed mirror with a checked has
 
 | Program | Role | Platforms | Obtained | Version or pin | Licence | Watched |
 |---|---|---|---|---|---|---|
-| Pat (`la5nta/pat`) | Winlink client | Linux, Windows (macOS: not installable yet) | managed download from the hams.com mirror, SHA-256 checked | v1.0.1 | MIT | yes (release) |
+| Pat (`la5nta/pat`) | Winlink client | Linux, Windows, macOS (Intel .pkg, also run on Apple silicon under Rosetta 2) | pinned upstream download, SHA-256 checked (the hams.com mirror carries the same three pinned assets via `tools/relay_tool_release_pins.json`) | v1.0.1 | MIT | yes (release) |
 | Mercury (`Rhizomatica/mercury`, branch `mercuryv2`) | HF modem | Windows, macOS, Linux | loopback-patched build `tnc-loopback-v1`, mirrored | commit `9bb58799ef5ea5a8afaadb2441ea4806f14583b9` plus `mercury-loopback-bind.patch` | see source tree | yes (branch) |
 | ardopcf (`pflarue/ardop`, branch `develop`) | ARDOP modem | Windows, macOS, Linux | loopback-patched build `tnc-loopback-v1`, mirrored | commit `c1e11ef514ff0776fea74fb7bf7283909910af38` plus `ardopcf-loopback-bind.patch` | see source tree | yes (branch) |
 | Direwolf (`wb2osz/direwolf`) | packet TNC | Windows, macOS, Linux | loopback-patched build `tnc-loopback-v1`, mirrored | commit `eda1383f5fa9d8ba3cb27f99db1d2c79494404c9` plus `direwolf-loopback-bind.patch` | GPL-2.0+ | yes (branch `master`) |
@@ -123,7 +123,7 @@ The device worker (`device_worker_launch.rs`) is the one launch whose program is
 - hidapi (vendored in the Mercury tree, follows its pin), RADE (`rade_c` was copied in whole with no recorded upstream commit, so there is nothing honest to pin) and the model files (Hugging Face repositories, not GitHub releases) have no upstream check.
 - Inno Setup, MinGW-w64, wine and the container images are not pinned beyond what the release preflight
   prints; record the exact versions the next release uses.
-- Pat is not installable on macOS; the mirror has no macOS build yet.
+- Pat on macOS (2026-11-15, Bruce's decision): the relay installs upstream's Intel `.pkg` by unpacking its Payload (xar, gunzip, cpio; no `installer`, no root). The macOS install path has run only on Linux (the unpack against the real package); a run on a real Mac is still to do.
 
 ## Consequences
 One place to look when a security advisory, a licence question or a build failure names a program; each change

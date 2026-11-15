@@ -1,4 +1,8 @@
 {
-  "_comment": "Reviewed sha256 pins for mirror_relay_tool_releases.py. Key: tool/tag/platform/asset-filename. Add an entry only after reviewing that upstream release; the script prints the exact line to add. Neither pat nor Direwolf publishes checksums upstream, so this file is the only integrity check.",
-  "pins": {}
+  "_comment": "Reviewed sha256 pins for mirror_relay_tool_releases.py. Key: tool/tag/platform/asset-filename. Add an entry only after reviewing that upstream release; the script prints the exact line to add. Neither pat nor Direwolf publishes checksums upstream, so this file is the only integrity check. The pat v1.0.1 hashes equal the digests GitHub's release API reports for those assets and the pins in hams_local_relay's tool_install.rs PINNED_PAT_RELEASES.",
+  "pins": {
+    "pat/v1.0.1/linux/pat_1.0.1_linux_amd64.tar.gz": "af1febc55db4fbfaf316327770880f0a7cffab7cc189886053b07f7c91ac76d5",
+    "pat/v1.0.1/macos/pat_1.0.1_darwin_amd64.pkg": "dd057ce6987d2094d81a1a988d0b7c24a059952cdb09a358be26b4f82c2cd5ee",
+    "pat/v1.0.1/windows/pat_1.0.1_windows_i386.zip": "79b4319d8ea1b725af95a026678fe71c23fad2dc59e5b5cfc24fbabb24d4cd0d"
+  }
 }
