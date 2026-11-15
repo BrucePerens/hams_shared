@@ -69,7 +69,11 @@ def read_state(path):
     if not os.path.exists(path):
         return None
     with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+        try:
+            state = json.load(f)
+        except ValueError:
+            return None  # a half-written or hand-edited file must not wedge every cron run: treat it as "no agent"
+    return state if isinstance(state, dict) and {"ref", "last_active"} <= state.keys() else None
 
 
 def _write_state(path, state):
