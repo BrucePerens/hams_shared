@@ -158,6 +158,18 @@ class LoadPinsTests(unittest.TestCase):
                 mirror.load_pins("pins.json")
 
 
+class CommittedPinsTests(unittest.TestCase):
+    """The committed pins file covers every platform of the pinned pat release, macOS included."""
+
+    def test_pat_v1_0_1_is_pinned_for_every_platform(self):
+        pins = mirror.load_pins(mirror.DEFAULT_PINS_PATH)
+        for platform, filename in (("linux", "pat_1.0.1_linux_amd64.tar.gz"),
+                                   ("macos", "pat_1.0.1_darwin_amd64.pkg"),
+                                   ("windows", "pat_1.0.1_windows_i386.zip")):
+            self.assertRegex(pins[mirror.pin_key("pat", "v1.0.1", platform, filename)], r"^[0-9a-f]{64}\Z")
+            self.assertRegex(filename, mirror.ASSET_PATTERNS[("pat", platform)])
+
+
 class MainPublishesOnlyVerifiedReleasesTests(unittest.TestCase):
     """main() must verify every platform before publishing any of them."""
 
