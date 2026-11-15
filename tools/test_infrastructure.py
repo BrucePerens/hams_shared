@@ -3918,6 +3918,47 @@ class PgbackrestRepo1RetiredTests(unittest.TestCase):
         # Idempotent.
         self.assertFalse(infra._retire_pgbackrest_repo1(self.path))
 
+    def test_replacement_is_never_group_or_world_readable_while_written(self):
+        # Tests [@ANCHOR: infrastructure:_replace_file_keeping_owner]
+        self._write(self.CONF)
+        modes = []
+        real_replace = os.replace
+
+        def spy(src, dst):
+            modes.append(os.stat(src).st_mode & 0o7777)
+            return real_replace(src, dst)
+
+        old_umask = os.umask(0o022)
+        self.addCleanup(os.umask, old_umask)
+        with unittest.mock.patch.object(os, "replace", spy):
+            self.assertTrue(infra._retire_pgbackrest_repo1(self.path))
+        self.assertEqual(modes, [0o640])
+        self.assertFalse(os.path.exists(self.path + ".hams-provision.tmp"))
+
+    def test_stale_loose_tmp_file_is_tightened_and_failure_removes_tmp(self):
+        # Tests [@ANCHOR: infrastructure:_replace_file_keeping_owner]
+        self._write("a\n")
+        tmp = self.path + ".hams-provision.tmp"
+        with open(tmp, "w") as f:
+            f.write("old")
+        os.chmod(tmp, 0o666)
+        seen = []
+        real_fdopen = os.fdopen
+
+        def spy(fd, *a, **k):
+            seen.append(os.fstat(fd).st_mode & 0o7777)
+            return real_fdopen(fd, *a, **k)
+
+        with unittest.mock.patch.object(os, "fdopen", spy):
+            infra._replace_file_keeping_owner(self.path, "b\n")
+        self.assertEqual(seen, [0o600])
+        with unittest.mock.patch.object(os, "chown", side_effect=OSError("boom")):
+            with self.assertRaises(OSError):
+                infra._replace_file_keeping_owner(self.path, "c\n")
+        self.assertFalse(os.path.exists(tmp))
+        with open(self.path) as f:
+            self.assertEqual(f.read(), "b\n")
+
     def test_leaves_a_host_whose_only_repository_is_repo1(self):
         text = "[global]\nrepo1-type=s3\nrepo1-path=/x\n"
         self._write(text)
