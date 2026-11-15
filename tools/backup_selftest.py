@@ -500,8 +500,10 @@ def stage_kopia_restore(ctx: Context) -> str:
             report = json.load(handle)
     except (b2_backup.BackupError, b2_backup.ConfigError, OSError, ValueError) as exc:
         raise StageFailed("b2_backup restore-test: " + last_line(ctx.scrub(str(exc)))) from None
+    # An empty recordings directory is no failure for the restore test, but nothing was restored from it either.
+    recordings = (report.get("recordings") or {}).get("verified", 0) > 0
     compared = (len(report.get("samples") or []) + len(report.get("files") or []) + sum(
-        1 for k in ("database", "recordings", "tenant_archives") if report.get(k)))
+        1 for k in ("database", "tenant_archives") if report.get(k)) + int(recordings))
     if not report.get("ok") or compared == 0:
         raise StageFailed("the restore test compared nothing (empty repository or no sources): not a pass")
     return f"restored and compared {compared} item(s) from the kopia repository"

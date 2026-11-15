@@ -19,6 +19,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+import unittest.mock
 
 import backup_selftest as bs
 import b2_backup as bb
@@ -724,6 +725,33 @@ class KopiaStageTests(_Env):
         self.assertEqual(code, bs.STAGE_CODES["kopia_restore"], out)
         self.assertNotIn(PASSWORD, out)
         self.assertNotIn("another-throwaway-password-2", out)
+
+
+class KopiaStageEmptyRecordingsTests(unittest.TestCase):
+    """A restore test that only found an empty recordings directory restored and compared nothing: not a pass."""
+
+    def stage_with_report(self, report):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        status = os.path.join(tmp, "restore.json")
+        with open(status, "w") as f:
+            json.dump(report, f)
+        fake_cfg = type("Cfg", (), {"restore_status_path": status})()
+        ctx = bs.Context({"kopia": {"b2_config": "unused"}})
+        with unittest.mock.patch.object(bb, "load_config", return_value=fake_cfg), \
+                unittest.mock.patch.object(bb, "cmd_restore_test", return_value=0):
+            return bs.stage_kopia_restore(ctx)
+
+    def test_empty_recordings_alone_is_not_a_pass(self):
+        report = {"ok": True, "samples": [], "files": [], "database": None, "tenant_archives": None,
+                  "recordings": {"source": "recordings", "sampled": 0, "verified": 0, "missing_live": 0, "changed_since": 0}}
+        with self.assertRaises(bs.StageFailed):
+            self.stage_with_report(report)
+
+    def test_verified_recordings_pass(self):
+        report = {"ok": True, "samples": [], "files": [], "database": None, "tenant_archives": None,
+                  "recordings": {"source": "recordings", "sampled": 2, "verified": 2, "missing_live": 0, "changed_since": 0}}
+        self.assertIn("1 item", self.stage_with_report(report))
 
 
 if __name__ == "__main__":
