@@ -86,7 +86,9 @@ class QsoRecordingsBackupTests(_Env):
     def test_a_restored_recording_that_differs_from_the_live_file_fails(self):
         live = os.path.join(self.rec, "cccc.opus")
         with open(live, "r+b") as f:
-            f.write(b"X")  # same size, other content
+            first = f.read(1)
+            f.seek(0)
+            f.write(bytes([first[0] ^ 0xFF]))  # same size, certainly other content (the body is random: a fixed byte matches 1 time in 256)
         # The altered file must read as finalised BEFORE the snapshot started and as the newest recording: its mtime is set relative to the
         # recorded snapshot start, not to the wall clock, so a slow machine (the snapshot and this test minutes apart) cannot change which it is.
         entry = [r for r in _load(self.cfg.status_path)["sources"] if r["source"] == "qso_recordings"][0]
