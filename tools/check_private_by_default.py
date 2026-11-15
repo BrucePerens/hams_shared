@@ -38,7 +38,11 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     parser.add_argument("repo_root")
     args = parser.parse_args(argv)
-    counts = {module: count for module, count in count_listed_methods(args.repo_root).items() if count}
+    all_counts = count_listed_methods(args.repo_root)
+    if not all_counts:
+        sys.stdout.write("[!] CI/CD FAILURE: no %s found under %s: the scan covered nothing, so it cannot pass.\n" % (EXPOSURE_FILE, args.repo_root))
+        return 1
+    counts = {module: count for module, count in all_counts.items() if count}
     for module, count in sorted(counts.items(), key=lambda item: -item[1]):
         sys.stdout.write("[!] CI/CD FAILURE: %s lists %d public-by-default RPC method(s): make them private (leading underscore or "
                          "@api.private) or declare them with @public_rpc, then regenerate with hams_rpc_guard/exposure_scan.py\n" % (module, count))
