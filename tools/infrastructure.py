@@ -13170,6 +13170,28 @@ def _conf_value(line, key):
     return value
 
 
+# [@ANCHOR: infrastructure:_replace_file_keeping_owner]
+def _replace_file_keeping_owner(path, text):
+    """Atomically replaces `path` with `text`, keeping its owner, group and mode. The temporary file
+    is created 0600 and only given the original mode after it is written, so a config holding secrets
+    (pgbackrest.conf: S3 keys, cipher pass) is never briefly world-readable under the default umask."""
+    st = os.stat(path)
+    tmp_path = path + ".hams-provision.tmp"
+    fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    replaced = False
+    try:
+        os.fchmod(fd, 0o600)  # a tmp left by a crashed run keeps its old mode otherwise
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.chown(tmp_path, st.st_uid, st.st_gid)
+        os.chmod(tmp_path, st.st_mode & 0o7777)
+        os.replace(tmp_path, path)
+        replaced = True
+    finally:
+        if not replaced and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+
 # [@ANCHOR: infrastructure:_set_conf_key]
 def _set_conf_key(text, key, value):
     """Sets `key = value` in postgresql.conf-style text, replacing every active line for key with one.
@@ -13240,13 +13262,7 @@ def _apply_postgresql_lockdown(conf_paths=None):
             continue
         if _plan("write", f"{path} (lockdown settings; restart needed: {effective_changed})"):
             continue
-        st = os.stat(path)
-        tmp_path = path + ".hams-provision.tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            f.write(text)
-        os.chown(tmp_path, st.st_uid, st.st_gid)
-        os.chmod(tmp_path, st.st_mode & 0o7777)
-        os.replace(tmp_path, path)
+        _replace_file_keeping_owner(path, text)
     return restart_needed
 
 
@@ -13290,13 +13306,7 @@ def _apply_postgresql_archive_timeout(conf_paths=None):
             continue
         if _plan("write", f"{path} (archive settings; reload needed: {effective_changed})"):
             continue
-        st = os.stat(path)
-        tmp_path = path + ".hams-provision.tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            f.write(text)
-        os.chown(tmp_path, st.st_uid, st.st_gid)
-        os.chmod(tmp_path, st.st_mode & 0o7777)
-        os.replace(tmp_path, path)
+        _replace_file_keeping_owner(path, text)
     return reload_needed
 
 
@@ -13331,13 +13341,7 @@ def _retire_pgbackrest_repo1(conf_path=None):
         return False
     if _plan("write", f"{path} (remove the retired plaintext repo1-* lines)"):
         return True
-    st = os.stat(path)
-    tmp_path = path + ".hams-provision.tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        f.write("".join(kept))
-    os.chown(tmp_path, st.st_uid, st.st_gid)
-    os.chmod(tmp_path, st.st_mode & 0o7777)
-    os.replace(tmp_path, path)
+    _replace_file_keeping_owner(path, "".join(kept))
     return True
 
 
@@ -13728,13 +13732,7 @@ def _allow_cache_manager_socket_password_for_test(hba_paths=None):
         changed = True
         if _plan("write", f"{path} (cache_manager_ro socket password rule, test host)"):
             continue
-        st = os.stat(path)
-        tmp_path = path + ".hams-provision.tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            f.write("".join(lines))
-        os.chown(tmp_path, st.st_uid, st.st_gid)
-        os.chmod(tmp_path, st.st_mode & 0o7777)
-        os.replace(tmp_path, path)
+        _replace_file_keeping_owner(path, "".join(lines))
     return changed
 
 
