@@ -7,6 +7,7 @@ a secret to ONE child program through that program's own environment.
 """
 import getpass
 import os
+from collections.abc import Callable, Iterable, Mapping
 
 from .runner import RestorationError
 
@@ -23,7 +24,7 @@ LABELS = {
 }
 
 
-def ask(label):
+def ask(label: str) -> str:
     """The value typed at the terminal, with no echo. RestorationError when there is no terminal or the answer is empty."""
     try:
         os.close(os.open("/dev/tty", os.O_RDWR))
@@ -41,31 +42,31 @@ def ask(label):
 class Secrets:
     """In-memory store. Nothing here is ever printed: __repr__ shows names only."""
 
-    def __init__(self, values=None):
+    def __init__(self, values: Mapping[str, str] | None = None) -> None:
         self._values = dict(values or {})
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "Secrets(%s)" % ",".join(sorted(self._values))
 
-    def need(self, names, asker=ask):
+    def need(self, names: Iterable[str], asker: Callable[[str], str] = ask) -> None:
         for name in names:
             if name not in self._values:
                 self._values[name] = asker(LABELS[name])
 
-    def get(self, name):
+    def get(self, name: str) -> str:
         return self._values[name]
 
-    def has(self, name):
+    def has(self, name: str) -> bool:
         return name in self._values
 
-    def kopia_env(self):
+    def kopia_env(self) -> dict[str, str]:
         env = {"KOPIA_PASSWORD": self._values[KOPIA], "KOPIA_CHECK_FOR_UPDATES": "false"}
         if B2_KEY in self._values:
             env["AWS_ACCESS_KEY_ID"] = self._values[B2_KEY_ID]
             env["AWS_SECRET_ACCESS_KEY"] = self._values[B2_KEY]
         return env
 
-    def pgbackrest_env(self):
+    def pgbackrest_env(self) -> dict[str, str]:
         env = {"PGBACKREST_REPO1_CIPHER_PASS": self._values[PGBACKREST]}
         if B2_KEY in self._values:
             env["PGBACKREST_REPO1_S3_KEY"] = self._values[B2_KEY_ID]

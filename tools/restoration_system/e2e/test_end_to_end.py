@@ -15,6 +15,8 @@ import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Iterable, Iterator
+from typing import Any
 
 import pytest
 
@@ -31,16 +33,16 @@ CLI = os.path.join(TOOLS, "restore_image.py")
 BASE = os.environ.get("HAMS_RESTORATION_E2E_DIR", os.path.expanduser("~/.cache/hams-restoration-e2e"))
 
 
-def cli(*args, answers=(), timeout=3600):
+def cli(*args: str, answers: Iterable[tuple[str, str]] = (), timeout: float = 3600) -> tuple[int, str]:
     return run_on_tty(["sudo", "-n", "python3", CLI, "--profile", PROFILE, *args], list(answers), timeout=timeout)
 
 
-def answers_for(creds):
+def answers_for(creds: dict[str, Any]) -> list[tuple[str, str]]:
     return [("pgBackRest repository passphrase", creds["pgbackrest_passphrase"]), ("kopia repository password", creds["kopia_password"])]
 
 
 @pytest.fixture(scope="module")
-def world():
+def world() -> Iterator[dict[str, Any]]:
     subprocess.run(["sudo", "-n", "rm", "-rf", BASE], check=False)
     os.makedirs(BASE, mode=0o755)
     creds = synthetic.make(os.path.join(BASE, "backups"))
@@ -48,7 +50,7 @@ def world():
     subprocess.run(["sudo", "-n", "rm", "-rf", BASE], check=False)
 
 
-def test_01_negative_controls_that_fail_before_any_image_is_made(world):
+def test_01_negative_controls_that_fail_before_any_image_is_made(world: dict[str, Any]) -> None:
     creds = dict(world["creds"], pgbackrest_passphrase="wrong-passphrase", kopia_password="wrong-too")
     code, text = cli("build", "--source", "local:" + world["set"], "--out", os.path.join(BASE, "x1"), answers=answers_for(creds))
     assert code != 0 and "wrong passphrase" in text, text[-600:]
@@ -62,7 +64,7 @@ def test_01_negative_controls_that_fail_before_any_image_is_made(world):
     assert code != 0 and "no encrypted source" in text
 
 
-def test_02_corrupt_backup_file_fails_the_build(world):
+def test_02_corrupt_backup_file_fails_the_build(world: dict[str, Any]) -> None:
     bad = os.path.join(BASE, "corrupt")
     shutil.copytree(world["set"], bad)
     skip = (".info", ".history", ".backup", ".manifest", ".copy")
@@ -77,7 +79,7 @@ def test_02_corrupt_backup_file_fails_the_build(world):
     assert not os.path.exists(os.path.join(BASE, "x4", "usr")), "no image may be left behind that looks complete"
 
 
-def test_03_build_the_image(world):
+def test_03_build_the_image(world: dict[str, Any]) -> None:
     code, text = cli("build", "--source", "local:" + world["set"], "--out", world["image"], answers=answers_for(world["creds"]))
     assert code == 0, text[-2500:]
     assert "contains decrypted data and every secret" in text
@@ -88,7 +90,7 @@ def test_03_build_the_image(world):
     assert "restore_command" in auto and "wal_restore" in auto
 
 
-def test_04_verify_the_image_in_the_isolated_vm(world):
+def test_04_verify_the_image_in_the_isolated_vm(world: dict[str, Any]) -> None:
     expected = os.path.join(BASE, "expected.json")
     with open(expected, "w") as handle:
         json.dump(world["creds"]["expected"], handle)
@@ -100,7 +102,7 @@ def test_04_verify_the_image_in_the_isolated_vm(world):
         assert any(line in row and row.startswith("ok") for row in text.splitlines()), line
 
 
-def test_05_image_missing_a_unit_fails_verify(world):
+def test_05_image_missing_a_unit_fails_verify(world: dict[str, Any]) -> None:
     broken = os.path.join(BASE, "broken")
     subprocess.run(["sudo", "-n", "cp", "-a", world["image"], broken], check=True)
     subprocess.run(["sudo", "-n", "ln", "-sf", "/dev/null", os.path.join(broken, "etc/systemd/system/nginx.service")], check=True)
@@ -108,6 +110,6 @@ def test_05_image_missing_a_unit_fails_verify(world):
     assert code == 1 and "nginx.service is active" in text and "FAIL" in text, text[-1500:]
 
 
-def test_06_vm_with_a_route_out_fails_verify_before_services_start(world):
+def test_06_vm_with_a_route_out_fails_verify_before_services_start(world: dict[str, Any]) -> None:
     done = subprocess.run(["sudo", "-n", sys.executable, os.path.join(HERE, "route_control.py"), world["image"], PROFILE, BASE], capture_output=True, text=True)
     assert done.returncode == 0, done.stdout[-2500:] + done.stderr[-800:]

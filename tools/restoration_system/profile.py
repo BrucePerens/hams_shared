@@ -2,6 +2,7 @@
 """The profile: every hams.com-specific name (bucket, paths, stanza, database) lives in a JSON file, not in the engine."""
 import json
 import os
+from typing import Any
 
 from .runner import RestorationError
 
@@ -9,7 +10,7 @@ DEFAULT_PROFILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hams
 REQUIRED = ("name", "debian_suite", "debian_mirror", "database", "b2", "local", "config_tar_scope", "machine_specific", "verify")
 
 
-def load(path=None):
+def load(path: str | None = None) -> dict[str, Any]:
     """The profile dict. RestorationError when the file is unreadable or lacks a required section."""
     path = path or DEFAULT_PROFILE
     try:

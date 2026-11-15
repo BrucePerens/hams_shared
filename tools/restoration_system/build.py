@@ -5,17 +5,22 @@ import os
 import shutil
 import sys
 import tempfile
+from collections.abc import Callable, Iterable
+from types import ModuleType
+from typing import Any
 
-from .runner import RestorationError
 from . import accounts as acc
 from . import assemble as asm
 from . import code_layer as code
 from . import provision_layer as pl
 from . import sourceset as ss
 from . import units as un
+from .assemble import Fetcher
+from .runner import RestorationError, Runner
+from .secrets_input import Secrets
 
 
-def load_infrastructure():
+def load_infrastructure() -> ModuleType:
     """hams_shared/tools/infrastructure.py (the provisioning MANIFEST). Imported lazily: it is large."""
     tools = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if tools not in sys.path:
@@ -29,7 +34,7 @@ REQUIRED_PROGRAMS = {"debootstrap": "debootstrap", "kopia": "kopia (https://kopi
                      "qemu-system-x86_64": "qemu-system-x86", "useradd": "passwd", "systemctl": "systemd"}
 
 
-def preflight(out=None, need_vm=True):
+def preflight(out: str | None = None, need_vm: bool = True) -> list[tuple[bool, str]]:
     """[(ok, text)] about this builder: root, programs, /dev/kvm, the host kernel files the VM boots, free disk. Changes nothing."""
     import shutil as sh
     checks = [(os.geteuid() == 0, "running as root (build and verify need it)")]
@@ -46,7 +51,7 @@ def preflight(out=None, need_vm=True):
     return checks
 
 
-def open_source(spec, runner, secrets, profile, work):
+def open_source(spec: str, runner: Runner, secrets: Secrets, profile: dict[str, Any], work: str) -> ss.BackupSet:
     if spec == "b2":
         return ss.open_b2(runner, secrets, profile, work)
     if spec.startswith("local:"):
@@ -54,14 +59,14 @@ def open_source(spec, runner, secrets, profile, work):
     raise RestorationError("source must be local:DIRECTORY or b2, not %r" % spec)
 
 
-def check_output_dir(out):
+def check_output_dir(out: str) -> None:
     if os.path.exists(out) and os.listdir(out):
         raise RestorationError("output directory %s exists and is not empty: refusing to build over it" % out)
     os.makedirs(out, exist_ok=True)
     os.chmod(out, 0o755)
 
 
-def config_member_text(runner, archive, member):
+def config_member_text(runner: Runner, archive: str, member: str) -> str | None:
     """Text of one member of a config archive, or None when it is not in it."""
     listing = runner.run(["tar", "--zstd", "-tf", archive], capture=True).stdout.splitlines()
     if member not in listing:
@@ -69,12 +74,14 @@ def config_member_text(runner, archive, member):
     return runner.run(["tar", "--zstd", "-xOf", archive, member], capture=True).stdout
 
 
-def restore_files(bs, items, stage, work, runner, say):
+def restore_files(bs: ss.BackupSet, items: Iterable[ss.FileItem], stage: str, work: str, runner: Runner, say: Callable[[str], object]) -> list[str]:
     """Restore every FileItem into the staging tree (a mirror of /). Config archives are extracted there too, except the package database and
     the account files, which stay the image's own. Returns the archive paths (their member lists are read again for owners)."""
     archives: list[str] = []
     for item in items:
         if item.kind == "config_tar":
+            if bs.kopia is None:
+                raise RestorationError("%s: the backup set has no kopia repository" % item.label)
             dest = os.path.join(work, "config-" + str(len(archives)))
             bs.kopia.restore(item.snapshot["id"], dest)
             found = sorted(f for f in os.listdir(dest) if f.startswith("config-") and f.endswith(".tar.zst"))
@@ -91,7 +98,7 @@ def restore_files(bs, items, stage, work, runner, say):
     return archives
 
 
-def build_image(source, out, profile, runner, secrets, target_time=None, say=print, work_parent=None, fetch=None):
+def build_image(source: str, out: str, profile: dict[str, Any], runner: Runner, secrets: Secrets, target_time: str | None = None, say: Callable[[str], object] = print, work_parent: str | None = None, fetch: Fetcher | None = None) -> dict[str, Any]:
     """Build the image directory `out` from `source`. Returns the RESTORATION_META.json dict.
 
     Needs root (debootstrap, chroot, ownership), the network (Debian archive, third-party apt repositories) and the passphrases (asked on the

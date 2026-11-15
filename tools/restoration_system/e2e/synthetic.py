@@ -9,15 +9,17 @@ import os
 import secrets
 import subprocess
 import time
+from collections.abc import Mapping
+from typing import Any
 
 PG_BIN = "/usr/lib/postgresql/18/bin"
 
 
-def sh(argv, env=None, **kw):
+def sh(argv: list[str], env: Mapping[str, str] | None = None, **kw: Any) -> subprocess.CompletedProcess[str]:
     return subprocess.run(argv, check=True, capture_output=True, text=True, env=env, **kw)
 
 
-def make(root, newest_pad=0):
+def make(root: str, newest_pad: int = 0) -> dict[str, Any]:
     """Create the set under `root`. Returns {"kopia_password", "pgbackrest_passphrase", "expected"}."""
     root = os.path.abspath(root)
     os.makedirs(root, exist_ok=True)

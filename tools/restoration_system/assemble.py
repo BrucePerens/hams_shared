@@ -12,9 +12,15 @@ import shutil
 import subprocess
 import time
 import urllib.request
+from collections.abc import Callable, Container, Iterable
+from types import ModuleType
+from typing import Any
 
-from .runner import RestorationError
 from . import accounts as acc
+from .runner import RestorationError, Runner
+from .sourceset import BackupSet, DbPlan
+
+Fetcher = Callable[[str], bytes]
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SHARE_REL = "usr/local/share/hams-restore"
@@ -25,18 +31,18 @@ FILES_AT_TOP = ("EXCLUDE.txt", "RESTORE.md", "RESTORATION_META.json")
 class Chroot:
     """Runs commands inside the image in a private mount namespace (assemble needs root)."""
 
-    def __init__(self, runner, tree):
+    def __init__(self, runner: Runner, tree: str) -> None:
         self.runner, self.tree = runner, tree
 
-    def path(self, rel):
+    def path(self, rel: str) -> str:
         return os.path.join(self.tree, rel.lstrip("/"))
 
-    def run(self, argv, **kw):
+    def run(self, argv: Iterable[str], **kw: Any) -> subprocess.CompletedProcess[str]:
         wrapper = ["unshare", "--mount", "--propagation", "private", "python3", os.path.join(HERE, "chroot_exec.py"), self.tree]
         return self.runner.run(wrapper + list(argv), **kw)
 
 
-def parse_dpkg_status(text):
+def parse_dpkg_status(text: str) -> set[str]:
     """Names of the packages a dpkg status file lists as installed."""
     names = set()
     for block in text.strip().split("\n\n"):
@@ -46,7 +52,7 @@ def parse_dpkg_status(text):
     return names
 
 
-def package_list(infra, profile, backup_packages=None):
+def package_list(infra: ModuleType, profile: dict[str, Any], backup_packages: Iterable[str] | None = None) -> dict[str, list[str]]:
     """{package: [where it came from]}: MANIFEST apt_packages (production), the profile's extras, and the backups' dpkg status if they carry one."""
     out: dict[str, list[str]] = {}
     if profile.get("use_manifest", True):
@@ -62,7 +68,7 @@ def package_list(infra, profile, backup_packages=None):
     return out
 
 
-def download(url, timeout=120, tries=4):
+def download(url: str, timeout: float = 120, tries: int = 4) -> bytes:
     """Bytes of a URL, retrying a flaky network. RestorationError after the last try."""
     last = None
     for attempt in range(tries):
@@ -75,7 +81,7 @@ def download(url, timeout=120, tries=4):
     raise RestorationError("cannot download %s: %s" % (url, last))
 
 
-def setup_apt(profile, tree, runner, fetch=None):
+def setup_apt(profile: dict[str, Any], tree: str, runner: Runner, fetch: Fetcher | None = None) -> None:
     """Write the profile's extra apt repositories (key dearmored with gpg on the builder, source list) into the image. Needs the network."""
     fetch = fetch or download
     os.makedirs(os.path.join(tree, "usr/share/keyrings"), exist_ok=True)
@@ -90,12 +96,12 @@ def setup_apt(profile, tree, runner, fetch=None):
             handle.write(repo["line"].format(suite=profile["debian_suite"]) + "\n")
 
 
-def debootstrap(profile, tree, runner):
+def debootstrap(profile: dict[str, Any], tree: str, runner: Runner) -> None:
     runner.run(["debootstrap", "--variant=minbase", "--include=systemd-sysv,dbus,kmod,ca-certificates,python3,gnupg,locales,procps,iproute2",
                 profile["debian_suite"], tree, profile["debian_mirror"]])
 
 
-def install_packages(chroot, packages, runner):
+def install_packages(chroot: Chroot, packages: Iterable[str], runner: Runner) -> None:
     """apt-get update and one unpinned install of every package; policy-rc.d keeps the packages' own postinst from starting services."""
     policy = chroot.path("usr/sbin/policy-rc.d")
     with open(policy, "w") as handle:
@@ -108,7 +114,7 @@ def install_packages(chroot, packages, runner):
         os.unlink(policy)
 
 
-def sha256_of(path):
+def sha256_of(path: str) -> str:
     digest = hashlib.sha256()
     with open(path, "rb") as handle:
         for chunk in iter(lambda: handle.read(1 << 20), b""):
@@ -116,7 +122,7 @@ def sha256_of(path):
     return digest.hexdigest()
 
 
-def install_pinned_downloads(infra, tree, chroot, work, arch_env, fetch=None):
+def install_pinned_downloads(infra: ModuleType, tree: str, chroot: Chroot, work: str, arch_env: dict[str, str], fetch: Fetcher | None = None) -> list[str]:
     """MANIFEST entries that download a pinned artifact (kopia binary, wkhtmltopdf): fetched, sha256-checked, installed. Returns [names]."""
     fetch = fetch or download
     done = []
@@ -145,7 +151,7 @@ def install_pinned_downloads(infra, tree, chroot, work, arch_env, fetch=None):
     return done
 
 
-def wipe_default_datadir(tree, datadir):
+def wipe_default_datadir(tree: str, datadir: str) -> None:
     """The package's empty cluster directory is emptied so the restored cluster takes its place."""
     path = os.path.join(tree, datadir.lstrip("/"))
     if os.path.isdir(path):
@@ -154,14 +160,14 @@ def wipe_default_datadir(tree, datadir):
             shutil.rmtree(full) if os.path.isdir(full) and not os.path.islink(full) else os.unlink(full)
 
 
-def chown_tree(path, uid, gid):
+def chown_tree(path: str, uid: int, gid: int) -> None:
     os.lchown(path, uid, gid)
     for current, dirs, files in os.walk(path):
         for name in dirs + files:
             os.lchown(os.path.join(current, name), uid, gid)
 
 
-def passwd_ids(tree, name):
+def passwd_ids(tree: str, name: str) -> tuple[int, int]:
     """(uid, gid) of account `name` in the image's /etc/passwd."""
     for line in acc.open_text(os.path.join(tree, "etc/passwd")).splitlines():
         parts = line.split(":")
@@ -170,7 +176,7 @@ def passwd_ids(tree, name):
     raise RestorationError("account %s is not in the image" % name)
 
 
-def restore_database(bs, plan, stage, profile, target_time, runner, work):
+def restore_database(bs: BackupSet, plan: DbPlan, stage: str, profile: dict[str, Any], target_time: str | None, runner: Runner, work: str) -> dict[str, Any]:
     """Restore the PostgreSQL cluster into the staging tree with point-in-time recovery settings, WAL included, so the first start needs no backup.
 
     pgBackRest repository: `pgbackrest restore` (run by the builder against the staged data directory), WAL pre-fetched by `archive-get`
@@ -186,6 +192,8 @@ def restore_database(bs, plan, stage, profile, target_time, runner, work):
     meta = {"kind": plan.kind, "backup": plan.backup_label, "backup_stop": plan.stop_time, "target_time": target_time, "datadir": datadir_rel,
             "wal_dir": wal_rel}
     if plan.kind == "pgbackrest":
+        if bs.pg is None:
+            raise RestorationError("the backup set has no pgBackRest repository")
         bs.pg.pg_path = datadir
         bs.pg.write_config()
         bs.pg.restore(datadir, target_time, os.path.join("/", wal_rel), plan.backup_label)
@@ -196,12 +204,12 @@ def restore_database(bs, plan, stage, profile, target_time, runner, work):
     return meta
 
 
-def overlay_stage(stage, tree, runner):
+def overlay_stage(stage: str, tree: str, runner: Runner) -> None:
     """Lay the staged restore over the image (backups win over package defaults), moving the files; owners stay numeric."""
     runner.run(["rsync", "-aHAX", "--numeric-ids", "--remove-source-files", stage + "/", tree + "/"])
 
 
-def chown_database(tree, meta):
+def chown_database(tree: str, meta: dict[str, Any]) -> None:
     uid, gid = passwd_ids(tree, "postgres")
     for rel in (meta["datadir"], meta["wal_dir"]):
         path = os.path.join(tree, rel.lstrip("/"))
@@ -209,8 +217,10 @@ def chown_database(tree, meta):
             chown_tree(path, uid, gid)
 
 
-def restore_streams(bs, plan, datadir, wal_dir, wal_abs, target_time, runner, work):
+def restore_streams(bs: BackupSet, plan: DbPlan, datadir: str, wal_dir: str, wal_abs: str, target_time: str | None, runner: Runner, work: str) -> dict[str, Any]:
     """Sealed base backup (base.tar.zst, pg_wal.tar) and WAL batches from kopia into datadir and wal_dir, recovery settings written."""
+    if bs.kopia is None:
+        raise RestorationError("the backup set has no kopia repository")
     scratch = os.path.join(work, "streams")
     shutil.rmtree(scratch, ignore_errors=True)
     bs.kopia.restore(plan.details["base"]["id"], os.path.join(scratch, "base"))
@@ -242,7 +252,7 @@ def restore_streams(bs, plan, datadir, wal_dir, wal_abs, target_time, runner, wo
     return {"wal_files": count}
 
 
-def strip_machine_specific(tree, patterns):
+def strip_machine_specific(tree: str, patterns: Iterable[str]) -> list[str]:
     """Delete from the image the paths that belong to the new machine (restored or created by the packages). Returns the removed paths."""
     removed = []
     for pattern in patterns:
@@ -261,7 +271,7 @@ def strip_machine_specific(tree, patterns):
     return removed
 
 
-def exclude_patterns(profile):
+def exclude_patterns(profile: dict[str, Any]) -> list[str]:
     """rsync/tar exclude patterns, anchored at the top of the image: the machine-specific paths, the package database (merged by the post
     step), and the description files."""
     machine = ["/" + p for p in profile["machine_specific"]]
@@ -282,17 +292,17 @@ EXCLUDE_NOTES = """\
 """
 
 
-def write_exclude(tree, profile):
+def write_exclude(tree: str, profile: dict[str, Any]) -> None:
     with open(os.path.join(tree, "EXCLUDE.txt"), "w") as handle:
         handle.write(EXCLUDE_NOTES + "\n".join(exclude_patterns(profile)) + "\n")
 
 
-def snapshot_base_accounts(tree):
+def snapshot_base_accounts(tree: str) -> tuple[set[str], set[str]]:
     return {row.split(":")[0] for row in acc.open_text(os.path.join(tree, "etc/passwd")).splitlines()}, \
         {row.split(":")[0] for row in acc.open_text(os.path.join(tree, "etc/group")).splitlines()}
 
 
-def write_post_step_files(tree, base_users, base_groups, runner):
+def write_post_step_files(tree: str, base_users: Container[str], base_groups: Container[str], runner: Runner) -> dict[str, Any]:
     """Install hams-restore-post, the accounts file for it, and the image's dpkg database copy it merges."""
     share = os.path.join(tree, SHARE_REL)
     os.makedirs(share, exist_ok=True)
@@ -337,13 +347,13 @@ backup before relying on point-in-time recovery again.
 """
 
 
-def write_restore_md(tree, profile, meta):
+def write_restore_md(tree: str, profile: dict[str, Any], meta: dict[str, Any]) -> None:
     text = RESTORE_MD.format(built=meta["built_utc"], suite=profile["debian_suite"], wal_dir=os.path.join(os.path.dirname(meta["database"]["datadir"]), "wal_restore"),
                              target=meta["database"].get("target_time") or "end of the archived WAL")
     with open(os.path.join(tree, "RESTORE.md"), "w") as handle:
         handle.write(text)
 
 
-def write_meta(tree, meta):
+def write_meta(tree: str, meta: dict[str, Any]) -> None:
     with open(os.path.join(tree, "RESTORATION_META.json"), "w") as handle:
         json.dump(meta, handle, indent=1, sort_keys=True)

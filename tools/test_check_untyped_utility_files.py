@@ -352,6 +352,17 @@ class ResolveRepoRootTests(unittest.TestCase):
         self.assertEqual(chk._resolve_repo_root(fake_repo), fake_repo)
 
 
+class StrictFlagsTests(unittest.TestCase):
+    def test_a_fully_typed_package_also_runs_under_disallow_untyped_defs(self):
+        root = os.sep + "repo"
+        typed = os.path.join(root, "hams_shared", "tools", "restoration_system", "build.py")
+        self.assertEqual(chk.strict_flags(root, typed), ["--disallow-untyped-defs"])
+
+    def test_any_other_file_keeps_only_check_untyped_defs(self):
+        root = os.sep + "repo"
+        self.assertEqual(chk.strict_flags(root, os.path.join(root, "daemons", "x", "main.py")), [])
+
+
 class ResolveRepoRootsTests(unittest.TestCase):
     # Regression test for the second half of the same repo-root problem as ResolveRepoRootTests above:
     # _resolve_repo_root's redirect only ever lands on ONE repo (hams_shared's

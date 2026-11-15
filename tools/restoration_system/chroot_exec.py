@@ -8,7 +8,7 @@ import subprocess
 import sys
 
 
-def main(argv):
+def main(argv: list[str]) -> None:
     tree, command = argv[1], argv[2:]
     if not command:
         sys.exit("chroot_exec: no command")

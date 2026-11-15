@@ -7,6 +7,8 @@ environment (`secret_env`). The log records the argument list and the NAMES of t
 import os
 import subprocess
 import sys
+from collections.abc import Callable, Mapping
+from typing import IO, Any
 
 
 # [@ANCHOR: runner:runner_restoration_error_class]
@@ -21,13 +23,13 @@ SAFE_ENV_KEYS = ("PATH", "LANG", "LC_ALL", "TERM", "TMPDIR", "HOME")
 class Runner:
     """Runs commands with a minimal environment; `log` receives one line per command."""
 
-    def __init__(self, log=None, base_env=None):
+    def __init__(self, log: Callable[[str], object] | None = None, base_env: Mapping[str, str] | None = None) -> None:
         self.log = log or (lambda line: sys.stderr.write(line + "\n"))
         source = os.environ if base_env is None else base_env
         self.base_env = {k: v for k, v in source.items() if k in SAFE_ENV_KEYS}
         self.base_env.setdefault("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
 
-    def run(self, argv, secret_env=None, extra_env=None, check=True, capture=False, stdin=None, cwd=None, timeout=None):
+    def run(self, argv: list[str], secret_env: Mapping[str, str] | None = None, extra_env: Mapping[str, str] | None = None, check: bool = True, capture: bool = False, stdin: int | IO[Any] | None = None, cwd: str | None = None, timeout: float | None = None) -> subprocess.CompletedProcess[str]:
         """Run argv. Returns the CompletedProcess. RestorationError when check and the exit status is not 0.
 
         With capture, stdout is returned as text; stderr is always kept and quoted (a tail of it) in the error."""

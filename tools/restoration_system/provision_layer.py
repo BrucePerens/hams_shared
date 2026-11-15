@@ -6,11 +6,14 @@ missing is created from the MANIFEST: directories with their owner and mode, fil
 produced here (a value only a running host has, a copy of code, a binary built on the host) are listed, not guessed.
 """
 import os
+from collections.abc import Mapping
+from types import ModuleType
+from typing import Any
 
 from . import accounts as acc
 
 
-def read_env_values(tree):
+def read_env_values(tree: str) -> dict[str, str]:
     """{NAME: value} from the restored /opt/hams/etc/*.env files, for rendering MANIFEST content. Values stay in memory."""
     values = {}
     base = os.path.join(tree, "opt/hams/etc")
@@ -25,14 +28,14 @@ def read_env_values(tree):
     return values
 
 
-def id_lookup(tree):
+def id_lookup(tree: str) -> tuple[dict[str, int], dict[str, int]]:
     """(user name -> uid, group name -> gid) from the image's own files."""
     users = {row.split(":")[0]: int(row.split(":")[2]) for row in acc.open_text(os.path.join(tree, "etc/passwd")).splitlines() if row}
     groups = {row.split(":")[0]: int(row.split(":")[2]) for row in acc.open_text(os.path.join(tree, "etc/group")).splitlines() if row}
     return users, groups
 
 
-def apply_owner(path, owner, mode, users, groups):
+def apply_owner(path: str, owner: str | None, mode: int | None, users: Mapping[str, int], groups: Mapping[str, int]) -> None:
     uid = gid = -1
     if owner and ":" in owner:
         user, group = owner.split(":", 1)
@@ -42,7 +45,7 @@ def apply_owner(path, owner, mode, users, groups):
         os.chmod(path, mode)
 
 
-def provision_directories(infra, tree, classes, users, groups, report):
+def provision_directories(infra: ModuleType, tree: str, classes: list[str], users: Mapping[str, int], groups: Mapping[str, int], report: dict[str, Any]) -> None:
     for spec in infra.MANIFEST["directories"]:
         if "prod" not in spec["environments"] or not infra._in_host_class(spec, classes):
             continue
@@ -55,7 +58,7 @@ def provision_directories(infra, tree, classes, users, groups, report):
         report["directories_created"].append(spec["path"])
 
 
-def provision_files(infra, tree, classes, users, groups, env_values, report):
+def provision_files(infra: ModuleType, tree: str, classes: list[str], users: Mapping[str, int], groups: Mapping[str, int], env_values: Mapping[str, str], report: dict[str, Any]) -> None:
     for spec in infra.MANIFEST["static_files"]:
         path = spec["path"]
         if "prod" not in spec.get("environments", []) or not infra._in_host_class(spec, classes) or infra.is_apt_only(spec):
@@ -82,7 +85,7 @@ def provision_files(infra, tree, classes, users, groups, env_values, report):
         report["files_written_from_manifest"].append(path)
 
 
-def new_report():
+def new_report() -> dict[str, Any]:
     keys = ("directories_from_backup_or_packages", "directories_created", "files_from_backup", "files_downloaded_or_built_at_provisioning",
             "files_needing_code", "files_unrenderable", "files_written_from_manifest")
     return {key: [] for key in keys}
