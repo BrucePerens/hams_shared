@@ -598,6 +598,130 @@ class PruneAndCommandTests(SnapshotTestBase):
         self.assertTrue(any("open is behind origin/main" in line for line in out))
 
 
+class MutationHardeningTests(SnapshotTestBase):
+    """Cases that a mutation run (2026-11-14) showed no test depended on: each would let a gate pass a broken or wrong tree."""
+
+    # Tests [@ANCHOR: gate_snapshot:verify_snapshot]
+    def test_a_missing_tree_and_a_redirected_hams_shared_link_are_refused(self):
+        manifest = self.create()
+        trees, env = manifest["trees"], self.env(manifest)
+        link = os.path.join(trees["com"], "hams_shared")
+        os.remove(link)
+        os.symlink(self.ws.path("hams_open", "hams_shared"), link)
+        self.assertTrue(any("not to the gate's hams_shared" in p for p in gs.verify_snapshot(trees["parent"], environ=env)))
+        git(trees["com"], "checkout", "-q", "--", "hams_shared")
+        self.assertEqual(gs.verify_snapshot(trees["parent"], environ=env), [])
+        subprocess.run(["rm", "-rf", trees["shared"]], check=True)
+        problems = gs.verify_snapshot(trees["parent"], environ=env)
+        self.assertTrue(any(p.startswith("shared tree") and "is missing" in p for p in problems), problems)
+
+    # Tests [@ANCHOR: gate_snapshot:verify_snapshot]
+    def test_a_stale_shared_pin_alone_is_refused_and_an_unlisted_module_needs_both_trees(self):
+        manifest = self.create()
+        trees, env = manifest["trees"], self.env(manifest)
+        self.ws.advance("hams_open/hams_shared", "shared")
+        git(self.ws.path("hams_open"), "add", "hams_shared")
+        git(self.ws.path("hams_open"), "commit", "-q", "-m", "bump")
+        git(self.ws.path("hams_open"), "push", "-q", "origin", "main")
+        problems = gs.verify_snapshot(trees["parent"], environ=env)
+        self.assertTrue(any(p.startswith("open is behind") for p in problems), problems)
+        self.assertTrue(any(p.startswith("shared is behind") for p in problems), problems)
+
+    # Tests [@ANCHOR: gate_snapshot:create_snapshot]
+    def test_a_real_problem_in_the_finished_snapshot_raises_but_only_behind_is_tolerated(self):
+        for problems, raises in ((["x"], True), (["open is behind origin/main: a", "y"], True), (["open is behind origin/main: a"], False)):
+            with unittest.mock.patch.object(gs, "verify_snapshot", return_value=problems):
+                if raises:
+                    with self.assertRaises(gs.SnapshotError):
+                        self.create()
+                else:
+                    self.assertIn("trees", self.create())
+
+    # Tests [@ANCHOR: gate_snapshot:create_snapshot]
+    def test_build_false_runs_no_build_and_the_manifest_is_complete(self):
+        calls = []
+        with self.assertRaises(gs.SnapshotError):  # nothing built: the artifacts are missing, which verify reports
+            self.create(build=False, run=lambda *a: calls.append(a) or 0)
+        self.assertEqual(calls, [])
+        manifest = self.create()
+        self.assertEqual(manifest["version"], gs.MANIFEST_VERSION)
+        self.assertRegex(manifest["created"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        parent = manifest["trees"]["parent"]
+        with open(os.path.join(parent, gs.SHARDS_NAME), encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle), manifest["shards"])
+        for number in range(1, len(manifest["shards"]) + 1):
+            self.assertTrue(os.path.isdir(os.path.join(parent, "logs", "shard%d" % number)))
+
+    # Tests [@ANCHOR: gate_snapshot:create_snapshot]
+    def test_the_cargo_target_comes_from_the_environment_and_balancing_follows_the_shard_file(self):
+        target = os.path.join(self.tmp.name, "env-cargo")
+        with unittest.mock.patch.dict(os.environ, {"CARGO_TARGET_DIR": target}):
+            manifest = gs.create_snapshot(self.ws.root, os.path.join(self.tmp.name, "gates"), 2, out=self.out.append,
+                                          hostname="devbox", run=fake_run)
+        self.assertEqual(manifest["cargo_target_dir"], target)
+        seen = []
+
+        def spy(modules, count, previous, seconds, splits):
+            seen.append((previous, seconds, splits))
+            return [list(modules)], [None]
+        with unittest.mock.patch.object(gs, "make_split_shards", spy):
+            self.create()
+            self.create(balance=True, shards_file=None)
+            shards_file = os.path.join(self.tmp.name, "s.json")
+            write(shards_file, '[["mod_com"]]')
+            self.create(shards_file=shards_file)
+            self.create(shards_file=shards_file, balance=True)
+        self.assertEqual([bool(s[1] and s[2]) for s in seen], [True, True, False, True])
+        self.assertEqual([s[0] for s in seen], [None, None, [["mod_com"]], [["mod_com"]]])
+
+    # Tests [@ANCHOR: gate_snapshot:create_snapshot]
+    def test_a_missing_or_unparsable_shard_file_is_refused(self):
+        with self.assertRaisesRegex(gs.SnapshotError, "cannot read the shard file"):
+            self.create(shards_file=os.path.join(self.tmp.name, "absent.json"))
+        bad = os.path.join(self.tmp.name, "bad.json")
+        write(bad, "{not json")
+        with self.assertRaisesRegex(gs.SnapshotError, "cannot read the shard file"):
+            self.create(shards_file=bad)
+
+    # Tests [@ANCHOR: gate_snapshot:artifact_problems]
+    def test_artifact_problems_reads_the_process_environment_when_none_is_given(self):
+        manifest = self.create()
+        trees = gs.Trees(**manifest["trees"])
+        relay = gs.ARTIFACTS[1]
+        with unittest.mock.patch.dict(os.environ, {gs.RELAY_BIN_ENV: "/somewhere/else"}):
+            self.assertTrue(any(gs.RELAY_BIN_ENV in p for p in gs.artifact_problems(relay, trees, self.cargo)))
+        with unittest.mock.patch.dict(os.environ, {gs.RELAY_BIN_ENV: ""}):
+            self.assertEqual(gs.artifact_problems(relay, trees, self.cargo), [])
+
+    # Tests [@ANCHOR: gate_snapshot:artifact_problems]
+    def test_a_source_exactly_as_new_as_the_output_is_not_newer(self):
+        manifest = self.create()
+        trees = gs.Trees(**manifest["trees"])
+        artifact = gs.ARTIFACTS[1]
+        output = gs.artifact_output(artifact, trees, self.cargo)
+        newest = max(gs._newest_mtime(gs._tree_path(trees, artifact.tree), source) for source in artifact.sources)
+        os.utime(output, (newest, newest))
+        self.assertFalse(any("is older than its source" in p for p in gs.artifact_problems(artifact, trees, self.cargo, {})))
+        os.utime(output, (newest - 5, newest - 5))
+        self.assertTrue(any("is older than its source" in p for p in gs.artifact_problems(artifact, trees, self.cargo, {})))
+
+    # Tests [@ANCHOR: gate_snapshot:make_split_shards]
+    def test_split_shards_give_unknown_modules_the_median_and_break_ties_by_module_name(self):
+        splits = {"zz": {"X": 1}}
+        self.assertEqual(gs.make_split_shards(["a", "b", "c"], 2, None, {"a": 10, "b": 20}, splits)[0], [["a", "b"], ["c"]])
+        self.assertEqual(gs.make_split_shards(["c", "a", "b"], 2, None, {"a": 10, "b": 10, "c": 10}, splits)[0], [["a", "c"], ["b"]])
+        self.assertEqual(gs.make_split_shards(["c", "a"], 0, None, {"a": 10, "c": 10}, splits)[0], [["a", "c"]])
+
+    # Tests [@ANCHOR: gate_snapshot:make_split_shards]
+    def test_a_module_whose_parts_all_land_in_one_shard_runs_as_the_whole_module_in_the_command(self):
+        shards, tags = gs.make_split_shards(["m", "n"], 1, None, {"m": 50, "n": 5}, {"m": {"X": 20}})
+        self.assertEqual(shards, [["m", "n"]])
+        self.assertIsNone(tags[0])
+        shards, tags = gs.make_split_shards(["m", "n"], 2, None, {"m": 50, "n": 5}, {"m": {"X": 40}})
+        self.assertEqual(sorted(m for s in shards for m in s), ["m", "m", "n"])  # m is cut into two shards
+        self.assertTrue(any(t for t in tags))
+
+
 class RunnerFlagTests(unittest.TestCase):
     # Tests [@ANCHOR: gate_snapshot:main]
     def test_the_runner_offers_snapshot_gate(self):
