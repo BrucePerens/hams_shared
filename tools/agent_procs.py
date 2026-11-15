@@ -820,7 +820,8 @@ def wait_job(name, timeout=DEFAULT_WAIT_TIMEOUT, interval=POLL_INTERVAL, sleep=t
             rec = read_record(name, directory) or rec
             state = job_state(rec)
         if state == "exited":
-            return WaitResult(EX_OK if rec.exit_code == 0 else EX_FAILED, f"job {name} exited with code {rec.exit_code}")
+            why = " (it hit its own timeout and was stopped)" if rec.exit_reason == "timeout" else ""
+            return WaitResult(EX_OK if rec.exit_code == 0 else EX_FAILED, f"job {name} exited with code {rec.exit_code}{why}")
         if state == "lost":
             return WaitResult(EX_FAILED, f"job {name} is gone without an exit code (killed?); log: {rec.log}")
         if clock() >= deadline:
