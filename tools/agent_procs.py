@@ -22,7 +22,7 @@ pattern search never lists the searcher, its ancestors or its descendants. Pure 
                           [--while-pid N] [--timeout S]       exit 0 done, 1 failed, 75 timeout, 2 usage, 3 refused
     agent_procs.py run    NAME [--tag AGENT] [--cwd DIR] [--timeout S] [--mem-max SIZE] [--nice N] -- COMMAND...
                           a named job; log in ~/.cache/hams-jobs/NAME.log; ends after 1800 s (`--timeout 0`: never) and is
-                          capped at 6G (`--mem-max none`: no cap; systemd-run --user scope, else ulimit -v); a timeout stops
+                          capped at 6G, 24G when the command has `cargo` or `rustc` (`--mem-max none`: no cap; systemd-run --user scope, else ulimit -v); a timeout stops
                           the whole process group (exit 124, reason `timeout` in the record); the command dies with its wrapper
     agent_procs.py jobs   [--json]                         shows each job's timeout and memory cap
     agent_procs.py reap   [--min-age S] [--apply] [--force]   your orphans: cwd a deleted path under /storage/agent_work, or
@@ -64,6 +64,8 @@ DEFAULT_WAIT_TIMEOUT = 1800.0
 DEFAULT_GRACE = 10.0
 DEFAULT_TIMEOUT = 1800
 DEFAULT_MEM_MAX = "6G"
+# The large relay crate's cargo builds and tests need more than 6G (an agent had its runs killed, 2026-11-14).
+CARGO_MEM_MAX = "24G"
 KILL_GRACE = 10
 AGENT_WORK_ROOT = "/storage/agent_work"
 DEFAULT_MIN_AGE = 900
@@ -1053,11 +1055,21 @@ def cmd_wait(args, out=sys.stdout):
     return result.code
 
 
+# [@ANCHOR: agent_procs:default_mem_max]
+def default_mem_max(command):
+    """The memory cap when `--mem-max` is not given: `CARGO_MEM_MAX` (24G) when any word of `command` is, or ends in a path to,
+    `cargo` or `rustc`; otherwise `DEFAULT_MEM_MAX` (6G)."""
+    for word in command or ():
+        if os.path.basename(str(word)) in ("cargo", "rustc"):
+            return CARGO_MEM_MAX
+    return DEFAULT_MEM_MAX
+
+
 # [@ANCHOR: agent_procs:cmd_run]
 def cmd_run(args, out=sys.stdout):
     """`run` subcommand: starts the named job and prints its name, pid, process group, log path and how to wait for it."""
     timeout = DEFAULT_TIMEOUT if args.timeout is None else int(args.timeout)
-    mem = DEFAULT_MEM_MAX if args.mem_max is None else args.mem_max
+    mem = default_mem_max(args.command) if args.mem_max is None else args.mem_max
     mem = None if mem.lower() == "none" else mem
     if mem:
         parse_size(mem)

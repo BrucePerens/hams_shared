@@ -1153,6 +1153,18 @@ class LimitTests(ProcTestCase):
         self.assertIn("timeout=1800s mem=6G", listing)
         self.assertIn("timeout=none mem=none", listing)
 
+    # Tests [@ANCHOR: agent_procs:default_mem_max]
+    def test_cargo_and_rustc_commands_get_the_higher_default_cap(self):
+        self.assertEqual(ap.default_mem_max(["python3", "test.py"]), "6G")
+        self.assertEqual(ap.default_mem_max(None), "6G")
+        self.assertEqual(ap.default_mem_max(["nice", "-n", "10", "env", "A=1", "cargo", "test"]), "24G")
+        self.assertEqual(ap.default_mem_max(["/home/u/.cargo/bin/cargo", "build"]), "24G")
+        self.assertEqual(ap.default_mem_max(["rustc", "x.rs"]), "24G")
+        self.assertEqual(ap.default_mem_max(["echo", "cargo-deny"]), "6G")
+        cli("run", "cg", "--", "cargo", "--version", env=self.env)
+        cli("wait", "--job", "cg", "--timeout", "30", env=self.env)
+        self.assertEqual(ap.read_record("cg", self.jobs).mem_max, "24G")
+
     def test_the_command_ends_when_its_wrapper_dies(self):
         rec = ap.start_job("orphan", ["sleep", "61.5"], mem_max=None, directory=self.jobs)
         mine = lambda: [i for i in ap.snapshot().values() if i.argv[:2] == ("sleep", "61.5")]  # noqa: E731

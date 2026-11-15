@@ -3690,9 +3690,13 @@ Purpose: the `find` subcommand. Prints one `ps_line` per match, with `  PROTECTE
 
 Purpose: the `wait` subcommand: exactly one of `--pid [--start-time]`, `--job`, `--file [--contains --fail-contains --while-pid]`, or a selector (`--cwd-under`, `--cmd-contains`, `--cmd-regex`, `--user`, `--any-user`, with `--all` / `--allow-missing`), with `--timeout` (default 1800 s) and `--interval`. Prints the result message; returns its code. Raises `ProcError` code 2 when not exactly one target.
 
+### `[@ANCHOR: agent_procs:default_mem_max]` `default_mem_max(command)`
+
+Purpose: the memory cap `run` uses when `--mem-max` is not given. Argument: `command`, the argv list (or None). Returns `CARGO_MEM_MAX` (`24G`) when any word's basename is `cargo` or `rustc` (so `nice -n 10 env X=1 cargo test` and `/home/u/.cargo/bin/cargo` count), else `DEFAULT_MEM_MAX` (`6G`, Odoo tests and everything else). Pure; no I/O. Test: `test_agent_procs.py`.
+
 ### `[@ANCHOR: agent_procs:cmd_run]` `cmd_run(args, out=sys.stdout)`
 
-Purpose: the `run` subcommand: `run NAME [--tag AGENT] [--cwd DIR] [--timeout S] [--mem-max SIZE] [--nice N] -- COMMAND...`. Defaults: timeout 1800 s, memory cap 6G; `--timeout 0` / `--mem-max none` opt out and print a loud WARNING; without `systemd-run --user` the cap is `ulimit -v` and the output says so. A timeout stops the whole process group (exit 124, `exit_reason` `timeout` in the record) and the command dies when its wrapper dies. `jobs` shows `timeout=` and `mem=`. Prints the job's pid, process group, log path and the wait and stop commands. Returns 0.
+Purpose: the `run` subcommand: `run NAME [--tag AGENT] [--cwd DIR] [--timeout S] [--mem-max SIZE] [--nice N] -- COMMAND...`. Defaults: timeout 1800 s, memory cap 6G (24G when a word of the command is `cargo` or `rustc`, see `default_mem_max`: the large relay crate's builds and tests were killed at 6G); `--timeout 0` / `--mem-max none` opt out and print a loud WARNING; without `systemd-run --user` the cap is `ulimit -v` and the output says so. A timeout stops the whole process group (exit 124, `exit_reason` `timeout` in the record) and the command dies when its wrapper dies. `jobs` shows `timeout=` and `mem=`. Prints the job's pid, process group, log path and the wait and stop commands. Returns 0.
 
 | Argument | Type | Meaning |
 |---|---|---|
