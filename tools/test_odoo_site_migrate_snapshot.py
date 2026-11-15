@@ -22,6 +22,7 @@ import shutil
 import sqlite3
 import tempfile
 import unittest
+import urllib.error
 import xmlrpc.client
 
 import odoo_site_migrate as mig
@@ -830,6 +831,21 @@ class SiteCompareTests(unittest.TestCase):
         self.assertTrue(sleeps and sleeps[-1] > 0)  # the second request waited
         self.assertEqual(opener.requests[0].get_header("User-agent"), sc.USER_AGENT)
         self.assertEqual(opener.requests[0].get_header("Host"), "postopen.org")
+
+    def test_network_error_is_status_zero_not_a_crash(self):
+        class Opener:
+            def open(self, request, timeout=0):
+                raise urllib.error.URLError("connection refused")
+
+        tmp = tempfile.mkdtemp(prefix="compare_")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        with open(os.path.join(tmp, "ROOT.html"), "w", encoding="utf-8") as handle:
+            handle.write("<main>x</main>")
+        fetcher = sc.Fetcher("http://127.0.0.1:1", interval=0, sleep=lambda s: None, opener=Opener())
+        self.assertEqual(fetcher.get("/a"), (0, b"", {}))
+        rows, problems = sc.run(tmp, fetcher, ["/"], out=lambda *a: None)
+        self.assertEqual(problems, 1)
+        self.assertIn("answers 0", rows[0][1])
 
 
 if __name__ == "__main__":
