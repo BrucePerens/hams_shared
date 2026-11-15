@@ -9,10 +9,14 @@ import importlib.abc
 import importlib.util
 import os
 import sys
+from collections.abc import Sequence
+from typing import Any
+from types import ModuleType
+from importlib.machinery import ModuleSpec
 
 
 class _ReverseFinder(importlib.abc.MetaPathFinder):
-    def find_spec(self, name, path, target=None):
+    def find_spec(self, name: str, path: Sequence[str] | None, target: ModuleType | None = None) -> ModuleSpec | None:
         if name != "odoo.tests.loader":
             return None
         sys.meta_path.remove(self)
@@ -20,20 +24,23 @@ class _ReverseFinder(importlib.abc.MetaPathFinder):
             spec = importlib.util.find_spec(name)
         finally:
             sys.meta_path.insert(0, self)
-        orig_exec = spec.loader.exec_module
+        if spec is None or spec.loader is None:
+            return None
+        loader = spec.loader
+        orig_exec = loader.exec_module
 
-        def exec_module(module):
+        def exec_module(module: ModuleType) -> None:
             orig_exec(module)
             orig_make_suite = module.make_suite
 
-            def make_suite(module_names, position="at_install"):
+            def make_suite(module_names: Sequence[str], position: str = "at_install") -> Any:
                 suite = orig_make_suite(module_names, position)
                 suite._tests = list(reversed(list(suite._tests)))
                 return suite
 
-            module.make_suite = make_suite
+            setattr(module, "make_suite", make_suite)
 
-        spec.loader.exec_module = exec_module
+        setattr(loader, "exec_module", exec_module)
         return spec
 
 

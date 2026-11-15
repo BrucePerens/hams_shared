@@ -152,6 +152,7 @@ def follow_imports_flags(candidate):
 # Packages (repo-relative directory prefixes) that are fully annotated and so also run under --disallow-untyped-defs.
 STRICT_TYPED_PREFIXES = [
     "hams_shared/tools/restoration_system",
+    "hams_shared/tools/test_order_hook",
 ]
 
 
@@ -169,6 +170,7 @@ SCAN_ROOTS = [
     "daemons",
     "ingest",
     "hams_shared/tools/restoration_system",
+    "hams_shared/tools/test_order_hook",
 ]
 
 # Repo-relative directory prefixes to never scan, even under SCAN_ROOTS.
