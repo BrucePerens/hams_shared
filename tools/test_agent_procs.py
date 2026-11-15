@@ -575,6 +575,13 @@ class WaitTests(ProcTestCase):
         self.assertEqual(result.code, 1)
         self.assertIn("disappeared", result.message)
 
+    def test_wait_job_says_when_the_job_hit_its_own_timeout(self):
+        rec = ap.JobRecord("slow", "", 11, 11, 11, 5, "/w", ["x"], "/l", 1.0, "bruce", exit_code=124, exit_reason="timeout")
+        ap.write_record(rec, self.jobs)
+        result = ap.wait_job("slow", timeout=5, interval=0.01, directory=self.jobs)
+        self.assertEqual(result.code, 1)
+        self.assertIn("its own timeout", result.message)
+
     def test_wait_file_fails_when_the_producer_dies_first(self):
         producer = self.spawn("sleep 0.5")
         result = ap.wait_file(os.path.join(self.tmp, "never"), while_pid=producer.pid, timeout=20, interval=0.05)
