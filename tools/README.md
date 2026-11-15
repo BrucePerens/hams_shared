@@ -304,6 +304,10 @@ the source. An existing library (even a stale one) is never replaced; `check_clo
 
 Returns the source path that was copied, or `None` (nothing needed, or no fitting build: the later ffi check reports it). A copy of about 10 MB with a fresh mtime, so it is not "older than main.go".
 
+### `[@ANCHOR: test:warn_if_sibling_is_not_beside_the_tree]` `warn_if_sibling_is_not_beside_the_tree(base_dir, repo_root, chosen)`
+
+Purpose: a linked worktree scans the main checkout's parent for hams_open, so without `HAMS_OPEN_TREE` it silently ran the main checkout's tree instead of its own sibling. This prints a stderr warning naming the tree used and telling the caller to set `HAMS_OPEN_TREE`. Silent for the main checkout using its own sibling. Called by `get_addons_path()`.
+
 ### `[@ANCHOR: test:anchor_scan_sibling_dir]` `anchor_scan_sibling_dir(base_dir, other_repo_name, environ=None)`
 
 Purpose: finds the other repository's checkout (hams_open for a hams_com run, and the reverse) so the pre-flight anchor scan

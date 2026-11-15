@@ -1766,6 +1766,23 @@ def warn_if_sibling_checkout_is_behind(path):
         )
 
 
+# [@ANCHOR: test:warn_if_sibling_is_not_beside_the_tree]
+def warn_if_sibling_is_not_beside_the_tree(base_dir, repo_root, chosen):
+    """Say loudly when the sibling checkout chosen without HAMS_OPEN_TREE is not the one beside BASE_DIR.
+
+    A linked worktree scans the MAIN checkout's parent, so it silently ran the main checkout's
+    hams_open instead of the worktree's own sibling tree. Silent when BASE_DIR is the main checkout."""
+    beside = os.path.abspath(os.path.join(base_dir, "..", os.path.basename(chosen)))
+    if repo_root == base_dir and beside == chosen:
+        return
+    note = f"a sibling tree exists beside this one at {beside}" if os.path.isdir(beside) and beside != chosen else "this tree is a linked worktree"
+    print(
+        f"⚠️  WARNING: HAMS_OPEN_TREE is not set, so the run uses {chosen} ({note}). "
+        f"Set HAMS_OPEN_TREE=<tree> to choose the sibling checkout explicitly.",
+        file=sys.stderr,
+    )
+
+
 # [@ANCHOR: test:anchor_scan_sibling_dir]
 def anchor_scan_sibling_dir(base_dir, other_repo_name, environ=None):
     """The other repository's checkout for the pre-flight anchor scan, or None. Full entry: tools/README.md.
@@ -1868,6 +1885,7 @@ def get_addons_path(base_dir):
 
     if found_community and paths[-1] not in (base_dir, repo_root) and not override:
         warn_if_sibling_checkout_is_behind(paths[-1])
+        warn_if_sibling_is_not_beside_the_tree(base_dir, repo_root, paths[-1])
     return ",".join(paths)
 
 
