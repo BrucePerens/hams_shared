@@ -14110,6 +14110,16 @@ def _ensure_line_in_file(path, line):
     return True
 
 
+# [@ANCHOR: infrastructure:_hosts_has_alias]
+def _hosts_has_alias(hosts_text, alias):
+    """True when an uncommented /etc/hosts line lists `alias` as a whole name. A substring test
+    treated any host or comment containing "redis" (e.g. redis-cache, "# no redis here") as the alias."""
+    for line in hosts_text.splitlines():
+        if alias in line.split("#", 1)[0].split()[1:]:
+            return True
+    return False
+
+
 # [@ANCHOR: infrastructure:redis_url]
 def redis_url(env_vars):
     """The redis:// URL for hams_data_relay (Rust), which reads REDIS_URL and nothing else. Built
@@ -14569,7 +14579,7 @@ def provision_environment(
     try:
         with open("/etc/hosts", "r") as f:
             hosts_content = f.read()
-        if "redis" not in hosts_content and not _plan(
+        if not _hosts_has_alias(hosts_content, "redis") and not _plan(
             "append", "/etc/hosts: 127.0.0.1 redis rabbitmq postgres pdns memcached"
         ):
             _logger.info(

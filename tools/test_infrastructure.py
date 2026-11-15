@@ -44,6 +44,17 @@ import smoketest_fixtures as sf_fixtures
 _REAL_OPEN = builtins.open
 
 
+
+class TestHostsHasAlias(unittest.TestCase):
+    def test_whole_name_on_uncommented_line_only(self):
+        # Tests [@ANCHOR: infrastructure:_hosts_has_alias]
+        self.assertTrue(infra._hosts_has_alias("127.0.0.1 localhost redis # x\n", "redis"))
+        self.assertTrue(infra._hosts_has_alias("::1\tredis\n", "redis"))
+        self.assertFalse(infra._hosts_has_alias("10.0.0.5 redis-cache\n", "redis"))
+        self.assertFalse(infra._hosts_has_alias("# 127.0.0.1 redis\n127.0.0.1 localhost # redis\n", "redis"))
+        self.assertFalse(infra._hosts_has_alias("redis\n", "redis"))
+        self.assertFalse(infra._hosts_has_alias("", "redis"))
+
 class _SafePatchTestCase(unittest.TestCase):
     """Matches test_provision.py's own convention: a self.safe_patch()
     wrapper instead of a bare `with patch(...)` context manager or
