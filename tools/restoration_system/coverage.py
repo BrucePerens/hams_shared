@@ -4,6 +4,9 @@
 The report is computed from the profile (what each kind of source carries) and the provisioning MANIFEST (what a server of this kind has).
 It reads no backup and changes no backup configuration. Each GAP is a fact to be filed as a to-do by a person or the coordinator.
 """
+from collections.abc import Iterable
+from types import ModuleType
+from typing import Any
 
 # GAPs that follow from the structure of the backups and the provisioning, with the evidence that makes them gaps.
 # CLOSED_BY: a gap is closed when its member is in the backup set (the builder uses it: captured account numbers, dpkg status, the deployed
@@ -30,18 +33,18 @@ B2_ONLY = [
 ]
 
 
-def covered(path, prefixes):
+def covered(path: str, prefixes: Iterable[str]) -> bool:
     path = "/" + path.lstrip("/")
     return any(path == p or path.startswith(p.rstrip("/") + "/") for p in prefixes)
 
 
-def backup_prefixes(profile, kind):
+def backup_prefixes(profile: dict[str, Any], kind: str) -> list[str]:
     if kind == "b2":
         return list(profile["b2_kopia_paths"]) + list(profile["b2_kopia_files"].values())
     return ["/" + p for p in profile["config_tar_scope"]] + list(profile["local_files_sources"].values())
 
 
-def build_coverage(infra, profile, kind, classes=(), unresolved_accounts=()):
+def build_coverage(infra: ModuleType, profile: dict[str, Any], kind: str, classes: Iterable[str] = (), unresolved_accounts: Iterable[str] = ()) -> dict[str, Any]:
     """{"from_backups": [...], "from_provisioning": [...], "gaps": [(id, title, detail)]} for a source of `kind` ("local" or "b2")."""
     prefixes = backup_prefixes(profile, kind)
     from_backups, from_prov, gaps, needs_code = [], [], [], []
@@ -69,7 +72,7 @@ def build_coverage(infra, profile, kind, classes=(), unresolved_accounts=()):
     return {"from_backups": sorted(from_backups), "from_provisioning": sorted(from_prov), "packages_from_manifest": sorted(packages), "gaps": gaps}
 
 
-def render(report, kind):
+def render(report: dict[str, Any], kind: str) -> str:
     lines = ["COVERAGE of the %s backup set" % kind, "  restored from the backups: %d MANIFEST paths" % len(report["from_backups"]),
              "  produced by provisioning (MANIFEST) or pinned download: %d paths" % len(report["from_provisioning"]),
              "  installed as Debian packages (unpinned): %d" % len(report["packages_from_manifest"]), "  GAPS (in neither): %d" % len(report["gaps"])]

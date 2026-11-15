@@ -4,9 +4,10 @@ import os
 import pty
 import select
 import time
+from typing import TextIO
 
 
-def run_on_tty(argv, answers, timeout=3600, log=None):
+def run_on_tty(argv: list[str], answers: list[tuple[str, str]], timeout: float = 3600, log: TextIO | None = None) -> tuple[int, str]:
     """Run argv with a controlling terminal. `answers` is [(prompt substring, text)]: each text is typed once when its prompt appears.
 
     Returns (exit status, output text). The typed answers are not echoed by the program (it reads them without echo)."""

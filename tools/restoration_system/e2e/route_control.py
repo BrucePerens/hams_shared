@@ -14,7 +14,7 @@ from restoration_system import verify as ver  # noqa: E402
 from restoration_system.runner import RestorationError  # noqa: E402
 
 
-def main(image, profile_path, base):
+def main(image: str, profile_path: str, base: str) -> int:
     profile = prof.load(profile_path)
     work = tempfile.mkdtemp(prefix=".route-control-", dir=base)
     report = ver.verify_image(image, profile, work, network="user", timeout=900)

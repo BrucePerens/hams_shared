@@ -24,7 +24,7 @@ EMIT_COUNTER = [0]
 CHUNK = 120
 
 
-def emit(phase, **data):
+def emit(phase: str, **data: Any) -> None:
     """One result to the second serial port (ttyS1), which nothing else writes to. The JSON is base64 in short numbered lines so that no
     line limit or dropped character of the serial line can damage it: `HAMSVERIFY <id> <index>/<count> <chunk>`."""
     import base64
@@ -54,7 +54,7 @@ def emit(phase, **data):
         sys.stdout.flush()
 
 
-def sh(argv, timeout=60, user=None):
+def sh(argv: list[str], timeout: float = 60, user: str | None = None) -> tuple[int, str, str]:
     if user:
         argv = ["runuser", "-u", user, "--"] + argv
     try:
@@ -66,11 +66,11 @@ def sh(argv, timeout=60, user=None):
         return 127, "", str(exc)
 
 
-def interfaces():
+def interfaces() -> list[str]:
     return [n for n in sorted(os.listdir("/sys/class/net")) if n != "lo"]
 
 
-def routes():
+def routes() -> list[str]:
     out = []
     try:
         with open("/proc/net/route") as handle:
@@ -83,7 +83,7 @@ def routes():
     return out
 
 
-def try_tcp(host, port, timeout=3):
+def try_tcp(host: str, port: int, timeout: float = 3) -> bool:
     s = socket.socket()
     s.settimeout(timeout)
     try:
@@ -95,7 +95,7 @@ def try_tcp(host, port, timeout=3):
         s.close()
 
 
-def try_udp(host, port, payload, timeout=3):
+def try_udp(host: str, port: int, payload: bytes, timeout: float = 3) -> bool:
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.settimeout(timeout)
     try:
@@ -108,7 +108,7 @@ def try_udp(host, port, payload, timeout=3):
         s.close()
 
 
-def try_dns(name):
+def try_dns(name: str) -> bool:
     try:
         socket.setdefaulttimeout(5)
         socket.getaddrinfo(name, 443)
@@ -117,7 +117,7 @@ def try_dns(name):
         return False
 
 
-def mount_modules():
+def mount_modules() -> None:
     """The host kernel's modules arrive on a second disk (the image has none: it is not a machine image); mounted so units can load nft, wireguard."""
     if os.path.exists("/dev/vdb"):
         target = "/lib/modules/" + os.uname().release
@@ -127,7 +127,7 @@ def mount_modules():
         emit("modules", mount=mounted, restart=restarted)
 
 
-def isolation(cfg):
+def isolation(cfg: dict[str, Any]) -> bool:
     """Every check must show NO way out. Any NIC is configured best-effort first, so a route that exists is measured, not assumed away."""
     checks = []
     nics = interfaces()
@@ -155,7 +155,7 @@ def isolation(cfg):
     return ok
 
 
-def unit_state(unit):
+def unit_state(unit: str) -> dict[str, str]:
     props = ["ActiveState", "SubState", "Result", "ExecMainStatus", "ExecMainStartTimestamp", "InvocationID", "NRestarts", "UnitFileState"]
     _, out, _ = sh(["systemctl", "show", unit, "-p", ",".join(props)])
     state = {}
@@ -165,12 +165,12 @@ def unit_state(unit):
     return state
 
 
-def journal(unit, lines=80):
+def journal(unit: str, lines: int = 80) -> str:
     text = sh(["journalctl", "-u", unit, "-b", "--no-pager", "-o", "cat", "-n", str(lines)])[1]
     return text.strip() and text or sh(["systemctl", "status", unit, "--no-pager", "-l"])[1]  # no journal text: systemd's own status lines
 
 
-def wait_running(limit):
+def wait_running(limit: float) -> str:
     end = time.time() + limit
     while time.time() < end:
         _, out, _ = sh(["systemctl", "is-system-running"], timeout=10)
@@ -180,12 +180,12 @@ def wait_running(limit):
     return "timeout"
 
 
-def psql(db, sql, user="postgres"):
+def psql(db: str, sql: str, user: str = "postgres") -> str | None:
     code, out, err = sh(["psql", "-At", "-d", db, "-c", sql], timeout=120, user=user)
     return out.strip() if code == 0 else None
 
 
-def database_checks(cfg):
+def database_checks(cfg: dict[str, Any]) -> dict[str, Any]:
     db = cfg["database"]
     end = time.time() + cfg["verify"].get("recovery_wait_seconds", 300)
     in_recovery = None
@@ -207,13 +207,13 @@ def database_checks(cfg):
     return result
 
 
-def http_checks(cfg):
+def http_checks(cfg: dict[str, Any]) -> list[dict[str, Any]]:
     import urllib.request
     import urllib.error
 
     # [@ANCHOR: guest_agent:guest_agent_no_redirect_class]
     class NoRedirect(urllib.request.HTTPRedirectHandler):
-        def redirect_request(self, *args, **kwargs):
+        def redirect_request(self, *args: Any, **kwargs: Any) -> None:
             return None
 
     out = []
@@ -235,7 +235,7 @@ def http_checks(cfg):
     return out
 
 
-def odoo_login(cfg):
+def odoo_login(cfg: dict[str, Any]) -> dict[str, Any]:
     login = cfg["verify"].get("login")
     if not login or login.get("kind") != "odoo":
         return {"skipped": True}
@@ -257,7 +257,7 @@ def odoo_login(cfg):
     return {"ok": bool(reply.get("result", {}).get("uid")), "detail": "authenticate returned uid %s" % reply.get("result", {}).get("uid")}
 
 
-def collect(cfg):
+def collect(cfg: dict[str, Any]) -> None:
     verify = cfg["verify"]
     system = wait_running(int(verify.get("journal_wait_seconds", 240)))
     for unit in cfg.get("external_fetch_services", []):
@@ -284,7 +284,7 @@ def collect(cfg):
     emit("isolation_after", ok=not interfaces() and not routes() and not try_tcp("1.1.1.1", 443))
 
 
-def run():
+def run() -> None:
     with open(CONFIG) as handle:
         cfg = json.load(handle)
     mount_modules()

@@ -149,6 +149,17 @@ def follow_imports_flags(candidate):
     return ["--follow-imports=silent"] if "hams_shared" + os.sep + "tools" in candidate else []
 
 
+# Packages (repo-relative directory prefixes) that are fully annotated and so also run under --disallow-untyped-defs.
+STRICT_TYPED_PREFIXES = [
+    "hams_shared/tools/restoration_system",
+]
+
+
+def strict_flags(repo_root, candidate):
+    rel = os.path.relpath(candidate, repo_root).replace(os.sep, "/")
+    return ["--disallow-untyped-defs"] if any(rel.startswith(prefix + "/") for prefix in STRICT_TYPED_PREFIXES) else []
+
+
 # Repo-relative paths (files or directories) to scan.
 SCAN_ROOTS = [
     "ham_com/models/callsign_validation.py",
@@ -317,7 +328,7 @@ def main():
         repo_root, candidate = item
         with slots.borrow() as slot:
             return subprocess.run(
-                ["mypy", "--check-untyped-defs", "--ignore-missing-imports", *follow_imports_flags(candidate),
+                ["mypy", "--check-untyped-defs", "--ignore-missing-imports", *follow_imports_flags(candidate), *strict_flags(repo_root, candidate),
                  f"--cache-dir={os.path.join(cache_root, 'w%d' % slot)}", candidate],
                 capture_output=True,
                 text=True,

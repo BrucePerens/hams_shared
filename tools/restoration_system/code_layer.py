@@ -5,19 +5,25 @@ the network like the packages."""
 import os
 import shutil
 import subprocess
+from collections.abc import Callable
+from types import ModuleType
+from typing import TYPE_CHECKING, Any
 
 from .runner import RestorationError
+
+if TYPE_CHECKING:
+    from .assemble import Chroot
 
 SRC = "opt/hams/src"
 DAEMONS = "opt/hams/daemons"
 
 
-def parse_deployed_commits(text):
+def parse_deployed_commits(text: str | None) -> dict[str, str]:
     """{name: commit} from the `name=value` lines of DEPLOYED_COMMITS."""
     return {k.strip(): v.strip() for k, _, v in (line.partition("=") for line in (text or "").splitlines()) if v.strip()}
 
 
-def install_code(profile, tree, deployed_text, say):
+def install_code(profile: dict[str, Any], tree: str, deployed_text: str | None, say: Callable[[str], object]) -> dict[str, Any]:
     """Clone each profile code repository into the image at its deployed commit. Returns {"installed": {name: commit}} (empty and with a
     "skipped" reason when the backups carry no DEPLOYED_COMMITS)."""
     commits = parse_deployed_commits(deployed_text)
@@ -41,7 +47,7 @@ def install_code(profile, tree, deployed_text, say):
     return {"installed": done}
 
 
-def build_artifacts(infra, tree, chroot, say):
+def build_artifacts(infra: ModuleType, tree: str, chroot: "Chroot", say: Callable[[str], object]) -> list[str]:
     """Copy the daemons of both repositories to /opt/hams/daemons (flat, as deploy_to_production --sync-daemons does) and build the Rust
     crates and libcloudflared.so inside the image. Returns what was built; a failed build stops the image build."""
     dest = os.path.join(tree, DAEMONS)
