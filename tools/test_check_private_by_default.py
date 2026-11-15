@@ -34,6 +34,11 @@ class MainTests(unittest.TestCase):
             _addon(root, "alpha", {"a.b": ["x"]})
             self.assertEqual(cpd.main([root]), 1)
 
+    def test_a_root_with_no_exposure_file_at_all_fails(self):
+        with tempfile.TemporaryDirectory() as root:
+            os.makedirs(os.path.join(root, "gamma"))
+            self.assertEqual(cpd.main([root]), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
