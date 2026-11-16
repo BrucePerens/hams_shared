@@ -52,6 +52,26 @@ EOF
     fi
 done
 
+# merge_pr discipline (2026-11-16): refuse a direct push of code to main (only to-do notes may go direct), and on any other
+# branch run merge_pr's cheap checks within about 3 minutes (a slow check only warns). Logic and limits: tools/pre_push_check.py.
+# Skipped, with a warning, when the helper cannot be found (a worktree before fix_worktree_symlinks.py).
+root=$(git rev-parse --show-toplevel)
+common=$(cd "$root" && cd "$(git rev-parse --git-common-dir)" && pwd)
+helper=""
+for base in "$root" "$(dirname "$common")"; do
+    for sub in hams_shared/tools tools; do
+        if [ -f "$base/$sub/pre_push_check.py" ]; then helper="$base/$sub/pre_push_check.py"; break 2; fi
+    done
+done
+if [ -z "$helper" ]; then
+    echo "pre-push: pre_push_check.py not found; merge_pr check skipped." >&2
+else
+    for line in "${updates[@]}"; do
+        read -r local_ref local_sha remote_ref remote_sha <<< "$line"
+        python3 "$helper" "$local_ref" "$local_sha" "$remote_ref" "$remote_sha" || exit 1
+    done
+fi
+
 # The 2026-09-28 pre-push check_burn_list.py gate was removed 2026-10-02 at Bruce's direction:
 # ~20 concurrent whole-repo scans overloaded the dev box during bulk to-do processing, and the
 # coordinating session runs its own lint/test passes. The burn-list CI workflow was removed the
