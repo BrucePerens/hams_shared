@@ -13481,6 +13481,7 @@ def _provision_secret_schema(run_cmd_func, db_name):
         )
     except Exception as e:  # audit-ignore-catch-all
         _logger.warning("[*] Could not provision the %s schema in %s: %s", SECRET_SCHEMA, db_name, e)
+        record_hook_failure("secret_schema", e)
 
 
 # The PostgreSQL login of daemons/dx_firehose: the name of its OS account, so it logs in by peer authentication over the unix socket
@@ -13517,6 +13518,7 @@ def _provision_dx_firehose_role(run_cmd_func, db_name, role_name=None):
         )
     except Exception as e:  # audit-ignore-catch-all
         _logger.warning("[*] Could not provision the PostgreSQL role %s in %s: %s", role_name, db_name, e)
+        record_hook_failure("dx_firehose_role", e)
 
 
 # Extensions Odoo or a hams module needs in the application database. Created by the postgres superuser at provisioning time, so the
@@ -13538,6 +13540,7 @@ def _precreate_odoo_extensions(run_cmd_func, db_name):
         )
     except Exception as e:  # audit-ignore-catch-all
         _logger.warning("[*] Could not pre-create the PostgreSQL extensions %s in %s: %s", ", ".join(ODOO_DATABASE_EXTENSIONS), db_name, e)
+        record_hook_failure("postgres_extensions", e)
 
 
 # [@ANCHOR: infrastructure:_read_env_value]
@@ -13692,6 +13695,7 @@ def _provision_parking_role(run_cmd_func, db_name, sql_path=None, env_file=None)
         )
     except Exception as e:  # audit-ignore-catch-all
         _logger.warning("[*] Could not provision the PostgreSQL role %s in %s: %s", PARKING_DB_ROLE, db_name, e)
+        record_hook_failure("parking_role", e)
 
 
 # [@ANCHOR: infrastructure:_allow_cache_manager_socket_password_for_test]

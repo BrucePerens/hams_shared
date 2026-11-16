@@ -2021,6 +2021,7 @@ class CreateOdooRoleIfMissingTests(_SafePatchTestCase):
     def test_a_failing_extension_step_is_logged_not_raised(self):
         run = MagicMock(side_effect=RuntimeError("no pgvector package"))
         infra._precreate_odoo_extensions(run, "hams_prod")
+        self.assertEqual([n for n, _ in infra.get_hook_failures()], ["postgres_extensions"])
 
     def test_provisioning_precreates_the_extensions_after_the_database_owner_step(self):
         source = inspect.getsource(infra.provision_environment)
@@ -2089,6 +2090,11 @@ class CreateOdooRoleIfMissingTests(_SafePatchTestCase):
 
 class ProvisionSecretSchemaTests(_SafePatchTestCase):
     # Verified by [@ANCHOR: infrastructure:_provision_secret_schema]
+    def setUp(self):
+        super().setUp()
+        infra.reset_hook_failures()
+        self.addCleanup(infra.reset_hook_failures)
+
     def test_the_schema_is_owned_by_the_broker_role_and_revoked_from_public(self):
         self.safe_patch_object(infra, "_role_exists", return_value=False)
         run = MagicMock()
@@ -2110,6 +2116,7 @@ class ProvisionSecretSchemaTests(_SafePatchTestCase):
     def test_a_failure_is_logged_not_raised(self):
         self.safe_patch_object(infra, "_role_exists", return_value=True)
         infra._provision_secret_schema(MagicMock(side_effect=RuntimeError("no cluster")), "hams_prod")
+        self.assertEqual([n for n, _ in infra.get_hook_failures()], ["secret_schema"])
 
     def test_provisioning_creates_the_schema_after_the_extensions(self):
         source = inspect.getsource(infra.provision_environment)
@@ -2121,6 +2128,11 @@ class ProvisionSecretSchemaTests(_SafePatchTestCase):
 
 class ProvisionDxFirehoseRoleTests(_SafePatchTestCase):
     # Verified by [@ANCHOR: infrastructure:_provision_dx_firehose_role]
+    def setUp(self):
+        super().setUp()
+        infra.reset_hook_failures()
+        self.addCleanup(infra.reset_hook_failures)
+
     def test_the_role_has_no_password_and_only_select_on_its_tables(self):
         self.safe_patch_object(infra, "_role_exists", return_value=False)
         run = MagicMock()
@@ -2146,6 +2158,7 @@ class ProvisionDxFirehoseRoleTests(_SafePatchTestCase):
     def test_a_failure_is_logged_not_raised(self):
         self.safe_patch_object(infra, "_role_exists", return_value=True)
         infra._provision_dx_firehose_role(MagicMock(side_effect=RuntimeError("no cluster")), "hams_prod")
+        self.assertEqual([n for n, _ in infra.get_hook_failures()], ["dx_firehose_role"])
 
     def test_production_generates_no_database_password_and_provisioning_creates_the_role(self):
         self.assertNotIn('env_vars["DB_PASS"] = generate_secure_password()', inspect.getsource(infra.load_and_prompt_env))
@@ -7433,6 +7446,7 @@ class CallsignParkingProvisioningTests(_TmpDirTestCase):
     def test_a_failure_is_logged_and_never_raised(self):
         self.safe_patch_object(infra, "_provision_cache_manager_role", side_effect=RuntimeError("psql down"))
         infra._provision_parking_role(MagicMock(), "hams_test")
+        self.assertEqual([n for n, _ in infra.get_hook_failures()], ["parking_role"])
 
     def test_the_narrow_family_path_makes_the_login_too_and_only_for_this_family(self):
         for name in ("provision_system_accounts", "apply_production_directories", "provision_static_files"):
