@@ -282,6 +282,7 @@ STEP_META = {
     "check_cargo_deny": {"suffixes": _RS, "lock": "cargo", "cacheable": False},
     "check_cargo_clippy": {"suffixes": _RS, "lock": "cargo"},
     "check_cargo_fmt": {"suffixes": _RS, "lock": "cargo"},
+    "console sources": {"lock": "cargo", "cacheable": False},
     "check_pip_audit": {
         "suffixes": frozenset({".txt"}),
         "cacheable": False,
@@ -2706,6 +2707,16 @@ def main():
             [python_exec, os.path.join(dir_path, "tools", "relay_structural.py"), repo_root],
             inputs=(tuple(relay_dirs), None),
             cacheable=False,
+        )
+
+    # 51c. console sources -- the build-script validation of daemons/shack_console (check_console_sources.py), without a build of the crate. Round 112's
+    # gate build failed on a test fixture naming a bare http host, a rule only build.rs enforces. Selected when a file of that crate changes; never cached.
+    console_crate = os.path.realpath(os.path.join(repo_root, "daemons", "shack_console"))
+    if os.path.isfile(os.path.join(console_crate, "Cargo.toml")):
+        _add(
+            "console sources",
+            [python_exec, os.path.join(dir_path, "tools", "check_console_sources.py"), repo_root],
+            inputs=((console_crate,), None),
         )
 
     # 52. check_cargo_fmt -- `cargo fmt -- --check` over the same crates step 36 lints. CI runs

@@ -7684,3 +7684,11 @@ Every class of the tools that is not a function, with its fields, who creates it
 **Methods.** `__init__(self, tree, source_lines, fields=None)`, `uid_of`, `recset_of`, `calls`, and the private `_xml_id`, `_service_call_id`, `_model_of`, `_bind`.
 
 **Notes.** Built once per file by `check_file` and discarded; the constructor only fills `helpers` by walking the tree. Covered by `test_check_service_account_acl.py`.
+
+## Console source validation in lint (`check_console_sources.py`)
+
+Written 2026-11-15. Gate round 112 failed in `cargo build --features test-hooks` because a console test fixture named a bare `http://` host, which `daemons/shack_console/build.rs` refuses (the rule lives in `pipeline.rs` `lint`); no node or ESLint step knows the rule. The step `console sources` runs the same validation (`pipeline::build_with_tests`, tests included) in seconds: a throwaway cargo project under the lint cargo target dir includes `pipeline.rs` by path and depends only on the crate's three build dependencies, so the shack_console crate itself is not built. Selected when a file of `daemons/shack_console` changes; never cached. Run it by hand before a round: `python3 hams_shared/tools/check_console_sources.py .`.
+
+### `[@ANCHOR: check_console_sources:main]` `main(argv=None)`
+
+Purpose: validate the console sources. Argument `argv`: optional list with the repository root (default: the current directory). Returns 0 when the sources are clean or the repository has no `daemons/shack_console/Cargo.toml`, 1 with one problem per line on stdout otherwise. Needs `cargo`. Tests: `MainTests` in `test_check_console_sources.py`.
