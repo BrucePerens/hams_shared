@@ -26,6 +26,37 @@ def py_step(name, code, **kwargs):
     return lint_exec.Step(name=name, argv=[PY, "-c", code], **kwargs)
 
 
+def rendezvous_steps(directory, count):
+    """`count` steps that each exit 0 only if all `count` of them are running at the same moment: each drops a marker file
+    and waits for the others' markers. Overlap is decided by the markers, not by how long anything takes; the 20 s wait
+    is a safety net that only a run that never overlaps (a step waiting for one that has not started) can reach."""
+    code = (
+        "import os, sys, time\n"
+        f"d = {directory!r}\n"
+        "open(os.path.join(d, sys.argv[1]), 'w').close()\n"
+        "end = time.monotonic() + 20\n"
+        "while time.monotonic() < end:\n"
+        f"    if len(os.listdir(d)) >= {count}: sys.exit(0)\n"
+        "    time.sleep(0.01)\n"
+        "sys.exit(1)\n"
+    )
+    return [lint_exec.Step(f"r{i}", [PY, "-c", code, f"r{i}"]) for i in range(count)]
+
+
+def run_spans(steps, **kwargs):
+    """Run `steps` that each sleep briefly and record (start, end) on the machine-wide monotonic clock; return the spans sorted."""
+    tmp = tempfile.mkdtemp()
+    log = os.path.join(tmp, "spans")
+    code = ("import sys, time; t = time.monotonic(); time.sleep(0.1); "
+            "open(%r, 'a').write('%%f %%f' %% (t, time.monotonic()) + chr(10))" % log)
+    results = lint_exec.execute([lint_exec.Step(f"n{i}", [PY, "-c", code]) for i in range(steps)], out=io.StringIO(), **kwargs)
+    assert all(r.returncode == 0 for r in results)
+    with open(log) as handle:
+        spans = sorted((float(a), float(b)) for a, b in (line.split() for line in handle))
+    shutil.rmtree(tmp, True)
+    return spans
+
+
 class OutputOrderTests(unittest.TestCase):
     def test_output_is_in_declaration_order_whatever_finishes_first(self):
         steps = [
@@ -49,16 +80,15 @@ class OutputOrderTests(unittest.TestCase):
         self.assertEqual(seq.getvalue(), par.getvalue())
 
     def test_jobs_actually_overlap(self):
-        steps = [py_step(f"s{i}", "import time; time.sleep(0.5)") for i in range(4)]
-        started = time.monotonic()
-        lint_exec.execute(steps, jobs=4, out=io.StringIO())
-        self.assertLess(time.monotonic() - started, 1.5)
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        results = lint_exec.execute(rendezvous_steps(tmp, 4), jobs=4, out=io.StringIO())
+        self.assertEqual([r.returncode for r in results], [0, 0, 0, 0], "the four steps were never all running at once")
 
     def test_one_job_runs_one_step_at_a_time(self):
-        steps = [py_step(f"s{i}", "import time; time.sleep(0.3)") for i in range(3)]
-        started = time.monotonic()
-        lint_exec.execute(steps, jobs=1, out=io.StringIO())
-        self.assertGreaterEqual(time.monotonic() - started, 0.85)
+        spans = run_spans(3, jobs=1)
+        for (_s1, end1), (start2, _e2) in zip(spans, spans[1:]):
+            self.assertLessEqual(end1, start2)
 
 
 class ExitCodeSemanticsTests(unittest.TestCase):
@@ -140,17 +170,7 @@ class LockTests(unittest.TestCase):
         tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, tmp, True)
 
-        def overlapping(me, other):
-            code = (
-                "import os, sys, time\n"
-                f"open({os.path.join(tmp, me)!r}, 'w').close()\n"
-                "time.sleep(0.8)\n"
-                f"sys.exit(0 if os.path.exists({os.path.join(tmp, other)!r}) else 9)\n"
-            )
-            return py_step(me, code)
-
-        steps = [overlapping("one", "two"), overlapping("two", "one")]
-        results = lint_exec.execute(steps, jobs=2, out=io.StringIO())
+        results = lint_exec.execute(rendezvous_steps(tmp, 2), jobs=2, out=io.StringIO())
         self.assertEqual([r.returncode for r in results], [0, 0])
 
 
@@ -247,18 +267,16 @@ class ElasticWorkerTests(unittest.TestCase):
         room[0] = True
         self.assertTrue(gate.admit())
 
-    def _wall(self, admit):
-        steps = [py_step(f"nap{i}", "import time; time.sleep(0.6)") for i in range(3)]
-        started = time.monotonic()
-        results = lint_exec.execute(steps, 1, out=io.StringIO(), extra=2, admission=lint_exec._Admission(lambda: admit, 0.0))
-        self.assertTrue(all(r.returncode == 0 for r in results))
-        return time.monotonic() - started
-
     def test_admitted_extra_workers_run_steps_side_by_side(self):
-        self.assertLess(self._wall(True), 1.5)
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        results = lint_exec.execute(rendezvous_steps(tmp, 3), 1, out=io.StringIO(), extra=2, admission=lint_exec._Admission(lambda: True, 0.0))
+        self.assertEqual([r.returncode for r in results], [0, 0, 0], "the three steps were never all running at once")
 
     def test_refused_extra_workers_run_nothing(self):
-        self.assertGreaterEqual(self._wall(False), 1.8)
+        spans = run_spans(3, jobs=1, extra=2, admission=lint_exec._Admission(lambda: False, 0.0))
+        for (_s1, end1), (start2, _e2) in zip(spans, spans[1:]):
+            self.assertLessEqual(end1, start2)
 
 
 class TimingTableTests(unittest.TestCase):
