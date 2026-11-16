@@ -147,6 +147,11 @@ class AdrAnchorUnitConfigFunctionTests(unittest.TestCase):
         self.assertEqual(self.tree.check("The config parameter `hams_thing.gone_key`.\n"), [("config", "hams_thing.gone_key")])
         self.assertEqual(self.tree.check("Not a parameter line: `hams_thing.gone_key`.\n"), [])
 
+    def test_a_baseline_file_does_not_make_its_own_entries_exist(self):
+        # The baseline lists broken names as text; read as a source it would make each of them "exist" and the counts would flip on every regeneration.
+        tree = Tree(self, {"tools/doc_references_baseline_hams_com.json": '["docs/a.md|function|gone_function()"]\n'})
+        self.assertEqual(tree.check("`gone_function()`\n"), [("function", "gone_function()")])
+
     def test_function_names(self):
         self.assertEqual(self.tree.check("`real_function()` `Cls.real_function(a, b)` `len()` `os.path.join()`\n"), [])
         self.assertEqual(self.tree.check("`gone_function()`\n"), [("function", "gone_function()")])
