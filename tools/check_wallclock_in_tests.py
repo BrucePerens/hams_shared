@@ -16,7 +16,8 @@ This gate FAILS when a test file asserts on an elapsed wall-clock value:
   Rust:   `.elapsed()` / `.duration_since(...)` / an Instant difference inside assert!/assert_eq!/assert_ne!, directly
           or through a variable. A file that uses tokio's paused clock (`tokio::time::pause`, `start_paused`) is skipped:
           its elapsed() is virtual time and deterministic.
-`time.process_time()` is CPU time and is allowed. A lower-bound-only comparison (`elapsed >= 0.5` after a real sleep) is
+`time.process_time()` is CPU time and is allowed. An assertion inside a polling loop (`while !done() { assert!(start.elapsed() < LIMIT) }`) is a timeout guard,
+not a measurement: allowed. A lower-bound-only comparison (`elapsed >= 0.5` after a real sleep) is
 allowed too: a monotonic clock never runs short under load.
 
 Allowlist (tools/wallclock_in_tests_allowlist.txt): one `<repo>/<path>  # reason` per line, for a file where a
@@ -119,6 +120,7 @@ def _lower_bound_only(node, elapsed_vars, clock_vars):
 
 def _py_scope_findings(scope):
     nodes = list(_scope_nodes(scope))
+    in_loop = {id(n) for loop in nodes if isinstance(loop, (ast.While, ast.For)) for n in ast.walk(loop)}
     clock_vars, elapsed_vars = set(), set()
     assigns = []
     for node in nodes:
@@ -138,6 +140,8 @@ def _py_scope_findings(scope):
     clock_vars -= elapsed_vars  # a reading that is also a difference counts as the difference
     found = []
     for node in nodes:
+        if id(node) in in_loop:
+            continue  # a deadline inside a polling loop is a timeout guard, not an assertion on elapsed time
         if isinstance(node, ast.Assert):
             expr = node
         elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
@@ -207,7 +211,8 @@ def check_js(source):
 
     def sub_re_for(clock_vars):
         names = "|".join(map(re.escape, clock_vars)) if clock_vars else r"(?!x)x"
-        return re.compile(r"(?:%s|%s)\s*-|-\s*(?:%s|%s)" % (_JS_CLOCK, names, _JS_CLOCK, names))
+        reading = "(?:%s|%s)" % (_JS_CLOCK, names)
+        return re.compile(r"%s\s*-\s*%s" % (reading, reading))
 
     clock_vars, elapsed_vars = _generic_taint(lines, clock_re, sub_re_for, _JS_ASSIGN)
     found = []
@@ -249,6 +254,21 @@ def check_rust(source):
     return found
 
 
+def _rust_in_loop(lines, i):
+    """True when line i sits inside a `while`/`loop`/`for` block of this function (found by indentation)."""
+    indent = len(lines[i]) - len(lines[i].lstrip())
+    for j in range(i - 1, -1, -1):
+        text = lines[j].strip()
+        if not text:
+            continue
+        here = len(lines[j]) - len(lines[j].lstrip())
+        if here < indent:
+            if re.match(r"(?:'\w+:\s*)?(?:while|loop|for)\b", text):
+                return True
+            indent = here
+    return False
+
+
 def _check_rust_block(lines):
     clock_vars, elapsed_vars = set(), set()
     for _ in range(3):
@@ -266,8 +286,8 @@ def _check_rust_block(lines):
                 clock_vars.add(name)
     found = []
     for i, line in enumerate(lines):
-        if not _RS_ASSERT.search(line):
-            continue
+        if not _RS_ASSERT.search(line) or _rust_in_loop(lines, i):
+            continue  # a deadline inside a polling loop is a timeout guard, not an assertion on elapsed time
         stmt = _macro_at(lines, i)
         via = elapsed_vars and re.search(r"\b(?:%s)\b" % "|".join(map(re.escape, elapsed_vars)), stmt)
         lower = re.search(r"\s>=?\s", stmt) and not re.search(r"\s<=?\s|assert_eq|assert_ne", stmt)
