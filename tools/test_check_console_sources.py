@@ -6,6 +6,8 @@ Tests for check_console_sources.py with a fake `cargo` on PATH, so no Rust build
 Tests [@ANCHOR: check_console_sources:main]
 """
 
+import contextlib
+import io
 import os
 import stat
 import tempfile
@@ -39,9 +41,17 @@ class MainTests(unittest.TestCase):
         with mock.patch.dict(os.environ, env):
             return ccs.main([repo])
 
-    def test_no_crate_means_no_step(self):
+    def test_no_crate_is_not_a_pass(self):
         with tempfile.TemporaryDirectory() as tmp:
-            self.assertEqual(ccs.main([tmp]), 0)
+            with self.assertRaises(SystemExit) as raised, contextlib.redirect_stderr(io.StringIO()):
+                ccs.main([tmp])
+        self.assertEqual(raised.exception.code, 2)
+
+    def test_missing_repo_is_not_a_pass(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(SystemExit) as raised, contextlib.redirect_stderr(io.StringIO()):
+                ccs.main([os.path.join(tmp, "absent")])
+        self.assertEqual(raised.exception.code, 2)
 
     def test_clean_sources_exit_zero_and_project_has_build_deps_only(self):
         with tempfile.TemporaryDirectory() as tmp:
