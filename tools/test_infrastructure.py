@@ -7879,6 +7879,30 @@ class PagerLogAnalyzerUnitTests(_SafePatchTestCase):
         self.assertEqual(sorted(caps), ["CAP_DAC_READ_SEARCH", "CAP_SETGID", "CAP_SETPCAP", "CAP_SETUID", "CAP_SYS_CHROOT"])
         self.assertEqual(infra.systemd_unit_sandbox_gaps(infra.MANIFEST, self.UNIT), set())
 
+    def test_the_sample_unit_in_hams_open_carries_the_same_sandbox_and_capability_set(self):
+        # The sample unit next to the daemon (copied by pager_duty/DEPLOYMENT.md on stock Odoo hosts) was root with no
+        # sandbox at all; it now carries the MANIFEST unit's sandbox directives and capability set.
+        here = os.path.dirname(os.path.realpath(infra.__file__))
+        sample = None
+        while here != os.path.dirname(here):
+            candidate = os.path.join(here, "pager_duty", "daemon", "pager-log-analyzer.service")
+            if os.path.isfile(candidate):
+                sample = candidate
+                break
+            here = os.path.dirname(here)
+        if sample is None:  # a hams_shared-only checkout has no hams_open above it
+            self.skipTest("no hams_open checkout above this hams_shared")
+        with open(sample, encoding="utf-8") as f:
+            text = f.read()
+        for line in ("ProtectSystem=strict", "ProtectHome=read-only", "PrivateTmp=true", "PrivateDevices=true",
+                     "ProtectKernelTunables=true", "ProtectKernelModules=true", "ProtectControlGroups=true",
+                     "NoNewPrivileges=true", "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX"):
+            self.assertIn(line + "\n", text)
+        self.assertNotRegex(text, r"(?m)^User=")
+        self.assertNotIn("ReadWritePaths", text)
+        caps = re.search(r"^CapabilityBoundingSet=(.*)$", text, re.M).group(1).split()
+        self.assertEqual(sorted(caps), ["CAP_DAC_READ_SEARCH", "CAP_SETGID", "CAP_SETPCAP", "CAP_SETUID", "CAP_SYS_CHROOT"])
+
     def test_unit_is_prod_only_local_only_and_not_a_shared_odoo_unit(self):
         spec = [s for s in infra.MANIFEST["static_files"] if s["path"] == "/opt/hams/systemd/" + self.UNIT][0]
         self.assertEqual(spec["environments"], ["prod"])
