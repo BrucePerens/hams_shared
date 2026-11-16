@@ -32,7 +32,7 @@ What goes up (all of it encrypted on this host before it leaves, so B2 only ever
     on stdin like a database dump (no copy is staged on disk); `restore-test` brings it back and compares
     its sha256 with the live file. The directory around it (the Odoo home, with the filestore) is NOT a source;
   * the system configuration set (config.json "config_set": true; kind "config", source name system_config): one tar of
-    odoo.conf, postgresql, pgbackrest.conf, nginx, sudoers, cron, ssh daemon config, systemd units, package list and the
+    odoo.conf, postgresql, the pgBackRest config, nginx, sudoers, cron, ssh daemon config, systemd units, package list and the
     other config the MANIFEST does not carry (CONFIG_SET_PATHS), with key and credential files left out and secret values
     redacted (CONFIG_SET_EXCLUDE, CONFIG_SET_SECRET_RE). `restore-test` restores it and fails if a secret value is in it;
   * /opt/hams/etc (daemon keys, signer public material, host configuration), with the repository
@@ -100,7 +100,7 @@ DEFAULT_RECORDINGS_SAMPLE_FILES = 6
 
 # The system configuration set (config.json "config_set": true): one tar stream of the files the MANIFEST does not carry,
 # so a rebuilt host does not depend on the local /storage copy. Paths are relative to /. A path missing on a host is
-# skipped. /opt/hams/etc (its own source) and /var/lib/odoo/hams_crypto.secret (its own source) are NOT repeated here.
+# skipped. /opt/hams/etc (its own source) and the Odoo field-key file (its own source) are NOT repeated here.
 # [@ANCHOR: b2_backup:config_set]
 CONFIG_SET_SOURCE = "system_config"
 CONFIG_SET_PATHS = (
@@ -112,13 +112,13 @@ CONFIG_SET_PATHS = (
 )
 # Never in the set, whatever directory they sit in: key and credential files (matched against the path or the file name).
 # etc/shadow, ssh host keys, etc/cloudflared (tunnel credentials), etc/pagerduty (integration key) and the Let's Encrypt
-# live/archive keys are simply not in CONFIG_SET_PATHS. The B2 key in /etc/postgresql/<v>/main/environment is excluded here.
+# live/archive keys are simply not in CONFIG_SET_PATHS. The B2 key in the postgresql environment file is excluded here.
 CONFIG_SET_EXCLUDE = (
     "etc/postgresql/*/*/environment", "*.key", "*.pem", "*.p12", "*.pfx", "*.keytab", "*.env", "*.password", "*.secret",
     "*.token", "*credentials*", "id_*",
 )
-# A secret VALUE inside an otherwise wanted config file (odoo.conf admin_passwd/db_password, pgbackrest.conf
-# repo2-cipher-pass and repo2-s3-key, WireGuard PrivateKey, redis requirepass) is replaced by <redacted>; the key name stays.
+# A secret VALUE inside an otherwise wanted config file (odoo.conf admin_passwd/db_password, the pgBackRest
+# config repository passphrase and S3 key, WireGuard PrivateKey, redis requirepass) is replaced by <redacted>; the key name stays.
 CONFIG_SET_SECRET_RE = re.compile(
     r"^(?![ \t]*password_encryption)([ \t]*[\w.-]*(?:pass|secret|token|s3-key|api_?key|private_?key|preshared_?key)[\w.-]*[ \t]*[=:][ \t]*|"
     r"[ \t]*(?:requirepass|masterauth)[ \t]+)(\S.*)$", re.IGNORECASE | re.MULTILINE)
