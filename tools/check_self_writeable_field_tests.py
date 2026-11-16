@@ -36,6 +36,7 @@ import check_target
 import lint_exec
 import re
 import sys
+from source_text import read_source  # noqa: E402
 from tree_files import tree_walk
 
 ANCHOR_VERIFIED_RE = re.compile(r"#\s*Verified by \[@ANCHOR:\s*([A-Za-z0-9_:]+)\]")
@@ -94,10 +95,10 @@ def _find_self_writeable_overrides(repo_roots, stats=None):
                 path = os.path.join(root, f)
                 if stats is not None:
                     stats["files"] = stats.get("files", 0) + 1
-                try:
-                    with open(path, "r", encoding="utf-8") as fh:
-                        content = fh.read()
-                except OSError:
+                content, problem = read_source(path)
+                if problem:
+                    if stats is not None:
+                        stats.setdefault("unreadable", []).append(problem)
                     continue
                 if "def SELF_WRITEABLE_FIELDS" not in content:
                     continue
@@ -131,10 +132,9 @@ def _find_tests_anchor(module_dir, anchor):
             if not f.endswith(".py"):
                 continue
             path = os.path.join(root, f)
-            try:
-                with open(path, "r", encoding="utf-8") as fh:
-                    content = fh.read()
-            except OSError:
+            content, problem = read_source(path)
+            if problem:
+                print(f"❌ ERROR: {problem}")
                 continue
             lines = content.splitlines()
             anchor_line = None
@@ -286,7 +286,11 @@ def main():
 
     errors = 0
     stats = {}
-    for path, anchor, lineno in _find_self_writeable_overrides(roots, stats):
+    overrides = list(_find_self_writeable_overrides(roots, stats))
+    for problem in stats.get("unreadable", []):
+        print(f"❌ ERROR: {problem}")
+        errors += 1
+    for path, anchor, lineno in overrides:
         if not anchor:
             print(
                 f"❌ ERROR: {path}:{lineno}: SELF_WRITEABLE_FIELDS override has no "

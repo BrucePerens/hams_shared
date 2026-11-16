@@ -91,3 +91,4 @@ agents who are not working on the lint machinery do not carry it in their contex
   (copies the tree, drives the real checkout), `pytest daemons/hams_simulated_bots` (idle-CPU and timing tests),
   and `pytest ingest/` and `pytest scripts/` (not validated yet). `pytest devbox_tools/` runs under `-n` since 2026-11-08 (294 s serial at load 150, 51 s with four workers). All 46 other daemon steps and the four
   `tools` chunks passed under `-n` on mac1-vm with the same results as serial.
+- `pytest <directory>/` steps (one per directory, cwd = that directory) run every `test_*.py` that no other step and no Odoo module run collects. `uncollected_tests.py` finds them by walking the repository, so a new suite needs no edit to `run_linters.py`; directories that cannot run on a plain lint host are listed in `uncollected_tests.BASELINE` with the reason.

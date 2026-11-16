@@ -104,11 +104,11 @@ def foreign_shared_checkout(tree_root, main_root):
 def changed_paths(repo, base, tip):
     """Repository-relative paths the branch changed against `base` (``git diff --ignore-submodules=none --name-only base...tip``: a moved submodule pointer counts).
     Empty when git cannot say."""
-    result = subprocess.run(["git", "-C", repo, "diff", "--ignore-submodules=none", "--name-only", "%s...%s" % (base, tip)],
+    result = subprocess.run(["git", "-C", repo, "diff", "--ignore-submodules=none", "--name-only", "-z", "%s...%s" % (base, tip)],
                             capture_output=True, text=True)
     if result.returncode != 0:
         return []
-    return [line for line in result.stdout.splitlines() if line]
+    return [name for name in result.stdout.split("\0") if name]
 
 
 # [@ANCHOR: lint_batch:batching_tools_changed]
@@ -180,13 +180,13 @@ def changed_function_anchors(repo, base, tip):
     except ImportError:
         return set()
     merge_base = subprocess.run(["git", "-C", repo, "merge-base", base, tip], capture_output=True, text=True)
-    names = subprocess.run(["git", "-C", repo, "diff", "--name-only", "--diff-filter=AMDR", "%s...%s" % (base, tip), "--", "*.py"],
+    names = subprocess.run(["git", "-C", repo, "diff", "--name-only", "-z", "--diff-filter=AMDR", "%s...%s" % (base, tip), "--", "*.py"],
                            capture_output=True, text=True, errors="replace")
     if merge_base.returncode != 0 or names.returncode != 0:
         return set()
     found = set()
     with tempfile.TemporaryDirectory() as scratch:
-        for number, path in enumerate(line for line in names.stdout.splitlines() if line):
+        for number, path in enumerate(name for name in names.stdout.split("\0") if name):
             hashes = []
             for label, revision in (("base", merge_base.stdout.strip()), ("tip", tip)):
                 shown = subprocess.run(["git", "-C", repo, "show", "%s:%s" % (revision, path)], capture_output=True)

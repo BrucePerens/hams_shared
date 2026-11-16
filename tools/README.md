@@ -304,6 +304,10 @@ the source. An existing library (even a stale one) is never replaced; `check_clo
 
 Returns the source path that was copied, or `None` (nothing needed, or no fitting build: the later ffi check reports it). A copy of about 10 MB with a fresh mtime, so it is not "older than main.go".
 
+### `[@ANCHOR: test:warn_if_sibling_is_not_beside_the_tree]` `warn_if_sibling_is_not_beside_the_tree(base_dir, repo_root, chosen)`
+
+Purpose: a linked worktree scans the main checkout's parent for hams_open, so without `HAMS_OPEN_TREE` it silently ran the main checkout's tree instead of its own sibling. This prints a stderr warning naming the tree used and telling the caller to set `HAMS_OPEN_TREE`. Silent for the main checkout using its own sibling. Called by `get_addons_path()`.
+
 ### `[@ANCHOR: test:anchor_scan_sibling_dir]` `anchor_scan_sibling_dir(base_dir, other_repo_name, environ=None)`
 
 Purpose: finds the other repository's checkout (hams_open for a hams_com run, and the reverse) so the pre-flight anchor scan
@@ -3690,9 +3694,13 @@ Purpose: the `find` subcommand. Prints one `ps_line` per match, with `  PROTECTE
 
 Purpose: the `wait` subcommand: exactly one of `--pid [--start-time]`, `--job`, `--file [--contains --fail-contains --while-pid]`, or a selector (`--cwd-under`, `--cmd-contains`, `--cmd-regex`, `--user`, `--any-user`, with `--all` / `--allow-missing`), with `--timeout` (default 1800 s) and `--interval`. Prints the result message; returns its code. Raises `ProcError` code 2 when not exactly one target.
 
+### `[@ANCHOR: agent_procs:default_mem_max]` `default_mem_max(command)`
+
+Purpose: the memory cap `run` uses when `--mem-max` is not given. Argument: `command`, the argv list (or None). Returns `CARGO_MEM_MAX` (`24G`) when any word's basename is `cargo` or `rustc` (so `nice -n 10 env X=1 cargo test` and `/home/u/.cargo/bin/cargo` count), else `DEFAULT_MEM_MAX` (`6G`, Odoo tests and everything else). Pure; no I/O. Test: `test_agent_procs.py`.
+
 ### `[@ANCHOR: agent_procs:cmd_run]` `cmd_run(args, out=sys.stdout)`
 
-Purpose: the `run` subcommand: `run NAME [--tag AGENT] [--cwd DIR] [--timeout S] [--mem-max SIZE] [--nice N] -- COMMAND...`. Defaults: timeout 1800 s, memory cap 6G; `--timeout 0` / `--mem-max none` opt out and print a loud WARNING; without `systemd-run --user` the cap is `ulimit -v` and the output says so. A timeout stops the whole process group (exit 124, `exit_reason` `timeout` in the record) and the command dies when its wrapper dies. `jobs` shows `timeout=` and `mem=`. Prints the job's pid, process group, log path and the wait and stop commands. Returns 0.
+Purpose: the `run` subcommand: `run NAME [--tag AGENT] [--cwd DIR] [--timeout S] [--mem-max SIZE] [--nice N] -- COMMAND...`. Defaults: timeout 1800 s, memory cap 6G (24G when a word of the command is `cargo` or `rustc`, see `default_mem_max`: the large relay crate's builds and tests were killed at 6G); `--timeout 0` / `--mem-max none` opt out and print a loud WARNING; without `systemd-run --user` the cap is `ulimit -v` and the output says so. A timeout stops the whole process group (exit 124, `exit_reason` `timeout` in the record) and the command dies when its wrapper dies. `jobs` shows `timeout=` and `mem=`. Prints the job's pid, process group, log path and the wait and stop commands. Returns 0.
 
 | Argument | Type | Meaning |
 |---|---|---|
@@ -4669,6 +4677,10 @@ the Odoo known-red baseline and are not bisected) and a relay `error` as a shard
 ## Claim hashes (`claim_normalizers.py`, `check_claims_freshness.py`)
 
 A bug-hunt claim's `code_hash` is stale only when the anchored code changed, never for a comment or a formatter. The claim records `hash_algorithm: v2` next to `code_hash`: the sha256 of the item's token stream (Python `tokenize`, a Rust lexer, a JavaScript lexer that tells a regex from a division, canonical XML for XML/QWeb, a shell lexer and an SQL lexer), so formatting, comments, quote style and trailing commas do not reach it and every code token and string value does. `v1` (raw text) and `v1b` (comment-insensitive text, Python only) are the older algorithms. A claim with no `hash_algorithm` is legacy; the date table `ALGORITHM_BY_DATE` maps the date of the commit that last wrote the claim file (or a front matter `date:`, never the mtime) to its algorithm. When a legacy claim's exact hash no longer matches, `check_claims_freshness.py` and `check_claims.py` load the function as of the claim's commit, compute v2 over that text and over the current text, and treat the claim as fresh when they are equal; the verdict is cached in `~/.cache/hams_claims/` (`HAMS_CLAIM_CACHE_DIR`). There is no repo-wide re-hash: old claims are never rewritten to survive a tool change. `bug-hunt/normalized_view.py <file> [--function NAME]` (hams_com) prints the normalized text.
+
+## Lint autofix (`lint_autofix.py`)
+
+Run `python3 hams_shared/tools/lint_autofix.py` in your worktree before `merge_pr.py`. For the files changed against origin/main it runs `cargo fmt` in touched crates, removes unused imports (F401) and placeholder-less f-prefixes (F541), and lists what only a person can settle: stale claim hashes, anchor-docs-standard findings, function-test anchors. It never confirms a claim by itself: after reading the claim and the code, `--confirm-claim <claim.md>` rewrites that claim's hash. Tests: `test_lint_autofix.py`.
 
 ## Mutation testing (`mutation_harness.py`)
 
@@ -7644,3 +7656,43 @@ Every class of the tools that is not a function, with its fields, who creates it
 **Methods.** `__init__(self, files, roots)`, `exists`, `logical_dirs`, `argparse_flags`, and the private `_add_path`, `_add_aliases`, `_add_source`.
 
 **Notes.** Built once per run from the `git ls-files` list (`tracked_files`) and then only read; never serialized. The sets only grow while the constructor runs. Covered by `test_check_doc_references.py` (`Tree` builds one over a throwaway repository, and the ADR, heading, unit, configuration and function tests query it).
+
+### `Acl` [@ANCHOR: check_service_account_acl:acl_class]
+
+**Purpose.** The access picture of the zero_sudo service users that check_service_account_acl reads from the XML and CSV data files of the scanned modules: which groups each service user belongs to, which groups imply others, and which permissions every group has on every model.
+**Definition.** `class Acl` in `tools/check_service_account_acl.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `user_groups` | `dict = {}` | Service user xml id mapped to the set of group xml ids the user belongs to. |
+| `implied` | `dict = {}` | Group xml id mapped to the set of group xml ids it implies (`implied_ids`). |
+| `rows` | `dict = {}` | Model key mapped to a list of `(group xml id or "", {perm, ...})` pairs from `ir.model.access` rows; an empty group means the row applies to everyone. |
+
+**Methods.** `__init__(self)`, `add_xml(self, path, module)`, `add_csv(self, path, module)`, `groups_of(self, user)`, `missing(self, user, model, perm)`.
+
+**Notes.** Filled once by `load_acl` and then only read; never serialized. `missing` answers whether a service user lacks a permission on a model, following implied groups. Covered by `test_check_service_account_acl.py`.
+
+### `FileScan` [@ANCHOR: check_service_account_acl:filescan_class]
+
+**Purpose.** The per-file scan state of check_service_account_acl: it works out which calls in one Python file run as a service user and which model each call touches, so `check_file` can compare them with the `Acl`.
+**Definition.** `class FileScan` in `tools/check_service_account_acl.py`.
+
+| Field | Type / initial | Meaning |
+|---|---|---|
+| `fields` | `fields or {}` | Relational field name mapped to its single target model, from `field_models`; used to resolve `record.field` to a model. |
+| `cls_model` | `None` | Model name of the class whose method is being scanned; `check_file` sets it per function, `None` until then. |
+| `consts` | `_module_constants(tree)` | Module-level string constants, so a service uid given as a constant resolves to its xml id. |
+| `lines` | `source_lines` | Source lines of the file as passed in by `check_file`; kept with the scan for the caller's bypass-tag lookup. |
+| `helpers` | `{}` | Function name mapped to the service uid xml id it returns, for helpers such as `_svc_uid()`. |
+
+**Methods.** `__init__(self, tree, source_lines, fields=None)`, `uid_of`, `recset_of`, `calls`, and the private `_xml_id`, `_service_call_id`, `_model_of`, `_bind`.
+
+**Notes.** Built once per file by `check_file` and discarded; the constructor only fills `helpers` by walking the tree. Covered by `test_check_service_account_acl.py`.
+
+## Console source validation in lint (`check_console_sources.py`)
+
+Written 2026-11-15. Gate round 112 failed in `cargo build --features test-hooks` because a console test fixture named a bare `http://` host, which `daemons/shack_console/build.rs` refuses (the rule lives in `pipeline.rs` `lint`); no node or ESLint step knows the rule. The step `console sources` runs the same validation (`pipeline::build_with_tests`, tests included) in seconds: a throwaway cargo project under the lint cargo target dir includes `pipeline.rs` by path and depends only on the crate's three build dependencies, so the shack_console crate itself is not built. Selected when a file of `daemons/shack_console` changes; never cached. Run it by hand before a round: `python3 hams_shared/tools/check_console_sources.py .`.
+
+### `[@ANCHOR: check_console_sources:main]` `main(argv=None)`
+
+Purpose: validate the console sources. Argument `argv`: optional list with the repository root (default: the current directory). Returns 0 when the sources are clean or the repository has no `daemons/shack_console/Cargo.toml`, 1 with one problem per line on stdout otherwise. Needs `cargo`. Tests: `MainTests` in `test_check_console_sources.py`.

@@ -20,7 +20,7 @@ import subprocess
 import tarfile
 import tempfile
 import unittest
-from unittest import mock
+import unittest.mock
 
 import b2_backup as bb
 
@@ -203,6 +203,27 @@ class PlanModeTests(_Env):
         self.assertNotIn(PASSWORD, out)
 
 
+class DumpStagingCleanupTests(_Env):
+    """A failed pg_dump or pg_restore --list must not leave the (partial) dump in the staging directory until the next night."""
+
+    def _dump_with(self, pg_prefix):
+        cfg = bb.load_config(self.config(pg_prefix=pg_prefix))
+        source = bb.Source(name="db_x", kind="db", database="x")
+        with self.assertRaises(bb.BackupError):
+            bb.dump_database(cfg, source, bb.Runner(plan=False))
+        return os.path.join(cfg.staging_dir, "db_x")
+
+    def test_failed_pg_dump_leaves_no_staging_directory(self):
+        # Tests [@ANCHOR: b2_backup:backup]
+        # `sh -c 'exit 1' --` stands in for a failing `pg_dump`: argv is pg_prefix + ["pg_dump", ...].
+        self.assertFalse(os.path.exists(self._dump_with(["sh", "-c", "echo partial; exit 1", "--"])))
+
+    def test_dump_that_pg_restore_cannot_read_leaves_no_staging_directory(self):
+        # The dump step succeeds (the fake writes bytes), the real pg_restore --list rejects them.
+        _require("pg_restore")
+        self.assertFalse(os.path.exists(self._dump_with(["sh", "-c", "echo not-a-dump", "--"])))
+
+
 class SingleFileBackupTests(_Env):
     """Tests [@ANCHOR: b2_backup:restore_file]: a single-file source (hams1's hams_crypto.secret) is uploaded on stdin,
     comes back with the same sha256 in the restore test, and is skipped when absent."""
@@ -237,6 +258,28 @@ class SingleFileBackupTests(_Env):
         status = _load(self.cfg.status_path)
         self.assertTrue(status["ok"])
         self.assertNotIn("unit-test-key-material", json.dumps(status) + out + err)
+
+    def test_a_source_whose_snapshot_list_is_not_json_fails_alone_and_the_status_is_written(self):
+        # Tests [@ANCHOR: b2_backup:tool]
+        second = self.t("second.secret")
+        fd = os.open(second, os.O_WRONLY | os.O_CREAT, 0o400)
+        with os.fdopen(fd, "w") as f:
+            f.write("another-unit-test-file")
+        cfg_path = self.config(files=[{"name": "first", "path": self.secret, "optional": True},
+                                      {"name": "second", "path": second, "optional": True}])
+        real = bb.snapshot_source
+
+        def flaky(cfg, env, source, runner):
+            if source.name == "first":
+                raise json.JSONDecodeError("Expecting value", "kopia warning text", 0)
+            return real(cfg, env, source, runner)
+
+        with unittest.mock.patch.object(bb, "snapshot_source", flaky):
+            code, out, err = self.run_main(cfg_path, "backup")
+        self.assertNotEqual(code, 0, out + err)
+        by_name = {r["source"]: r for r in _load(self.cfg.status_path)["sources"]}
+        self.assertFalse(by_name["first"]["ok"])
+        self.assertTrue(by_name["second"]["ok"])
 
     def test_restore_test_compares_the_sha256_with_the_live_file(self):
         self.assertEqual(self.run_main(self.cfg_path, "backup")[0], 0)
@@ -349,7 +392,7 @@ class ConfigSetTests(_Env):
         cfg_path = self.config(config_set=True, config_root=self.t("root"))
         cfg = bb.load_config(cfg_path)
         self.assertEqual(self.run_main(cfg_path, "init")[0], 0)
-        with mock.patch.object(bb, "redact_secrets", lambda text: text):
+        with unittest.mock.patch.object(bb, "redact_secrets", lambda text: text):
             self.assertEqual(self.run_main(cfg_path, "backup")[0], 0)
         code, out, err = self.run_main(cfg_path, "restore-test")
         self.assertNotEqual(code, 0, out + err)

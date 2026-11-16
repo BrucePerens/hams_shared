@@ -694,7 +694,7 @@ class EndToEndTests(unittest.TestCase):
         make_repo(self.shared, {"README": "shared\n"})
         os.makedirs(os.path.join(self.shared, "tools"))
         for name in ("atomic_io.py", "run_linters.py", "check_target.py", "lint_layout.py", "lint_exec.py", "lint_lock.py", "lock_queue.py", "lint_remote.py", "lint_cache.py", "lint_test_durations.py",
-                     "lint_batch.py", "batch_queue.py", "runner_slots.py", "rust_impact.py", "relay_structural.py", "pytest_impact.py", "hang_guard.py", "agent_procs.py", "lint_trace_cache.py"):
+                     "lint_batch.py", "batch_queue.py", "runner_slots.py", "rust_impact.py", "relay_structural.py", "pytest_impact.py", "hang_guard.py", "agent_procs.py", "lint_trace_cache.py", "uncollected_tests.py"):
             shutil.copy(os.path.join(TOOLS, name), os.path.join(self.shared, "tools", name))
         git(self.shared, "add", "-A")
         git(self.shared, "commit", "-q", "-m", "tools")

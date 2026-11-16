@@ -539,6 +539,17 @@ class CheckerVersionTest(unittest.TestCase):
         self.assertEqual(lint_cache.checker_version(one, two), lint_cache.checker_version(two, one))
 
     # Tests [@ANCHOR: lint_cache:checker_version]
+    def test_editing_a_local_module_the_checker_imports_changes_the_version(self):
+        checker = self.copy_of("import helper_a\n", "t", "chk.py")
+        self.copy_of("from helper_b import f\n", "t", "helper_a.py")
+        helper_b = self.copy_of("def f(): return 1\n", "t", "helper_b.py")
+        self.copy_of("import os\n", "t", "unrelated.py")
+        before = lint_cache.checker_version(checker)
+        with open(helper_b, "w", encoding="utf-8") as handle:
+            handle.write("def f(): return 2\n")
+        self.assertNotEqual(before, lint_cache.checker_version(checker))
+
+    # Tests [@ANCHOR: lint_cache:checker_version]
     def test_a_real_checker_run_from_two_checkouts_shares_one_cache_file(self):
         here = os.path.dirname(os.path.abspath(__file__))
         repo = os.path.join(self._tmp.name, "repo")
@@ -551,7 +562,7 @@ class CheckerVersionTest(unittest.TestCase):
         for checkout in ("worktree_a", "worktree_b_a_different_path"):
             tools = os.path.join(self._tmp.name, checkout, "tools")
             os.makedirs(tools)
-            for name in ("check_float_isfinite.py", "check_target.py", "lint_cache.py", "tree_files.py"):
+            for name in ("check_float_isfinite.py", "check_target.py", "lint_cache.py", "tree_files.py", "source_text.py"):
                 shutil.copy(os.path.join(here, name), tools)
             run = subprocess.run([sys.executable, os.path.join(tools, "check_float_isfinite.py"), repo],
                                  env=env, capture_output=True, text=True, timeout=120)

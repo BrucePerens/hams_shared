@@ -40,6 +40,7 @@ import re
 import sys
 
 import check_target
+from source_text import read_source  # noqa: E402
 from tree_files import tree_files
 
 IGNORE_DIR_NAMES = {
@@ -81,8 +82,10 @@ def find_rust_files(repo_root):
 
 def check_file(path):
     """Returns a list of (line_num, message) findings for one .rs file."""
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
-        lines = f.readlines()
+    source, problem = read_source(path)
+    if problem:
+        return [(0, problem)]
+    lines = source.splitlines(True)
 
     findings = []
     depth = 0

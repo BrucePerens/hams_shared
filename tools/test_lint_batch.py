@@ -309,6 +309,15 @@ class UnitTests(unittest.TestCase):
             self.assertEqual(lint_batch.changed_paths(work, "origin/main", tip), ["n/new.txt"])
             self.assertEqual(lint_batch.changed_paths(work, "no-such", tip), [])
 
+    def test_changed_paths_and_function_anchors_see_a_non_ascii_file_name(self):
+        tag = "[@ANCH" + "OR: demo:accent]"
+        with tempfile.TemporaryDirectory() as tmp:
+            work = helpers.make_repo(tmp)
+            os.makedirs(os.path.join(work, "n"), exist_ok=True)
+            tip = helpers.commit_branch(work, "x", {"n/caf\u00e9.py": "# %s\ndef accent():\n    return 1\n" % tag})
+            self.assertEqual(lint_batch.changed_paths(work, "origin/main", tip), ["n/caf\u00e9.py"])
+            self.assertEqual(lint_batch.changed_function_anchors(work, "origin/main", tip), {"demo:accent"})
+
     def test_tokens_include_unique_base_names_for_checkers_that_print_dir_and_file_apart(self):
         with tempfile.TemporaryDirectory() as tmp:
             work = helpers.make_repo(tmp)

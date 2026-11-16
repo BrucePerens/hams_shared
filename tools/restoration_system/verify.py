@@ -17,6 +17,9 @@ import socket
 import subprocess
 import threading
 import time
+from collections.abc import Callable, Iterable, Sequence
+from types import ModuleType
+from typing import Any
 
 from . import classify as cl
 from . import units as un
@@ -48,24 +51,24 @@ class Check:
 
 # [@ANCHOR: verify:verify_report_class]
 class Report:
-    def __init__(self):
-        self.checks = []
+    def __init__(self) -> None:
+        self.checks: list[Check] = []
 
-    def add(self, name, ok, detail="", warn=False):
+    def add(self, name: str, ok: bool, detail: str = "", warn: bool = False) -> bool:
         self.checks.append(Check(name, "ok" if ok else ("warn" if warn else "FAIL"), detail))
         return ok
 
     @property
-    def ok(self):
+    def ok(self) -> bool:
         return bool(self.checks) and all(c.status != "FAIL" for c in self.checks)
 
-    def text(self):
+    def text(self) -> str:
         lines = ["%-4s %s%s" % (c.status, c.name, (" -- " + c.detail) if c.detail else "") for c in self.checks]
         lines.append("RESULT: " + ("ALL PASS" if self.ok else "FAILED"))
         return "\n".join(lines)
 
 
-def static_checks(image, profile, infra, report):
+def static_checks(image: str, profile: dict[str, Any], infra: ModuleType, report: Report) -> dict[str, Any] | None:
     """Checks that need no VM: description files, the unit set and its enablement against the MANIFEST, accounts, directories, packages."""
     meta_path = os.path.join(image, "RESTORATION_META.json")
     if not report.add("image has RESTORATION_META.json", os.path.isfile(meta_path)):
@@ -100,7 +103,7 @@ def static_checks(image, profile, infra, report):
     return meta
 
 
-def expected_services(profile, infra, meta):
+def expected_services(profile: dict[str, Any], infra: ModuleType, meta: dict[str, Any]) -> tuple[list[str], list[str]]:
     if not profile.get("use_manifest", True):
         return [], []
     units = un.expected_units(infra, meta.get("host_classes", []))
@@ -108,7 +111,7 @@ def expected_services(profile, infra, meta):
     return sorted(units), ext
 
 
-def disk_size_mb(image):
+def disk_size_mb(image: str) -> int:
     total = 0
     for current, dirs, files in os.walk(image):
         for name in files:
@@ -117,7 +120,7 @@ def disk_size_mb(image):
     return int(total / 1048576 * 1.25) + 1024
 
 
-def build_disk(image, disk, config, runner_run=subprocess.run):
+def build_disk(image: str, disk: str, config: dict[str, Any], runner_run: Callable[..., object] = subprocess.run) -> int:
     """ext4 disk image from the directory (mke2fs -d keeps owners, modes, links), then the verify layer is added to the DISK only."""
     size = disk_size_mb(image)
     with open(disk, "wb") as handle:
@@ -140,7 +143,7 @@ def build_disk(image, disk, config, runner_run=subprocess.run):
     return size
 
 
-def build_modules_disk(path):
+def build_modules_disk(path: str) -> bool:
     """A second, read-only disk holding the HOST kernel's modules (the image has none; verify boots the builder's own kernel)."""
     release = os.uname().release
     source = "/lib/modules/" + release
@@ -153,7 +156,7 @@ def build_modules_disk(path):
     return True
 
 
-def qemu_argv(disk, modules_disk, memory_mb, smp, log_path, kvm, canary_port, network="none"):
+def qemu_argv(disk: str, modules_disk: str | None, memory_mb: int, smp: int, log_path: str, kvm: bool, canary_port: int, network: str = "none") -> list[str]:
     """The QEMU command line. Network: none. No NIC, no default devices, no shared directories, no USB, no passthrough.
 
     `network` other than "none" exists only so the test suite can prove verify FAILS on a VM that has a route out."""
@@ -178,7 +181,7 @@ def qemu_argv(disk, modules_disk, memory_mb, smp, log_path, kvm, canary_port, ne
 class Canary:
     """A listener on the host (TCP and UDP, all addresses) that no packet from the isolated VM may ever reach. verify FAILS if one does."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.tcp = socket.socket()
         self.tcp.bind(("0.0.0.0", 0))
         self.port = self.tcp.getsockname()[1]
@@ -193,7 +196,7 @@ class Canary:
         for thread in self._threads:
             thread.start()
 
-    def _loop(self, sock, is_tcp):
+    def _loop(self, sock: socket.socket, is_tcp: bool) -> None:
         while not self._stop:
             try:
                 if is_tcp:
@@ -205,7 +208,7 @@ class Canary:
             except OSError:
                 continue
 
-    def close(self):
+    def close(self) -> None:
         self._stop = True
         for thread in self._threads:
             thread.join(2)
@@ -213,12 +216,14 @@ class Canary:
         self.udp.close()
 
 
-def parse_serial(text):
+def parse_serial(text: str) -> dict[str, Any]:
     """{phase: data} from the VM's result lines (`HAMSVERIFY <id> <i>/<n> <base64 chunk>`; whole-JSON lines are accepted too). The last result of
     a phase wins; "_order" lists the phases in the order they arrived."""
     import base64
     import binascii
-    out, order, pending = {}, [], {}
+    out: dict[str, Any] = {}
+    order: list[str] = []
+    pending: dict[str, Any] = {}
     for line in text.splitlines():
         idx = line.find(SERIAL_MARK)
         if idx < 0:
@@ -247,7 +252,7 @@ def parse_serial(text):
     return out
 
 
-def run_vm(image, profile, work, config, memory_mb=8192, smp=4, timeout=1800, network="none", say=print):
+def run_vm(image: str, profile: dict[str, Any], work: str, config: dict[str, Any], memory_mb: int = 8192, smp: int = 4, timeout: float = 1800, network: str = "none", say: Callable[[str], object] = print) -> tuple[str, int, float]:
     """Boot the image copy; returns (serial text, canary hits, vm seconds). RestorationError when the VM cannot be built or never finishes."""
     kvm = os.access("/dev/kvm", os.W_OK)
     if not kvm:
@@ -279,7 +284,7 @@ def run_vm(image, profile, work, config, memory_mb=8192, smp=4, timeout=1800, ne
     return text + "\n" + open(log, errors="replace").read(), canary.hits, time.time() - started
 
 
-def build_disk_config_refresh(disk, config):
+def build_disk_config_refresh(disk: str, config: dict[str, Any]) -> None:
     """Rewrite config.json inside the disk copy once the canary port is known."""
     stage = disk + ".cfg"
     with open(stage, "w") as handle:
@@ -289,7 +294,7 @@ def build_disk_config_refresh(disk, config):
     os.unlink(stage)
 
 
-def evaluate(phases, hits, profile, meta, expected_counts, report, external_units, units_expected):
+def evaluate(phases: dict[str, Any], hits: int, profile: dict[str, Any], meta: dict[str, Any], expected_counts: dict[str, Any] | None, report: Report, external_units: Sequence[str], units_expected: Iterable[str]) -> None:
     """Turn the VM's phases into checks."""
     iso = phases.get("isolation")
     order = phases.get("_order", [])
@@ -306,7 +311,8 @@ def evaluate(phases, hits, profile, meta, expected_counts, report, external_unit
     units = phases.get("units", {})
     report.add("system reached a running or degraded state", units.get("system") in ("running", "degraded"), str(units.get("system")))
     states = units.get("units", {})
-    real, expected_failures = [], []
+    real: list[Any] = []
+    expected_failures: list[Any] = []
     for unit in units.get("failed", []):
         info = states.get(unit, {})
         category, reason = cl.classify(dict(info.get("state", {}), ActiveState="failed"), info.get("journal", ""))
@@ -351,7 +357,7 @@ def evaluate(phases, hits, profile, meta, expected_counts, report, external_unit
     report.add("VM finished and powered off by itself", "done" in phases)
 
 
-def verify_image(image, profile, work, expected_counts=None, network="none", say=print, infra=None, memory_mb=None, timeout=1800):
+def verify_image(image: str, profile: dict[str, Any], work: str, expected_counts: dict[str, Any] | None = None, network: str = "none", say: Callable[[str], object] = print, infra: ModuleType | None = None, memory_mb: int | None = None, timeout: float = 1800) -> Report:
     """Static checks, then the isolated VM. Returns a Report (report.ok is the verdict). Needs root (mke2fs -d reads every file)."""
     if os.geteuid() != 0:
         raise RestorationError("verify needs root (it builds a disk from the directory, which holds root-only files): run it with sudo")

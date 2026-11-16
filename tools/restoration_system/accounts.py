@@ -8,12 +8,19 @@ one account on two numbers, are conflicts and stop the build. Accounts with no e
 import os
 import re
 import subprocess
+from collections.abc import Iterable
+from typing import TYPE_CHECKING, Any
+
+from .runner import Runner
+
+if TYPE_CHECKING:
+    from .assemble import Chroot
 
 
 TAR_OWNER_RE = re.compile(r"^\S+\s+(\d+)/(\d+)\s+\d+\s+\S+\s+\S+\s+(.*)$")
 
 
-def list_tar_owners(archive, runner):
+def list_tar_owners(archive: str, runner: Runner) -> dict[str, tuple[int, int]]:
     """{path (absolute, no trailing slash): (uid, gid)} from `tar -tvf` of a --numeric-owner archive of paths relative to /."""
     out = runner.run(["tar", "--zstd", "-tvf", archive, "--numeric-owner"], capture=True).stdout
     owners = {}
@@ -25,7 +32,7 @@ def list_tar_owners(archive, runner):
     return owners
 
 
-def tree_owners(tree, paths):
+def tree_owners(tree: str, paths: Iterable[str]) -> dict[str, tuple[int, int]]:
     """{path: (uid, gid)} of the given absolute paths that exist inside `tree` (not following links)."""
     out = {}
     for path in paths:
@@ -36,7 +43,7 @@ def tree_owners(tree, paths):
     return out
 
 
-def manifest_owner_claims(manifest):
+def manifest_owner_claims(manifest: dict[str, Any]) -> list[tuple[str, str, str]]:
     """[(path, user, group)] from MANIFEST directories and static_files whose owner is "user:group" (root excluded)."""
     claims = []
     for spec in list(manifest.get("directories", [])) + list(manifest.get("static_files", [])):
@@ -47,14 +54,14 @@ def manifest_owner_claims(manifest):
     return claims
 
 
-def captured_ids(passwd_text, group_text):
+def captured_ids(passwd_text: str | None, group_text: str | None) -> tuple[dict[str, int], dict[str, int]]:
     """(users {name: uid}, groups {name: gid}) from the captured production /etc/passwd and /etc/group (config set members)."""
-    def table(text):
+    def table(text: str | None) -> dict[str, int]:
         return {row.split(":")[0]: int(row.split(":")[2]) for row in (text or "").splitlines() if row.count(":") >= 2 and not row.startswith("#")}
     return table(passwd_text), table(group_text)
 
 
-def derive_ids(claims, observed):
+def derive_ids(claims: Iterable[tuple[str, str, str]], observed: dict[str, tuple[int, int]]) -> tuple[dict[str, int], dict[str, int], list[str]]:
     """(users {name: uid}, groups {name: gid}, conflicts [text]) from claims and the numeric owners seen in the backups.
 
     Root is fixed at 0. A name seen with two different numbers, or two names (other than root) with one number, are conflicts."""
@@ -69,7 +76,7 @@ def derive_ids(claims, observed):
             else:
                 table[name] = number
     for table, kind in ((users, "uid"), (groups, "gid")):
-        seen = {}
+        seen: dict[int, str] = {}
         for name, number in table.items():
             if number in seen and seen[number] != name:
                 conflicts.append("%s %d is used by both %s and %s" % (kind, number, seen[number], name))
@@ -77,7 +84,7 @@ def derive_ids(claims, observed):
     return users, groups, sorted(set(conflicts))
 
 
-def account_commands(manifest, users, groups, environment="prod"):
+def account_commands(manifest: dict[str, Any], users: dict[str, int], groups: dict[str, int], environment: str = "prod") -> tuple[list[tuple[str, str, list[str]]], list[str]]:
     """The `groupadd`/`useradd`/`usermod` argument lists that create every MANIFEST account of `environment`, with the recovered numbers
     where known. Returns (commands, unresolved account names)."""
     commands, unresolved = [], []
@@ -100,7 +107,7 @@ def account_commands(manifest, users, groups, environment="prod"):
     return commands, unresolved
 
 
-def create_accounts(chroot, commands):
+def create_accounts(chroot: "Chroot", commands: list[tuple[str, str, list[str]]]) -> None:
     """Run the commands in the image; an account that already exists is skipped (the commands are repeatable)."""
     existing_users = {row.split(":")[0] for row in open_text(chroot.path("etc/passwd")).splitlines() if row}
     existing_groups = {row.split(":")[0] for row in open_text(chroot.path("etc/group")).splitlines() if row}
@@ -118,12 +125,12 @@ def create_accounts(chroot, commands):
             existing_users.add(name)
 
 
-def open_text(path):
+def open_text(path: str) -> str:
     with open(path) as handle:
         return handle.read()
 
 
-def accounts_table(tree):
+def accounts_table(tree: str) -> list[list[str]]:
     """Every account and group of the image as lines for the post step: ("user", name, uid, gid, home, shell) / ("group", name, gid)."""
     rows = []
     for line in open_text(os.path.join(tree, "etc/group")).splitlines():
@@ -135,5 +142,5 @@ def accounts_table(tree):
     return rows
 
 
-def run_ok(argv):
+def run_ok(argv: list[str]) -> bool:
     return subprocess.run(argv, check=False, capture_output=True).returncode == 0

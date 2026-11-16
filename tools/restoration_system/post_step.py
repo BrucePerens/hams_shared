@@ -14,11 +14,12 @@ import json
 import os
 import subprocess
 import sys
+from typing import Any
 
 SHARE = "/usr/local/share/hams-restore"
 
 
-def read_ids(path, key_index):
+def read_ids(path: str, key_index: int) -> dict[str, str]:
     """{name: id string} from /etc/passwd or /etc/group style files."""
     table = {}
     if os.path.exists(path):
@@ -30,7 +31,7 @@ def read_ids(path, key_index):
     return table
 
 
-def plan_accounts(wanted, etc="/etc"):
+def plan_accounts(wanted: dict[str, Any], etc: str = "/etc") -> tuple[list[list[str]], list[list[str]], list[str]]:
     """(group_commands, user_commands, conflicts) that make /etc/group and /etc/passwd under `etc` hold the wanted accounts."""
     groups = read_ids(os.path.join(etc, "group"), 2)
     users = read_ids(os.path.join(etc, "passwd"), 2)
@@ -60,7 +61,7 @@ def plan_accounts(wanted, etc="/etc"):
     return gcmds, ucmds, conflicts
 
 
-def stanzas(text):
+def stanzas(text: str) -> dict[str, str]:
     """{package: stanza text} of a dpkg status file."""
     out = {}
     for block in text.strip().split("\n\n"):
@@ -71,14 +72,14 @@ def stanzas(text):
     return out
 
 
-def merge_dpkg(image_status_text, target_status_text):
+def merge_dpkg(image_status_text: str, target_status_text: str) -> str:
     """Target status text that holds every stanza of the image (replacing the target's stanza of the same package) and keeps the rest."""
     merged = stanzas(target_status_text)
     merged.update(stanzas(image_status_text))
     return "\n".join(merged[name] for name in sorted(merged)) + "\n"
 
 
-def merge_dpkg_database(share=SHARE, dpkg_dir="/var/lib/dpkg"):
+def merge_dpkg_database(share: str = SHARE, dpkg_dir: str = "/var/lib/dpkg") -> int:
     """Merge the image's dpkg status and info files (kept under `share`) into `dpkg_dir`. Returns the number of packages in the result."""
     image_status = os.path.join(share, "dpkg-status")
     if not os.path.exists(image_status):
@@ -99,7 +100,7 @@ def merge_dpkg_database(share=SHARE, dpkg_dir="/var/lib/dpkg"):
     return len(stanzas(merged))
 
 
-def main():
+def main() -> int:
     if os.geteuid() != 0:
         sys.stderr.write("hams-restore-post must run as root\n")
         return 2

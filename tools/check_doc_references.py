@@ -101,8 +101,8 @@ class Knowledge:
         for path in files:
             self._add_path(path)
             self._add_aliases(path)
-            if path.endswith(".md"):
-                continue
+            if path.endswith(".md") or os.path.basename(path).startswith("doc_references_baseline_"):
+                continue  # a baseline lists broken names as text: reading it would make each of them "exist"
             self._add_source(path)
 
     def _add_path(self, path):

@@ -31,6 +31,7 @@ import lint_layout
 import lint_lock
 import lint_remote
 import lint_test_durations
+import uncollected_tests
 import atomic_io
 
 
@@ -232,6 +233,7 @@ STEP_META = {
     # Backup encryption, stanza creation, key generation and secret-file overwrites need Bruce's recorded approval (2026-11-09).
     "check_backup_encryption_changes": {"suffixes": frozenset({".py", ".sh", ".service", ".timer", ".conf", ".md"})},
     "check_test_tags": {"suffixes": _PY},
+    "check_unrun_odoo_tests": {"suffixes": _PY},
     "check_rabbitmq_pool": {"suffixes": _PY},
     "check_init_imports": {"suffixes": _PY},
     "check_model_extension_collisions": {"suffixes": _PY},
@@ -239,6 +241,7 @@ STEP_META = {
     "check_test_depends": {"suffixes": frozenset({".py"})},
     "check_registry_test_cr_usage": {"suffixes": _PY},
     "check_gdpr_erasure_uses_service_utility": {"suffixes": _PY},
+    "check_service_account_acl": {"suffixes": frozenset({".py", ".xml", ".csv"})},
     # night_shift_history.py check: the night_shift_history/ directory (one markdown file per entry) and its stub file.
     "check_night_shift_history": {"suffixes": frozenset({".md"})},
     # ADR 0114 enforcement: the relay's Rust sources, its installers and release scripts, the ADR and dependency_watch.json.
@@ -247,6 +250,8 @@ STEP_META = {
     "check_anchor_docs_standard": {"suffixes": frozenset({".md", ".rs", ".py", ".js", ".mjs", ".txt"})},
     "check_int_float_overflow": {"suffixes": _PY},
     "check_float_isfinite": {"suffixes": _PY},
+    # Test files (.py/.js/.mjs/.rs) plus the checker's own allowlist and ratchet baseline.
+    "check_wallclock_in_tests": {"suffixes": frozenset({".py", ".js", ".mjs", ".rs", ".txt", ".json"})},
     # Reads every .py and .sh file of both repositories and its own known list (boundary_hazards_known.json).
     "check_boundary_hazards": {"suffixes": frozenset({".py", ".sh", ".json"})},
     # A secret written to ir.config_parameter or kept in a model field instead of the secret store (2026-11-09).
@@ -280,6 +285,7 @@ STEP_META = {
     "check_cargo_deny": {"suffixes": _RS, "lock": "cargo", "cacheable": False},
     "check_cargo_clippy": {"suffixes": _RS, "lock": "cargo"},
     "check_cargo_fmt": {"suffixes": _RS, "lock": "cargo"},
+    "console sources": {"lock": "cargo", "cacheable": False},
     "check_pip_audit": {
         "suffixes": frozenset({".txt"}),
         "cacheable": False,
@@ -646,7 +652,8 @@ def _git_lines(repo, *args):
         return None
     if res.returncode != 0:
         return None
-    return [line for line in res.stdout.split("\n") if line]
+    # With -z the names are NUL-separated and unquoted; without it git quotes a non-ASCII name ("caf\303\251.py"), a path that does not exist
+    return [line for line in res.stdout.split("\0" if "-z" in args else "\n") if line]
 
 
 def changed_files(repo, base):
@@ -659,8 +666,8 @@ def changed_files(repo, base):
     root = os.path.realpath(top[0] if top else repo)
     # A moved submodule pointer is a change even where `submodule.<name>.ignore=all` is set (hams_open clones set it); only untracked files inside
     # a submodule are left out.
-    diff = _git_lines(repo, "diff", "--ignore-submodules=untracked", "--name-only", "--no-renames", mb[0])
-    untracked = _git_lines(repo, "ls-files", "--others", "--exclude-standard")
+    diff = _git_lines(repo, "diff", "--ignore-submodules=untracked", "--name-only", "-z", "--no-renames", mb[0])
+    untracked = _git_lines(repo, "ls-files", "--others", "--exclude-standard", "-z")
     if diff is None or untracked is None:
         # A failed `git diff` is not "nothing changed": that skipped every step that depends on a changed file and still wrote a pass stamp.
         return None
@@ -2239,6 +2246,18 @@ def main():
     ],
     )
 
+    # check_service_account_acl -- a call made as a zero_sudo service account (with_user(svc_uid), _get_service_env)
+    # must be covered by an ir.model.access row of that account's groups. Found by hand twice on 2026-11-14 (the
+    # AccessError was swallowed and a security mail never went out). Scans both repos' full source, like step 34.
+    _add(
+        "check_service_account_acl",
+        [
+            python_exec,
+            os.path.join(dir_path, "tools", "check_service_account_acl.py"),
+            dir_path,
+        ],
+    )
+
     # check_night_shift_history -- the night-shift log is one markdown file per entry in night_shift_history/ (so that two
     # agents' pull requests never edit the same path). Once that directory exists, the old night_shift_history.md must be
     # the stub and every entry file must be well formed; a stale branch that appends to the old file fails here instead of
@@ -2463,6 +2482,20 @@ def main():
             env=dict(os.environ, HAMS_OPEN_TREE=os.path.realpath(community_dir)) if community_dir else None,
         )
 
+    # 41c. every other test_*.py (uncollected_tests.py: generic discovery, so a new suite in a new directory runs without editing this file).
+    # One step per directory, cwd = that directory, as the suites import their neighbours bare. Directories that cannot run on a plain lint
+    # host are listed with the reason in uncollected_tests.BASELINE.
+    uncollected_run, _uncollected_baselined = uncollected_tests.find_uncollected(repo_root)
+    for rel_dir, names in sorted(uncollected_run.items()):
+        suite_dir = os.path.join(repo_root, rel_dir)
+        _add(
+            f"pytest {rel_dir or 'root'}/",
+            [python_exec, "-m", "pytest", "-q", "-p", "no:cacheprovider"] + [os.path.join(suite_dir, n) for n in names],
+            cwd=suite_dir,
+            fail_header=f"❌ {rel_dir or 'root'}/ unit test failures:",
+            inputs=((os.path.realpath(suite_dir),), None),
+        )
+
     # 42. check_owl_templates -- real, standalone Owl QWeb template compile verification via a
     # real headless Chrome. Built 2026-09-07 after a live-instrumented investigation
     # (OFFLINE_HAM_OPERATION.md) found ham_shack.WebShackTemplate had a genuine compile error (a
@@ -2507,6 +2540,14 @@ def main():
         dir_path,
         sibling_dir,
     ],
+    )
+
+    # 44b. check_unrun_odoo_tests -- a module test Odoo never runs (a plain unittest.TestCase class, or a test_*.py that
+    # tests/__init__.py does not import): hamcall_verify's address matcher test failed on main unnoticed (2026-11-16).
+    _add(
+        "check_unrun_odoo_tests",
+        [python_exec, os.path.join(dir_path, "tools", "check_unrun_odoo_tests.py"), dir_path]
+        + ([sibling_dir] if sibling_dir else []),
     )
 
     _pair_roots = [dir_path] + ([sibling_dir] if sibling_dir else [])
@@ -2622,6 +2663,16 @@ def main():
         print_ok=False,
     )
 
+    # check_wallclock_in_tests -- Bruce's 2026-11-16 policy: no test may depend on wall-clock timing or system load. Fails on a
+    # test that asserts on an elapsed time (time.time/monotonic/perf_counter/Date.now/Instant difference (upper bounds; a lower bound
+    # after a real sleep is fine). Existing findings are a ratchet baseline (wallclock_in_tests_baseline.json): none may be
+    # added, a file may only shrink. One process over both roots.
+    _add(
+        "check_wallclock_in_tests",
+        [python_exec, os.path.join(dir_path, "tools", "check_wallclock_in_tests.py"), *_pair_roots],
+        print_ok=False,
+    )
+
     # check_boundary_hazards -- five shapes of bug the 2026-11-09 bug hunts found by hand, in one pass over every .py/.sh file of both
     # repositories (hams_shared/tools/check_boundary_hazards.py docstring): a credential header sent through urllib with no
     # redirect-refusing handler; a raw command line in a log call; a public @api.model method that acts as a service account and
@@ -2677,6 +2728,16 @@ def main():
             [python_exec, os.path.join(dir_path, "tools", "relay_structural.py"), repo_root],
             inputs=(tuple(relay_dirs), None),
             cacheable=False,
+        )
+
+    # 51c. console sources -- the build-script validation of daemons/shack_console (check_console_sources.py), without a build of the crate. Round 112's
+    # gate build failed on a test fixture naming a bare http host, a rule only build.rs enforces. Selected when a file of that crate changes; never cached.
+    console_crate = os.path.realpath(os.path.join(repo_root, "daemons", "shack_console"))
+    if os.path.isfile(os.path.join(console_crate, "Cargo.toml")):
+        _add(
+            "console sources",
+            [python_exec, os.path.join(dir_path, "tools", "check_console_sources.py"), repo_root],
+            inputs=((console_crate,), None),
         )
 
     # 52. check_cargo_fmt -- `cargo fmt -- --check` over the same crates step 36 lints. CI runs

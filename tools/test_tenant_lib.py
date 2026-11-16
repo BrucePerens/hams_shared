@@ -927,6 +927,28 @@ class FakeApiOpener:
         return io.BytesIO(body) if False else _Resp(body)
 
 
+class RealSystemWriteTextTests(unittest.TestCase):
+    """System.write_text writes the text into a file that was already private, even over a stale loose temp file."""
+
+    def test_the_temp_file_is_created_private_not_chmodded_afterwards(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "secret")
+            stale = path + ".tmp"
+            with open(stale, "w", encoding="utf-8") as handle:
+                handle.write("old")
+            os.chmod(stale, 0o644)
+            seen = []
+            real_write = os.fdopen
+
+            def spy(fd, *args, **kwargs):
+                seen.append(os.fstat(fd).st_mode & 0o777)
+                return real_write(fd, *args, **kwargs)
+
+            with mock.patch.object(lib.shutil, "chown"), mock.patch.object(lib.os, "fdopen", spy):
+                lib.System().write_text(path, "s3cret\n", 0o600, "u:g")
+            self.assertEqual(seen, [0o600], "mode when the text is written")
+
+
 class _Resp:
     def __init__(self, body):
         self._body = body

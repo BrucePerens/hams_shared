@@ -6,12 +6,15 @@ alters enablement. When the backups carry the production enablement links (etc/s
 otherwise the links are made by the same rule provisioning uses (`_activation_units_to_enable`, `boot_service_unit_names`).
 """
 import os
+from collections.abc import Iterable
+from types import ModuleType
+from typing import Any
 
 SYSTEMD_DIR = "/opt/hams/systemd"
 UNIT_SUFFIXES = (".service", ".timer", ".path")
 
 
-def host_class_list(tree, default):
+def host_class_list(tree: str, default: Iterable[str]) -> list[str]:
     """Host classes recorded in the restored /opt/hams/etc/host_classes, else `default`."""
     path = os.path.join(tree, "opt/hams/etc/host_classes")
     if os.path.isfile(path):
@@ -20,7 +23,7 @@ def host_class_list(tree, default):
     return sorted(default)
 
 
-def expected_units(infra, classes):
+def expected_units(infra: ModuleType, classes: Iterable[str]) -> dict[str, dict[str, Any]]:
     """{unit name: {"path", "enabled", "external_fetch", "opt_in"}} for the production units of a host with `classes`.
 
     `enabled` follows provisioning: a .timer or .path is enabled unless it is opt-in; a long-running service is enabled when
@@ -41,7 +44,7 @@ def expected_units(infra, classes):
     return out
 
 
-def enabled_in_tree(tree, unit):
+def enabled_in_tree(tree: str, unit: str) -> bool:
     """True when some *.wants / *.requires directory under /etc/systemd/system of the image links `unit`."""
     base = os.path.join(tree, "etc/systemd/system")
     if not os.path.isdir(base):
@@ -52,11 +55,11 @@ def enabled_in_tree(tree, unit):
     return False
 
 
-def unit_file_present(tree, unit):
+def unit_file_present(tree: str, unit: str) -> bool:
     return os.path.lexists(os.path.join(tree, "etc/systemd/system", unit)) or os.path.lexists(os.path.join(tree, SYSTEMD_DIR.lstrip("/"), unit))
 
 
-def link_units(tree, units):
+def link_units(tree: str, units: dict[str, dict[str, Any]]) -> list[str]:
     """Symlink /etc/systemd/system/<unit> -> /opt/hams/systemd/<unit> where the image has no such link (as provisioning does)."""
     made = []
     for unit, info in units.items():
@@ -68,9 +71,10 @@ def link_units(tree, units):
     return made
 
 
-def enablement_plan(tree, units):
+def enablement_plan(tree: str, units: dict[str, dict[str, Any]]) -> tuple[list[str], list[str]]:
     """(to_enable, kept): the units that should be enabled and are not yet in the image, and those already enabled as restored."""
-    to_enable, kept = [], []
+    to_enable: list[str] = []
+    kept: list[str] = []
     for unit, info in sorted(units.items()):
         if not info["enabled"]:
             continue

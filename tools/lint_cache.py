@@ -43,6 +43,7 @@ one small JSON file per (checker, version). Capped by `results_mb`.
 CLI:  python3 tools/lint_cache.py show | prune | clear [cargo|results|all]
 """
 
+import ast
 import contextlib
 import fcntl
 import glob
@@ -747,14 +748,42 @@ def file_digest(path):
     return h.hexdigest()
 
 
+def _local_imports(path):
+    """The files of `path`'s directory that `path` imports (any import statement, including inside functions)."""
+    here = os.path.dirname(os.path.abspath(path))
+    with open(path, "rb") as handle:
+        tree = ast.parse(handle.read(), filename=path)
+    found = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            names = [node.module]
+        else:
+            continue
+        for name in names:
+            candidate = os.path.join(here, name.split(".")[0] + ".py")
+            if os.path.isfile(candidate):
+                found.add(candidate)
+    return found
+
+
 # [@ANCHOR: lint_cache:checker_version]
 def checker_version(*paths):
-    """Hash of the checker's own source files: any edit to the checker invalidates every entry. Each file is
-    identified by its base name and text, never its directory: the checkout of every lint run is a new path, and a
-    version that included the path gave each run its own cache file, so the cache was cold every time (347 files of
-    one checker on the dev box; two 42 s steps)."""
+    """Hash of the checker's own source files and of every module of its directory it imports (transitively): any
+    edit to the checker or a helper it uses invalidates every entry. Each file is identified by its base name and
+    text, never its directory: the checkout of every lint run is a new path, and a version that included the path gave
+    each run its own cache file, so the cache was cold every time (347 files of one checker on the dev box; two 42 s
+    steps). A helper edit used to leave stale results valid (check_float_isfinite imports source_text, tree_files)."""
+    files = set(paths)
+    pending = list(paths)
+    while pending:
+        for found in _local_imports(pending.pop()):
+            if found not in files:
+                files.add(found)
+                pending.append(found)
     parts = []
-    for path in paths:
+    for path in files:
         with open(path, "rb") as handle:
             parts.append((os.path.basename(path).encode(), handle.read()))
     h = hashlib.sha256()

@@ -37,6 +37,9 @@ import threading
 import time
 import unittest
 
+from hypothesis import given, settings
+from hypothesis import strategies as st
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 import lock_queue as lq  # noqa: E402
@@ -1128,6 +1131,20 @@ class TestGuardAgainstTheSharedDatabase(_TmpDirCase):
             self.assertFalse(os.path.exists(log) and open(log, encoding="utf-8").read(),
                              "a rejected command line ran a database command: %r %r" % (words, extra))
 
+
+
+class ParseNameProperties(unittest.TestCase):
+    # Tests [@ANCHOR: lock_queue:take_ticket]
+    @settings(max_examples=60, deadline=None)
+    @given(st.text(alphabet="0123456789_+ -\u0661\u0662", max_size=12))
+    def test_parse_name_accepts_only_plain_ascii_digit_names(self, name):
+        parsed = lq._parse_name(name)
+        if parsed is not None:
+            self.assertRegex(name, r"\A[0-9]+-[0-9]+-[0-9]+\Z")
+
+    def test_parse_name_rejects_underscore_sign_space_and_non_ascii_digits(self):
+        for name in ("1_0-2-3", "+1-2-3", "1- 2-3", "\u0661-2-3"):
+            self.assertIsNone(lq._parse_name(name), name)
 
 
 if __name__ == "__main__":

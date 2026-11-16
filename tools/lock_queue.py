@@ -43,6 +43,7 @@ the head is the lowest live ticket, running holders included, exactly as before 
 import json
 import math
 import os
+import re
 import signal
 import sys
 import time
@@ -122,13 +123,10 @@ def _write_atomic(qdir, final_name, payload):
 
 def _parse_name(name):
     """``<seq>-<pid>-<start>`` -> (seq, pid, start), or None."""
-    parts = name.split("-")
-    if len(parts) != 3:
+    if not re.fullmatch(r"[0-9]+-[0-9]+-[0-9]+", name):  # int() alone also takes "1_0", "+1", " 1" and non-ASCII digits
         return None
-    try:
-        return int(parts[0]), int(parts[1]), int(parts[2])
-    except ValueError:
-        return None
+    seq, pid, start = name.split("-")
+    return int(seq), int(pid), int(start)
 
 
 def _read_payload(path):

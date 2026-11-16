@@ -3,6 +3,8 @@
 
 # Copyright © Bruce Perens K6BP. All Rights Reserved.
 
+set -eu
+
 VENV_PYTHON="${VENV_PYTHON:-python3}"
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 

@@ -87,6 +87,11 @@ Purpose: keep a binary name usable as a file name. `_check_name_no_slashes()` is
 
 Special concerns: `ensure_executable`, `_download_and_extract`, `_unlink_binary_file` and `_compute_symlink_path` repeat the check independently (defence in depth), so a record created by raw SQL still cannot escape. Uniqueness is separate: the SQL constraint `UNIQUE(name, company_id)` makes the name unique per company. Test: `test_09_constraints` in `tests/test_binary_manifest.py`.
 
+### `binary_downloader:binary_manifest_check_global_name_unique` [@ANCHOR: binary_downloader:binary_manifest_check_global_name_unique]
+Purpose: keep a binary name unique among manifests that have no company. `_check_global_name_unique()` is an `@api.constrains("name", "company_id")` constraint on `binary.manifest`; no arguments, no return value. `UNIQUE(name, company_id)` never fires for company-less rows (NULLs differ in SQL), so for the checked records that have no company it searches the company-less manifests with the same names and raises `ValidationError("The binary name must be unique per company!")` when any name occurs more than once.
+
+Special concerns: rows with a company are left to the SQL constraint. Test: `test_binary_manifest.py` `test_09_1_global_manifest_name_is_unique`.
+
 ### `binary_downloader:binary_manifest_check_extract_member` [@ANCHOR: binary_downloader:binary_manifest_check_extract_member]
 Purpose: make sure an archive manifest says which file to take out of the archive. `_check_extract_member()` is an `@api.constrains("archive_type", "extract_member")` constraint on `binary.manifest`; no arguments, no return value. When `archive_type` is `tar.gz` or `zip` and `extract_member` is empty it raises `ValidationError("Extract Member is required for <type> archives.")`; for `binary` (a raw file) the field is not needed.
 

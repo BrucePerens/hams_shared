@@ -21,6 +21,16 @@ class RunBlackInterpreterTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("-m black", log.read_text())
 
+    def test_black_failure_is_the_script_exit_status(self):
+        with tempfile.TemporaryDirectory() as d:
+            stub = Path(d, "python3")
+            stub.write_text('#!/bin/sh\n[ "$1" = "-m" ] && exit 3\nexit 0\n')
+            stub.chmod(0o755)
+            env = {"PATH": d + os.pathsep + "/usr/bin:/bin", "HOME": d}
+            result = subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn("Formatting complete", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

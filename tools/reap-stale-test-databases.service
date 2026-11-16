@@ -10,6 +10,8 @@ After=postgresql.service
 
 [Service]
 Type=oneshot
+# A oneshot has no start timeout. The timer re-arms from the last activation (OnUnitActiveSec), so a hung run would silently stop every later reap.
+TimeoutStartSec=1h
 User=root
 WorkingDirectory=@HAMS_SHARED_TOOLS@
 ExecStart=/usr/bin/env python3 reap_stale_test_databases.py

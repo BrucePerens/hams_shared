@@ -55,6 +55,7 @@ import sys
 
 import check_target
 import lint_cache
+from source_text import read_source  # noqa: E402
 from tree_files import tree_files
 
 IGNORE_DIR_NAMES = {
@@ -478,8 +479,9 @@ def check_file(path):
     """`[rule, symbol, line, message]` findings for one file, before the known list is applied (JSON-serialisable, so the
     per-file result cache can hold it). A `.sh` file is only judged by `gh-truncated-listing`; a file that does not parse
     has none."""
-    with open(path, "r", encoding="utf-8", errors="replace") as handle:
-        source = handle.read()
+    source, problem = read_source(path)
+    if problem:
+        return [["unreadable-source", "<file>", 0, problem]]
     if path.endswith(".sh"):
         return [list(f) for f in _rule_gh_truncated_listing_sh(path, source)]
     try:

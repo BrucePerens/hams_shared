@@ -23,6 +23,7 @@ import sys
 import xml.parsers.expat
 
 import check_target
+from source_text import read_source
 from tree_files import tree_walk
 
 # The flags EVERY caller scanning a module (tools/test.py's pre-flight, devbox_tools/cycle_run.py's round pre-flight) must pass
@@ -51,6 +52,20 @@ def _repo_of_path(filepath):
         if part in _LICENSE_REPO_NAMES:
             return part
     return None
+
+
+# [@ANCHOR: check_burn_list:repo_relative_rule_path]
+def _repo_relative_rule_path(filepath):
+    """The path the path-keyed rules judge: relative to the nearest repo-name directory, so a checkout directory
+    named like `batch_test_hams_open_x` cannot make a production file look like a test file. Paths with no repo
+    component (fixtures, /tmp labels) are judged as given. The result keeps a leading "/" so rules anchored
+    on a preceding slash (`(?<!/tools)/test_`) still see the first directory."""
+    norm = filepath.replace("\\", "/")
+    parts = norm.split("/")
+    for i in range(len(parts) - 2, -1, -1):
+        if parts[i] in _LICENSE_REPO_NAMES:
+            return "/" + "/".join(parts[i + 1:])
+    return norm
 
 
 # [@ANCHOR: check_burn_list:check_burn_list_xmlnode_class]
@@ -4801,7 +4816,7 @@ def scan_file(filepath, is_odoo_module=False):
     # Which line rules apply to this file depends on its path only, never on a line: decide it
     # once per file. (It was a `re.search(ext_pattern, path)` per rule per line, 8 million
     # string-pattern searches in one scan of hams_open; same rules, same order, same findings.)
-    _norm_path = filepath.replace("\\", "/")
+    _norm_path = _repo_relative_rule_path(filepath)
     _general_rules = [
         (regex, msg)
         for ext_pattern, regex, msg in GENERAL_ERROR_RULES
@@ -5337,6 +5352,9 @@ def scan_file(filepath, is_odoo_module=False):
                 # user_websites/models/res_users.py's
                 # _execute_gdpr_erasure().
                 "audit-ignore-gdpr-hand-rolled-unlink",
+                # check_service_account_acl.py's escape hatch for a call made as a service account whose ACL
+                # row is real but invisible to a static scan (see that file's docstring).
+                "audit-ignore-service-acl",
                 # `_get_service_uid()`'s narrow, single-call-site escape hatch
                 # from the "CRITICAL FAST FAIL" try/except ban above
                 # (visit_Try, has_ham_base branch). Decision recorded in
@@ -5882,9 +5900,13 @@ def main():
                 continue
 
             if file == "__manifest__.py":
+                manifest_content, problem = read_source(filepath)
+                if problem and os.path.exists(filepath):
+                    total_errors += 1
+                    print(f"  ❌ ERROR: {problem}")
                 try:
-                    with open(filepath, "r", encoding="utf-8") as f:
-                        manifest_content = f.read()
+                    if manifest_content is None:
+                        raise OSError(problem)
                     tree = ast.parse(manifest_content, filename=filepath)
                     for node in tree.body:
                         if isinstance(node, ast.Expr) and isinstance(
@@ -5923,9 +5945,11 @@ def main():
                     and re.search(r"(?:^|[/\\])(?:tour[^/\\]*|[^/\\]*_tour)\.js$", filepath)
                 ):
                     try:
-                        with open(filepath, "r", encoding="utf-8") as f:
-                            js_tour_content = f.read()
-                        if re.search(
+                        js_tour_content, problem = read_source(filepath)
+                        if problem:
+                            total_errors += 1
+                            print(f"  ❌ ERROR: {problem}")
+                        elif re.search(
                             r"registry\.category\(\s*['\"]web_tour\.tours['\"]\s*\)\.add\(",
                             js_tour_content,
                         ):
@@ -5934,8 +5958,11 @@ def main():
                         pass
                 if file.endswith(".py"):
                     try:
-                        with open(filepath, "r", encoding="utf-8") as f:
-                            lines = f.readlines()
+                        text, problem = read_source(filepath)
+                        if problem and os.path.exists(filepath):
+                            errors.append(problem)  # (a broken symlink was already reported by scan_file)
+                        if text is not None:
+                            lines = text.splitlines(True)
                             if lines:
                                 first_line = lines[0]
                                 filepath_forward = filepath.replace("\\", "/")
@@ -6170,23 +6197,23 @@ def main():
             filepath = os.path.join(root, file)
             rel_path = os.path.relpath(filepath, target_dir)
             if file.endswith(".xml"):
-                try:
-                    with open(filepath, "r", encoding="utf-8") as f:
-                        content = f.read()
+                content, problem = read_source(filepath)
+                if problem:
+                    total_errors += 1
+                    print(f"  ❌ ERROR: {problem}")
+                else:
                     for cls in re.findall(r"o_tour_[a-zA-Z0-9_-]+", content):
                         xml_tour_classes.setdefault(cls, set()).add(rel_path)
                     xml_content_all += content
-                except (SyntaxError, OSError):
-                    pass
             elif file.endswith(".js"):
-                try:
-                    with open(filepath, "r", encoding="utf-8") as f:
-                        content = f.read()
+                content, problem = read_source(filepath)
+                if problem:
+                    total_errors += 1
+                    print(f"  ❌ ERROR: {problem}")
+                else:
                     for cls in re.findall(r"o_tour_[a-zA-Z0-9_-]+", content):
                         js_tour_targets.setdefault(cls, set()).add(rel_path)
                     js_content_all += content
-                except (SyntaxError, OSError):
-                    pass
 
     for cls, found_in in sorted(xml_tour_classes.items()):
         if cls not in js_content_all:

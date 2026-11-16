@@ -1766,6 +1766,23 @@ def warn_if_sibling_checkout_is_behind(path):
         )
 
 
+# [@ANCHOR: test:warn_if_sibling_is_not_beside_the_tree]
+def warn_if_sibling_is_not_beside_the_tree(base_dir, repo_root, chosen):
+    """Say loudly when the sibling checkout chosen without HAMS_OPEN_TREE is not the one beside BASE_DIR.
+
+    A linked worktree scans the MAIN checkout's parent, so it silently ran the main checkout's
+    hams_open instead of the worktree's own sibling tree. Silent when BASE_DIR is the main checkout."""
+    beside = os.path.abspath(os.path.join(base_dir, "..", os.path.basename(chosen)))
+    if repo_root == base_dir and beside == chosen:
+        return
+    note = f"a sibling tree exists beside this one at {beside}" if os.path.isdir(beside) and beside != chosen else "this tree is a linked worktree"
+    print(
+        f"⚠️  WARNING: HAMS_OPEN_TREE is not set, so the run uses {chosen} ({note}). "
+        f"Set HAMS_OPEN_TREE=<tree> to choose the sibling checkout explicitly.",
+        file=sys.stderr,
+    )
+
+
 # [@ANCHOR: test:anchor_scan_sibling_dir]
 def anchor_scan_sibling_dir(base_dir, other_repo_name, environ=None):
     """The other repository's checkout for the pre-flight anchor scan, or None. Full entry: tools/README.md.
@@ -1868,6 +1885,7 @@ def get_addons_path(base_dir):
 
     if found_community and paths[-1] not in (base_dir, repo_root) and not override:
         warn_if_sibling_checkout_is_behind(paths[-1])
+        warn_if_sibling_is_not_beside_the_tree(base_dir, repo_root, paths[-1])
     return ",".join(paths)
 
 
@@ -4388,6 +4406,13 @@ def build_arg_parser():
         "at the end, whether it passed, failed or was stopped (ADR 0116). The kept database is replaced by the next "
         "run in the same slot; drop it yourself when done. No effect with one slot, which keeps its database as before.",
     )
+    parser.add_argument(
+        "--test-order",
+        choices=["reverse"],
+        default=None,
+        help="Run the tests in REVERSE order (finds tests that leak state or depend on an earlier test). "
+        "Compare with a normal run.",
+    )
     parser.add_argument("--slot-held", type=int, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--internal-ns-init", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--preflight-done", action="store_true", help=argparse.SUPPRESS)
@@ -4399,6 +4424,11 @@ def parse_runner_args(argv=None):
     """Parse and cross-check the command line; exits 2 with the cause as the last line."""
     parser = build_arg_parser()
     args = parser.parse_args(argv)
+    if args.test_order == "reverse":
+        # Every re-exec'd phase parses the same argv, so the final odoo process gets the environment too.
+        hook_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_order_hook")
+        os.environ["HAMS_TEST_ORDER"] = "reverse"
+        os.environ["PYTHONPATH"] = os.pathsep.join(filter(None, [hook_dir, os.environ.get("PYTHONPATH")]))
     if args.slots is not None:
         try:
             args.slots = runner_slots.parse_slot_count(args.slots, "--slots")
@@ -5014,6 +5044,12 @@ def main():
         with open(coverage_rcfile, "w") as f:
             f.write("[run]\nrelative_files = True\n")
 
+    coverage_source_dirs = [base_dir]
+    for _sibling_name in ("hams_open", "hams_com"):
+        _sibling_dir = anchor_scan_sibling_dir(base_dir, _sibling_name)
+        if _sibling_dir and _sibling_dir != base_dir and _sibling_dir not in coverage_source_dirs:
+            coverage_source_dirs.append(_sibling_dir)
+
     def get_odoo_test_cmd(suffix=""):
         cmd = [python_exec]
         if args.profile:
@@ -5046,7 +5082,9 @@ def main():
                     "run",
                     f"--rcfile={coverage_rcfile}",
                     "--parallel-mode",
-                    f"--source={base_dir}",
+                    # Both repositories: a run from hams_com names hams_open modules too (and the
+                    # reverse), and their files would otherwise be missing from the report.
+                    f"--source={','.join(coverage_source_dirs)}",
                     "--data-file",
                     coverage_data_file,
                 ]

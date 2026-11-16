@@ -2838,6 +2838,20 @@ class SiblingCheckoutSelectionTests(unittest.TestCase):
         self.assertIn(fresh, paths)
         self.assertNotIn(stale, paths)
 
+    def test_a_worktree_using_the_main_sibling_warns_loudly(self):
+        """Tests [@ANCHOR: test:warn_if_sibling_is_not_beside_the_tree]"""
+        main = os.path.join(self.tmp, "main_hams_open")
+        beside = os.path.join(self.tmp, "job", "hams_open")
+        for d in (main, beside):
+            os.makedirs(d)
+        base = os.path.join(self.tmp, "job", "hams_com")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            _test_runner.warn_if_sibling_is_not_beside_the_tree(base, "/main/hams_com", beside + "x")
+            _test_runner.warn_if_sibling_is_not_beside_the_tree(base, base, beside)
+        self.assertIn("HAMS_OPEN_TREE is not set", err.getvalue())
+        self.assertEqual(err.getvalue().count("WARNING"), 1)
+
     def test_a_missing_hams_open_tree_is_fatal(self):
         base = os.path.join(self.tmp, "hams_com")
         os.makedirs(base)

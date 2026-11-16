@@ -98,20 +98,29 @@ def noupdate_records(xml_text):
     return found
 
 
+def _name_status(repo, base, head):
+    """[(status letter, [paths])] for base...head. Read with -z: plain output quotes a non-ASCII name ("caf\\303\\251.xml"), which then
+    matched no ".xml" test and was silently never checked."""
+    fields = _git(repo, "diff", "--name-status", "-z", "-M", f"{base}...{head}").stdout.split("\0")
+    entries, i = [], 0
+    while i < len(fields) and fields[i]:
+        count = 2 if fields[i][0] in "RC" else 1
+        entries.append((fields[i][0], fields[i + 1:i + 1 + count]))
+        i += 1 + count
+    return entries
+
+
 def _module_of(path):
     return path.split("/", 1)[0] if "/" in path else ""
 
 
 def _changed_files(repo, base, head):
     """[(status, old path, new path)] for XML data files modified or renamed base...head."""
-    result = _git(repo, "diff", "--name-status", "-M", f"{base}...{head}")
     changed = []
-    for line in result.stdout.splitlines():
-        parts = line.split("\t")
-        status = parts[0][0]
+    for status, parts in _name_status(repo, base, head):
         if status not in ("M", "R"):
             continue
-        old, new = parts[1], parts[-1]
+        old, new = parts[0], parts[-1]
         if not new.endswith(".xml") or SKIP_PARTS & set(new.split("/")):
             continue
         changed.append((status, old, new))
@@ -120,12 +129,10 @@ def _changed_files(repo, base, head):
 
 def _migration_text(repo, base, head):
     """{module: text of every migration script added or changed base...head}."""
-    result = _git(repo, "diff", "--name-status", "-M", f"{base}...{head}")
     texts = {}
-    for line in result.stdout.splitlines():
-        parts = line.split("\t")
+    for status, parts in _name_status(repo, base, head):
         path = parts[-1]
-        if parts[0][0] in ("A", "M", "R") and "/migrations/" in path and path.endswith(".py"):
+        if status in ("A", "M", "R") and "/migrations/" in path and path.endswith(".py"):
             body = _show(repo, head, path) or ""
             texts[_module_of(path)] = texts.get(_module_of(path), "") + body
     return texts

@@ -10,9 +10,12 @@ import os
 import re
 import shutil
 
-from .runner import RestorationError
+from typing import Any
+
 from . import secrets_input as si
 from . import sources as src
+from .runner import RestorationError, Runner
+from .secrets_input import Secrets
 
 STAT_RE = re.compile(r"^(\d+) (\d+),(\d+) (\d+):(\d+)$")
 
@@ -41,20 +44,20 @@ class DbPlan:
 
 # [@ANCHOR: sourceset:sourceset_backup_set_class]
 class BackupSet:
-    def __init__(self, kind, runner, secrets, profile, work):
+    def __init__(self, kind: str, runner: Runner, secrets: Secrets, profile: dict[str, Any], work: str) -> None:
         self.kind, self.runner, self.secrets, self.profile, self.work = kind, runner, secrets, profile, work
-        self.kopia = None
-        self.pg = None
-        self.pg_info = None
-        self.pg_backup = None
-        self.kopia_snapshots = []
-        self.stream_snapshots = {}
+        self.kopia: src.KopiaRepo | None = None
+        self.pg: src.PgBackRestRepo | None = None
+        self.pg_info: Any = None
+        self.pg_backup: Any = None
+        self.kopia_snapshots: list[dict[str, Any]] = []
+        self.stream_snapshots: dict[str, Any] = {}
 
-    def close(self):
+    def close(self) -> None:
         if self.kopia:
             self.kopia.close()
 
-    def describe(self):
+    def describe(self) -> dict[str, Any]:
         """Metadata for the image's RESTORATION_META.json and the coverage report. Names and times only, no secret."""
         out = {"kind": self.kind, "kopia_snapshots": len(self.kopia_snapshots)}
         if self.pg_backup:
@@ -62,7 +65,7 @@ class BackupSet:
                                  "wal_start": self.pg_backup["archive"]["start"], "wal_max": self.pg_info["archive"][-1]["max"]}
         return out
 
-    def file_items(self):
+    def file_items(self) -> list[FileItem]:
         """The kopia restore actions, in the order they should run."""
         items = []
         if self.kind == "b2":
@@ -84,7 +87,7 @@ class BackupSet:
                     items.append(FileItem("files " + name, files[name], path, "tree"))
         return items
 
-    def db_plan(self):
+    def db_plan(self) -> DbPlan:
         """DbPlan from the pgBackRest repository when there is one, else from the sealed streams. RestorationError when neither."""
         if self.pg_backup:
             b = self.pg_backup
@@ -97,14 +100,14 @@ class BackupSet:
         return DbPlan("streams", name, str(snap["startTime"]), "", "", {"base": snap, "wal": [wal[k] for k in sorted(wal)]})
 
 
-def _kopia_checks(kopia, label):
+def _kopia_checks(kopia: src.KopiaRepo, label: str) -> list[dict[str, Any]]:
     src.SourceCheck.kopia_encrypted(kopia)
     snaps = kopia.snapshots()
     src.SourceCheck.kopia_not_empty(snaps, label)
     return snaps
 
 
-def open_local(root, runner, secrets, profile, work):
+def open_local(root: str, runner: Runner, secrets: Secrets, profile: dict[str, Any], work: str) -> BackupSet:
     """Open a local set: <root>/<kopia_repo> and optionally <root>/<pgbackrest_repo>. RestorationError for any refusal.
 
     A directory that holds only plaintext staging (db/, wal/, config/ without a repository) is refused: it is not encrypted."""
@@ -140,7 +143,7 @@ def open_local(root, runner, secrets, profile, work):
     return bs
 
 
-def open_b2(runner, secrets, profile, work):
+def open_b2(runner: Runner, secrets: Secrets, profile: dict[str, Any], work: str) -> BackupSet:
     """Open the Backblaze set: the kopia repository under the bucket's files/ prefix and the pgBackRest repository."""
     secrets.need([si.B2_KEY_ID, si.B2_KEY, si.KOPIA, si.PGBACKREST])
     b2, db = profile["b2"], profile["database"]
@@ -161,7 +164,7 @@ def open_b2(runner, secrets, profile, work):
     return bs
 
 
-def apply_rsync_stat(tree, stat_file=".hams-rsync-stat.json"):
+def apply_rsync_stat(tree: str, stat_file: str = ".hams-rsync-stat.json") -> int:
     """Apply the owners and modes the second backup kept in `<tree>/.hams-rsync-stat.json` (rsync --fake-super values `mode rdev uid:gid`)
     and delete that file. Returns the number of entries applied. Root only."""
     path = os.path.join(tree, stat_file)
@@ -183,13 +186,15 @@ def apply_rsync_stat(tree, stat_file=".hams-rsync-stat.json"):
     return count
 
 
-def extract_config_tar(archive, tree, runner):
+def extract_config_tar(archive: str, tree: str, runner: Runner) -> None:
     """Extract one config-<stamp>.tar.zst (made with --numeric-owner, paths relative to /) over the image, keeping numeric owners."""
     runner.run(["tar", "--zstd", "-xpf", archive, "--numeric-owner", "--xattrs", "--same-owner", "-C", tree])
 
 
-def restore_item(item, bs, tree, scratch, runner):
+def restore_item(item: FileItem, bs: BackupSet, tree: str, scratch: str, runner: Runner) -> str:
     """Perform one FileItem into `tree`. Returns a short text for the log."""
+    if bs.kopia is None:
+        raise RestorationError("%s: the backup set has no kopia repository" % item.label)
     dest_root = os.path.join(scratch, "item")
     shutil.rmtree(dest_root, ignore_errors=True)
     if item.kind == "tree":

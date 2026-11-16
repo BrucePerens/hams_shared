@@ -63,6 +63,7 @@ Tests [@ANCHOR: agent_procs:main]
 """
 
 import dataclasses
+import datetime
 import io
 import json
 import os
@@ -75,6 +76,9 @@ import threading
 import time
 import unittest
 from unittest import mock
+
+from hypothesis import given as hypothesis_given, settings
+from hypothesis import strategies as st
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import agent_procs as ap  # noqa: E402
@@ -571,6 +575,13 @@ class WaitTests(ProcTestCase):
         self.assertEqual(result.code, 1)
         self.assertIn("disappeared", result.message)
 
+    def test_wait_job_says_when_the_job_hit_its_own_timeout(self):
+        rec = ap.JobRecord("slow", "", 11, 11, 11, 5, "/w", ["x"], "/l", 1.0, "bruce", exit_code=124, exit_reason="timeout")
+        ap.write_record(rec, self.jobs)
+        result = ap.wait_job("slow", timeout=5, interval=0.01, directory=self.jobs)
+        self.assertEqual(result.code, 1)
+        self.assertIn("its own timeout", result.message)
+
     def test_wait_file_fails_when_the_producer_dies_first(self):
         producer = self.spawn("sleep 0.5")
         result = ap.wait_file(os.path.join(self.tmp, "never"), while_pid=producer.pid, timeout=20, interval=0.05)
@@ -587,6 +598,20 @@ class WaitTests(ProcTestCase):
         open(path, "w").close()
         self.assertEqual(ap.cmd_wait(ap.parse_args(["wait", "--file", path]), out), 0)
         self.assertIn("ready", out.getvalue())
+
+    def test_wait_job_whose_wrapper_ends_between_the_record_read_and_the_liveness_check_is_not_lost(self):
+        dead = subprocess.Popen(["true"])
+        dead.wait()  # reaped: its pid is gone
+        rec = ap.JobRecord("race", "", dead.pid, dead.pid, dead.pid, 1, "/w", ["x"], "/l", 1.0, "bruce")
+        ap.write_record(rec, self.jobs)
+        stale = ap.read_record("race", self.jobs)  # what the poll read just before the wrapper wrote its exit code
+        rec.exit_code = 0
+        ap.write_record(rec, self.jobs)
+        real = ap.read_record
+        reads = iter([real("race", self.jobs), stale])  # the existence check, then the poll's stale read
+        with mock.patch.object(ap, "read_record", side_effect=lambda *a, **k: next(reads, None) or real(*a, **k)):
+            result = ap.wait_job("race", timeout=5, interval=0.01, directory=self.jobs)
+        self.assertEqual(result.code, 0, result.message)
 
     def test_wait_job_unknown_is_a_usage_error(self):
         with self.assertRaises(ap.ProcError):
@@ -1044,6 +1069,26 @@ class JobTests(ProcTestCase):
         wrapper.send_signal(signal.SIGUSR1)
         self.assertEqual(wrapper.wait(timeout=30), 128 + int(signal.SIGUSR1))
 
+    def test_wrapper_holds_a_signal_that_arrives_while_the_command_line_is_being_built(self):
+        """Tests [@ANCHOR: agent_procs:wrapper_main]: a signal sent to the wrapper while `limit_argv` is still working (slow
+        under load; the command does not exist yet) is not lost: it reaches the command once started (found 2026-11-13: `stop`
+        right after `run` sometimes reported the job still running)."""
+        building = os.path.join(self.tmp, "building")
+        script = (
+            "import sys, time, pathlib, agent_procs as ap\n"
+            "orig = ap.limit_argv\n"
+            f"def slow(*a):\n    pathlib.Path({building!r}).touch()\n    time.sleep(1)\n    return orig(*a)\n"
+            "ap.limit_argv = slow\n"
+            "sys.exit(ap.wrapper_main('building', ['sleep', '60'], None))\n")
+        wrapper = subprocess.Popen([sys.executable, "-c", script], cwd=os.path.dirname(TOOL), stdin=subprocess.PIPE, text=True,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        self.spawned.append(wrapper)
+        wrapper.stdin.write("go\n")
+        wrapper.stdin.flush()
+        self.until(lambda: os.path.exists(building), 30)
+        wrapper.send_signal(signal.SIGUSR1)
+        self.assertEqual(wrapper.wait(timeout=30), 128 + int(signal.SIGUSR1))
+
     def test_wrapper_main_refuses_to_run_without_the_go_line(self):
         code = subprocess.run([sys.executable, TOOL, "_wrap", "never", "--", "touch", os.path.join(self.tmp, "ran")],
                               input="", text=True, env=dict(os.environ, **self.env)).returncode
@@ -1114,6 +1159,18 @@ class LimitTests(ProcTestCase):
         listing = cli("jobs", env=self.env).stdout
         self.assertIn("timeout=1800s mem=6G", listing)
         self.assertIn("timeout=none mem=none", listing)
+
+    # Tests [@ANCHOR: agent_procs:default_mem_max]
+    def test_cargo_and_rustc_commands_get_the_higher_default_cap(self):
+        self.assertEqual(ap.default_mem_max(["python3", "test.py"]), "6G")
+        self.assertEqual(ap.default_mem_max(None), "6G")
+        self.assertEqual(ap.default_mem_max(["nice", "-n", "10", "env", "A=1", "cargo", "test"]), "24G")
+        self.assertEqual(ap.default_mem_max(["/home/u/.cargo/bin/cargo", "build"]), "24G")
+        self.assertEqual(ap.default_mem_max(["rustc", "x.rs"]), "24G")
+        self.assertEqual(ap.default_mem_max(["echo", "cargo-deny"]), "6G")
+        cli("run", "cg", "--", "cargo", "--version", env=self.env)
+        cli("wait", "--job", "cg", "--timeout", "30", env=self.env)
+        self.assertEqual(ap.read_record("cg", self.jobs).mem_max, "24G")
 
     def test_the_command_ends_when_its_wrapper_dies(self):
         rec = ap.start_job("orphan", ["sleep", "61.5"], mem_max=None, directory=self.jobs)
@@ -1365,6 +1422,19 @@ class MainTests(ProcTestCase):
         text = cli("--help").stdout
         for word in ("find", "wait", "run", "jobs", "stop", "kill-pid"):
             self.assertIn(word, text)
+
+
+class ParseStartTimeProperties(unittest.TestCase):
+    # Tests [@ANCHOR: agent_procs:parse_start_time]
+    @settings(max_examples=40, deadline=None)
+    @hypothesis_given(st.datetimes(min_value=datetime.datetime(1, 1, 1), max_value=datetime.datetime(1971, 1, 1)))
+    def test_a_timestamp_before_boot_is_a_proc_error_never_a_crash(self, when):
+        with self.assertRaises(ap.ProcError):
+            ap.parse_start_time(when.strftime("%Y-%m-%dT%H:%M:%S"))
+
+    def test_year_one_is_a_proc_error(self):
+        with self.assertRaises(ap.ProcError):
+            ap.parse_start_time("0001-01-01T00:00:00")
 
 
 if __name__ == "__main__":

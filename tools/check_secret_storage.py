@@ -38,6 +38,7 @@ import re
 import sys
 
 import check_target
+from source_text import read_source  # noqa: E402
 from tree_files import tree_files
 
 IGNORE_DIR_NAMES = {"__pycache__", "node_modules", ".venv", "venv", "target", ".git", "worktrees", "site-packages"}
@@ -176,8 +177,9 @@ def check_file(path):
     """Findings for one file; test files have none."""
     if is_test_path(path):
         return []
-    with open(path, "r", encoding="utf-8", errors="replace") as handle:
-        source = handle.read()
+    source, problem = read_source(path)
+    if problem:
+        return [("unreadable-source", "<file>", 0, problem)]
     return check_xml(source) if path.endswith(".xml") else check_python(source)
 
 

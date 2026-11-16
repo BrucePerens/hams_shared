@@ -341,6 +341,9 @@ class RuleTests(GuardTestCase):
         for text in ("kill -TERM 11 1", "kill -TERM 0", "kill -- -1", "kill -sKILL 5", "kill -n9 5", "kill -09 5"):
             self.assertTrue(verdict_for(text).reasons, text)
         self.assertTrue(verdict_for("kill -- -123 %1 10").reasons)  # a negative pid names a process group
+        # after a signal option, `-1` / `-123` is a negative pid (every process / a group), not another signal spec
+        for text in ("kill -TERM -1", "kill -s TERM -1", "kill -15 -1", "kill --signal=TERM -123", "kill -TERM 11 -123"):
+            self.assertTrue(verdict_for(text).reasons, text)
         self.assertEqual(verdict_for("kill -l").notes, [])
         self.assertEqual(verdict_for("kill").reasons, [])
         self.assertTrue(verdict_for("kill -9 5").reasons)

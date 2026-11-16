@@ -13171,6 +13171,28 @@ def _conf_value(line, key):
     return value
 
 
+# [@ANCHOR: infrastructure:_replace_file_keeping_owner]
+def _replace_file_keeping_owner(path, text):
+    """Atomically replaces `path` with `text`, keeping its owner, group and mode. The temporary file
+    is created 0600 and only given the original mode after it is written, so a config holding secrets
+    (pgbackrest.conf: S3 keys, cipher pass) is never briefly world-readable under the default umask."""
+    st = os.stat(path)
+    tmp_path = path + ".hams-provision.tmp"
+    fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    replaced = False
+    try:
+        os.fchmod(fd, 0o600)  # a tmp left by a crashed run keeps its old mode otherwise
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.chown(tmp_path, st.st_uid, st.st_gid)
+        os.chmod(tmp_path, st.st_mode & 0o7777)
+        os.replace(tmp_path, path)
+        replaced = True
+    finally:
+        if not replaced and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+
 # [@ANCHOR: infrastructure:_set_conf_key]
 def _set_conf_key(text, key, value):
     """Sets `key = value` in postgresql.conf-style text, replacing every active line for key with one.
@@ -13241,13 +13263,7 @@ def _apply_postgresql_lockdown(conf_paths=None):
             continue
         if _plan("write", f"{path} (lockdown settings; restart needed: {effective_changed})"):
             continue
-        st = os.stat(path)
-        tmp_path = path + ".hams-provision.tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            f.write(text)
-        os.chown(tmp_path, st.st_uid, st.st_gid)
-        os.chmod(tmp_path, st.st_mode & 0o7777)
-        os.replace(tmp_path, path)
+        _replace_file_keeping_owner(path, text)
     return restart_needed
 
 
@@ -13291,13 +13307,7 @@ def _apply_postgresql_archive_timeout(conf_paths=None):
             continue
         if _plan("write", f"{path} (archive settings; reload needed: {effective_changed})"):
             continue
-        st = os.stat(path)
-        tmp_path = path + ".hams-provision.tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            f.write(text)
-        os.chown(tmp_path, st.st_uid, st.st_gid)
-        os.chmod(tmp_path, st.st_mode & 0o7777)
-        os.replace(tmp_path, path)
+        _replace_file_keeping_owner(path, text)
     return reload_needed
 
 
@@ -13332,13 +13342,7 @@ def _retire_pgbackrest_repo1(conf_path=None):
         return False
     if _plan("write", f"{path} (remove the retired plaintext repo1-* lines)"):
         return True
-    st = os.stat(path)
-    tmp_path = path + ".hams-provision.tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        f.write("".join(kept))
-    os.chown(tmp_path, st.st_uid, st.st_gid)
-    os.chmod(tmp_path, st.st_mode & 0o7777)
-    os.replace(tmp_path, path)
+    _replace_file_keeping_owner(path, "".join(kept))
     return True
 
 
@@ -13478,6 +13482,7 @@ def _provision_secret_schema(run_cmd_func, db_name):
         )
     except Exception as e:  # audit-ignore-catch-all
         _logger.warning("[*] Could not provision the %s schema in %s: %s", SECRET_SCHEMA, db_name, e)
+        record_hook_failure("secret_schema", e)
 
 
 # The PostgreSQL login of daemons/dx_firehose: the name of its OS account, so it logs in by peer authentication over the unix socket
@@ -13514,6 +13519,7 @@ def _provision_dx_firehose_role(run_cmd_func, db_name, role_name=None):
         )
     except Exception as e:  # audit-ignore-catch-all
         _logger.warning("[*] Could not provision the PostgreSQL role %s in %s: %s", role_name, db_name, e)
+        record_hook_failure("dx_firehose_role", e)
 
 
 # Extensions Odoo or a hams module needs in the application database. Created by the postgres superuser at provisioning time, so the
@@ -13535,6 +13541,7 @@ def _precreate_odoo_extensions(run_cmd_func, db_name):
         )
     except Exception as e:  # audit-ignore-catch-all
         _logger.warning("[*] Could not pre-create the PostgreSQL extensions %s in %s: %s", ", ".join(ODOO_DATABASE_EXTENSIONS), db_name, e)
+        record_hook_failure("postgres_extensions", e)
 
 
 # [@ANCHOR: infrastructure:_read_env_value]
@@ -13689,6 +13696,7 @@ def _provision_parking_role(run_cmd_func, db_name, sql_path=None, env_file=None)
         )
     except Exception as e:  # audit-ignore-catch-all
         _logger.warning("[*] Could not provision the PostgreSQL role %s in %s: %s", PARKING_DB_ROLE, db_name, e)
+        record_hook_failure("parking_role", e)
 
 
 # [@ANCHOR: infrastructure:_allow_cache_manager_socket_password_for_test]
@@ -13729,13 +13737,7 @@ def _allow_cache_manager_socket_password_for_test(hba_paths=None):
         changed = True
         if _plan("write", f"{path} (cache_manager_ro socket password rule, test host)"):
             continue
-        st = os.stat(path)
-        tmp_path = path + ".hams-provision.tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            f.write("".join(lines))
-        os.chown(tmp_path, st.st_uid, st.st_gid)
-        os.chmod(tmp_path, st.st_mode & 0o7777)
-        os.replace(tmp_path, path)
+        _replace_file_keeping_owner(path, "".join(lines))
     return changed
 
 
@@ -14111,6 +14113,16 @@ def _ensure_line_in_file(path, line):
     with open(path, "a", encoding="utf-8") as f:
         f.write(("\n" if text and not text.endswith("\n") else "") + line + "\n")
     return True
+
+
+# [@ANCHOR: infrastructure:_hosts_has_alias]
+def _hosts_has_alias(hosts_text, alias):
+    """True when an uncommented /etc/hosts line lists `alias` as a whole name. A substring test
+    treated any host or comment containing "redis" (e.g. redis-cache, "# no redis here") as the alias."""
+    for line in hosts_text.splitlines():
+        if alias in line.split("#", 1)[0].split()[1:]:
+            return True
+    return False
 
 
 # [@ANCHOR: infrastructure:redis_url]
@@ -14572,7 +14584,7 @@ def provision_environment(
     try:
         with open("/etc/hosts", "r") as f:
             hosts_content = f.read()
-        if "redis" not in hosts_content and not _plan(
+        if not _hosts_has_alias(hosts_content, "redis") and not _plan(
             "append", "/etc/hosts: 127.0.0.1 redis rabbitmq postgres pdns memcached"
         ):
             _logger.info(

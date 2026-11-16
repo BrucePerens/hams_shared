@@ -44,6 +44,7 @@ import subprocess
 import sys
 
 import check_target  # noqa: E402
+from tree_files import git_listed  # noqa: E402
 import verify_anchors as va  # noqa: E402
 
 EXCLUDE_DIRS = {
@@ -177,17 +178,11 @@ def _git_tracked_python_files(repo_root):
     operation elsewhere in this codebase's own tooling uses `git
     ls-files` over a raw `os.walk`."""
     try:
-        out = subprocess.run(
-            ["git", "ls-files", "*.py"],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout
+        names = git_listed(repo_root, "ls-files", "*.py")
     except (subprocess.CalledProcessError, FileNotFoundError):
         return []
     files = []
-    for rel in out.splitlines():
+    for rel in names:
         parts = rel.split("/")
         if any(p in EXCLUDE_DIRS for p in parts):
             continue

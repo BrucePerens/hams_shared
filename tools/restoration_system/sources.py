@@ -13,19 +13,23 @@ import json
 import math
 import os
 import re
+import subprocess
+from collections.abc import Iterable, Sequence
+from typing import Any
 
-from .runner import RestorationError
+from .runner import RestorationError, Runner
+from .secrets_input import Secrets
 
 WAL_RE = re.compile(r"^([0-9A-F]{8})([0-9A-F]{8})([0-9A-F]{8})$")
 SALTED = b"Salted__"
 
 
-def tag(snapshot, key):
+def tag(snapshot: dict[str, Any], key: str) -> str | None:
     """Value of kopia tag `key` on a snapshot (kopia stores tags as "tag:<key>")."""
     return (snapshot.get("tags") or {}).get("tag:" + key)
 
 
-def newest_by_path(snapshots):
+def newest_by_path(snapshots: Iterable[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """{source path: newest snapshot} of a `kopia snapshot list --all --json` result."""
     out = {}
     for snap in sorted(snapshots, key=lambda s: s["startTime"]):
@@ -33,12 +37,13 @@ def newest_by_path(snapshots):
     return out
 
 
-def newest_by_tag(snapshots, kind):
+def newest_by_tag(snapshots: Iterable[dict[str, Any]], kind: str) -> dict[str, dict[str, Any]]:
     """{name tag: newest snapshot} among snapshots whose `kind` tag equals `kind` (the local set's sealed streams)."""
     out = {}
     for snap in sorted(snapshots, key=lambda s: s["startTime"]):
-        if tag(snap, "kind") == kind:
-            out[tag(snap, "name")] = snap
+        name = tag(snap, "name")
+        if name is not None and tag(snap, "kind") == kind:
+            out[name] = snap
     return out
 
 
@@ -46,18 +51,18 @@ def newest_by_tag(snapshots, kind):
 class KopiaRepo:
     """A read-only connection to one kopia repository, living in `state_dir` (0700, removed by close())."""
 
-    def __init__(self, runner, secrets, state_dir, backend_args, label):
+    def __init__(self, runner: Runner, secrets: Secrets, state_dir: str, backend_args: list[str], label: str) -> None:
         self.runner, self.secrets, self.state_dir, self.backend_args, self.label = runner, secrets, state_dir, backend_args, label
         self.connected = False
 
-    def _argv(self, *args):
+    def _argv(self, *args: str) -> list[str]:
         return ["kopia", *args, "--config-file=%s" % os.path.join(self.state_dir, "repository.config"),
                 "--log-dir=%s" % os.path.join(self.state_dir, "logs"), "--no-use-keyring"]
 
-    def _call(self, *args, capture=True):
+    def _call(self, *args: str, capture: bool = True) -> str:
         return self.runner.run(self._argv(*args), secret_env=self.secrets.kopia_env(), capture=capture).stdout
 
-    def connect(self):
+    def connect(self) -> "KopiaRepo":
         """Connect read-only. RestorationError with a clear text for a wrong password or an absent repository."""
         os.makedirs(self.state_dir, mode=0o700, exist_ok=True)
         try:
@@ -69,19 +74,19 @@ class KopiaRepo:
         self.connected = True
         return self
 
-    def encryption(self):
+    def encryption(self) -> str:
         """The repository's encryption algorithm name, from `kopia repository status --json`."""
         return json.loads(self._call("repository", "status", "--json")).get("contentFormat", {}).get("encryption", "")
 
-    def snapshots(self):
+    def snapshots(self) -> list[dict[str, Any]]:
         return json.loads(self._call("snapshot", "list", "--all", "--json"))
 
-    def restore(self, snapshot_id, destination):
+    def restore(self, snapshot_id: str, destination: str) -> None:
         """Restore a snapshot into `destination` (created), keeping owners, modes and symlinks; any error fails."""
         os.makedirs(destination, exist_ok=True)
         self._call("snapshot", "restore", snapshot_id, destination, "--no-ignore-permission-errors", capture=False)
 
-    def close(self):
+    def close(self) -> None:
         if self.connected:
             self.runner.run(self._argv("repository", "disconnect"), secret_env=self.secrets.kopia_env(), check=False, capture=True)
             self.connected = False
@@ -92,7 +97,7 @@ class SourceCheck:
     """The refusals that apply to every source: missing, empty, not encrypted."""
 
     @staticmethod
-    def kopia_marker(repo_dir):
+    def kopia_marker(repo_dir: str) -> None:
         """A local kopia repository directory must hold the repository format blob; else it is missing or not a repository."""
         if not os.path.isdir(repo_dir):
             raise RestorationError("kopia repository %s does not exist" % repo_dir)
@@ -100,18 +105,18 @@ class SourceCheck:
             raise RestorationError("%s is not a kopia repository (no kopia.repository file): refusing" % repo_dir)
 
     @staticmethod
-    def kopia_encrypted(repo):
+    def kopia_encrypted(repo: KopiaRepo) -> None:
         algorithm = repo.encryption()
         if not algorithm or algorithm.upper() == "NONE":
             raise RestorationError("kopia repository %s is not encrypted (encryption %r): refusing an unencrypted source" % (repo.label, algorithm))
 
     @staticmethod
-    def kopia_not_empty(snapshots, label):
+    def kopia_not_empty(snapshots: Sequence[Any], label: str) -> None:
         if not snapshots:
             raise RestorationError("kopia repository %s holds no snapshots: refusing an empty source" % label)
 
     @staticmethod
-    def pgbackrest_marker(repo_dir, stanza):
+    def pgbackrest_marker(repo_dir: str, stanza: str) -> None:
         """A local pgBackRest repository must hold backup.info for the stanza and it must carry the OpenSSL salted header (encrypted)."""
         info = os.path.join(repo_dir, "backup", stanza, "backup.info")
         if not os.path.isfile(info):
@@ -122,9 +127,10 @@ class SourceCheck:
             raise RestorationError("pgBackRest repository %s is not encrypted (backup.info has no encryption header): refusing" % repo_dir)
 
 
-def next_segment(name):
+def next_segment(name: str) -> str:
     """Next 16 MiB WAL segment name on the same timeline."""
     m = WAL_RE.match(name)
+    assert m is not None, name
     tl, log, seg = (int(g, 16) for g in m.groups())
     seg += 1
     if seg == 0x100:
@@ -132,13 +138,14 @@ def next_segment(name):
     return "%08X%08X%08X" % (tl, log, seg)
 
 
-def segment_number(name):
+def segment_number(name: str) -> int:
     m = WAL_RE.match(name)
+    assert m is not None, name
     _, log, seg = (int(g, 16) for g in m.groups())
     return log * 0x100 + seg
 
 
-def segment_name(timeline, number):
+def segment_name(timeline: int, number: int) -> str:
     return "%08X%08X%08X" % (timeline, number // 0x100, number % 0x100)
 
 
@@ -149,12 +156,12 @@ class PgBackRestRepo:
     The config file holds only locations and the cipher TYPE; passphrase and S3 keys come from the secret store in the environment
     of each command."""
 
-    def __init__(self, runner, secrets, state_dir, stanza, cipher_type, repo, pg_path):
+    def __init__(self, runner: Runner, secrets: Secrets, state_dir: str, stanza: str, cipher_type: str, repo: dict[str, str], pg_path: str) -> None:
         self.runner, self.secrets, self.state_dir, self.stanza = runner, secrets, state_dir, stanza
         self.cipher_type, self.repo, self.pg_path = cipher_type, repo, pg_path
         self.conf = os.path.join(state_dir, "pgbackrest.conf")
 
-    def write_config(self):
+    def write_config(self) -> None:
         os.makedirs(self.state_dir, mode=0o700, exist_ok=True)
         lines = ["[global]", "repo1-cipher-type=%s" % self.cipher_type, "log-path=%s" % os.path.join(self.state_dir, "log"),
                  "lock-path=%s" % os.path.join(self.state_dir, "lock"), "spool-path=%s" % os.path.join(self.state_dir, "spool"),
@@ -171,16 +178,16 @@ class PgBackRestRepo:
         with os.fdopen(fd, "w") as handle:
             handle.write("\n".join(lines))
 
-    def _argv(self, *args, with_stanza=True):
+    def _argv(self, *args: str, with_stanza: bool = True) -> list[str]:
         argv = ["pgbackrest", "--config=%s" % self.conf, "--allow-root"]
         if with_stanza:
             argv.append("--stanza=%s" % self.stanza)
         return argv + list(args)
 
-    def call(self, *args, check=True, capture=True):
+    def call(self, *args: str, check: bool = True, capture: bool = True) -> subprocess.CompletedProcess[str]:
         return self.runner.run(self._argv(*args), secret_env=self.secrets.pgbackrest_env(), check=check, capture=capture)
 
-    def info(self):
+    def info(self) -> dict[str, Any]:
         """The stanza's entry of `pgbackrest info --output=json`. RestorationError: wrong passphrase, unreachable, or no such stanza."""
         try:
             data = json.loads(self.call("info", "--output=json").stdout)
@@ -192,7 +199,7 @@ class PgBackRestRepo:
         raise RestorationError("pgBackRest repository has no stanza %s" % self.stanza)
 
     @staticmethod
-    def check_info(stanza):
+    def check_info(stanza: dict[str, Any]) -> dict[str, Any]:
         """Refusals on an info entry: not encrypted, no backup, status not ok. Returns the newest backup."""
         if stanza.get("cipher", "none") == "none":
             raise RestorationError("pgBackRest repository is not encrypted (cipher none): refusing an unencrypted source")
@@ -202,7 +209,7 @@ class PgBackRestRepo:
             raise RestorationError("pgBackRest status: %s" % stanza["status"].get("message"))
         return stanza["backup"][-1]
 
-    def restore_argv(self, datadir, target_time, wal_dir, backup_label=None):
+    def restore_argv(self, datadir: str, target_time: str | None, wal_dir: str, backup_label: str | None = None) -> list[str]:
         """argv of `pgbackrest restore` for point-in-time recovery from WAL pre-fetched into wal_dir (the image never reads the backups)."""
         argv = self._argv("--pg1-path=%s" % datadir, "restore", "--archive-mode=off",
                           "--recovery-option=restore_command=cp %s/%%f %%p" % wal_dir)
@@ -212,10 +219,10 @@ class PgBackRestRepo:
             argv += ["--type=time", "--target=%s" % target_time, "--target-action=promote"]
         return argv
 
-    def restore(self, datadir, target_time, wal_dir, backup_label=None):
+    def restore(self, datadir: str, target_time: str | None, wal_dir: str, backup_label: str | None = None) -> None:
         self.runner.run(self.restore_argv(datadir, target_time, wal_dir, backup_label), secret_env=self.secrets.pgbackrest_env(), capture=True)
 
-    def fetch_wal(self, backup, stanza_info, wal_dir):
+    def fetch_wal(self, backup: dict[str, Any], stanza_info: dict[str, Any], wal_dir: str) -> list[str]:
         """Pre-fetch every WAL segment and timeline history file from the backup's first segment to the newest archived one.
 
         Returns the list of file names fetched. RestorationError when the segment the backup starts from is missing: the point-in-time
@@ -239,7 +246,7 @@ class PgBackRestRepo:
         return fetched
 
 
-def parse_timestamp(value):
+def parse_timestamp(value: float | str) -> datetime.datetime:
     """UTC datetime from a pgBackRest epoch or a kopia RFC 3339 time."""
     if isinstance(value, (int, float)):
         if not math.isfinite(value):

@@ -39,6 +39,7 @@ import check_target
 import lint_exec
 import re
 import sys
+from source_text import read_source  # noqa: E402
 from tree_files import tree_walk
 
 SKIP_DIRS = {"node_modules", "__pycache__", ".git", "daemons", "tools", "radae"}
@@ -74,19 +75,19 @@ def check_registry_test_cr_usage(repo_root, stats=None):
             path = os.path.join(root, filename)
             if stats is not None:
                 stats["files"] = stats.get("files", 0) + 1
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    for lineno, line in enumerate(f, 1):
-                        if _PATTERN.search(line):
-                            violations.append(
-                                f"{os.path.relpath(path, repo_root)}:{lineno} "
-                                f"registry.test_cr is not a real Odoo attribute in this "
-                                f"installed version -- this is_test check is always False. "
-                                f"Find a real test-mode detection, or (more often the right "
-                                f"answer) remove the commit()/batching it was guarding."
-                            )
-            except UnicodeDecodeError as e:
-                print(f"Warning: UnicodeDecodeError reading {path}: {e}")
+            text, problem = read_source(path)
+            if problem:
+                violations.append(problem)
+                continue
+            for lineno, line in enumerate(text.splitlines(), 1):
+                if _PATTERN.search(line):
+                    violations.append(
+                        f"{os.path.relpath(path, repo_root)}:{lineno} "
+                        f"registry.test_cr is not a real Odoo attribute in this "
+                        f"installed version -- this is_test check is always False. "
+                        f"Find a real test-mode detection, or (more often the right "
+                        f"answer) remove the commit()/batching it was guarding."
+                    )
     return violations
 
 

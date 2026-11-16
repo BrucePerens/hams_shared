@@ -50,6 +50,7 @@ import os
 import check_target
 import lint_exec
 import sys
+from source_text import read_source  # noqa: E402
 from tree_files import tree_files
 
 
@@ -200,10 +201,14 @@ def _scan(roots, stats=None):
                 continue
             if stats is not None:
                 stats["files"] = stats.get("files", 0) + 1
+            source, problem = read_source(fpath)
+            if problem:
+                if stats is not None:
+                    stats.setdefault("unreadable", []).append(problem)
+                continue
             try:
-                with open(fpath, "r", encoding="utf-8") as f:
-                    tree = ast.parse(f.read(), filename=fpath)
-            except (SyntaxError, OSError):
+                tree = ast.parse(source, filename=fpath)
+            except SyntaxError:
                 continue
             for node in ast.walk(tree):
                 if not isinstance(node, ast.ClassDef) or not _is_model_class(node):
@@ -241,6 +246,9 @@ def main():
     name_owners, claiming_owners, auto_false_models, inherit_only = _scan(roots, stats)
     check_target.require_scanned(stats.get("files", 0), ", ".join(roots), "check_model_extension_collisions", "Python files inside an Odoo module")
     errors_found = False
+    for problem in stats.get("unreadable", []):
+        print(f"🚨 UNREADABLE PYTHON FILE: {problem}")
+        errors_found = True
 
     # Check 1: ambiguous multi-owner model
     for model_name, owners in claiming_owners.items():

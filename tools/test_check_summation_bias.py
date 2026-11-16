@@ -70,6 +70,16 @@ class CheckSummationBiasTests(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn("SUMMATION BIAS DETECTED in a.md", out)
 
+    def test_a_non_ascii_file_name_is_judged_too(self):
+        # git quotes such a name ("\303\251.md") in plain --name-only output, which made the file look deleted and skipped it
+        name = "café notes.md"
+        _commit_file(self.tmp, name, "x" * 1000)
+        _write(os.path.join(self.tmp, name), "x" * 100)
+        _git(self.tmp, "add", name)
+        code, out = _run(self.tmp, "--staged")
+        self.assertEqual(code, 1, out)
+        self.assertIn(f"SUMMATION BIAS DETECTED in {name}", out)
+
     def test_staged_mode_ignores_a_shrunk_file_that_is_not_staged(self):
         # Another session's unrelated edit in the shared working tree must not block this commit.
         _commit_file(self.tmp, "a.md", "x" * 1000)

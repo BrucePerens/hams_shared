@@ -44,6 +44,17 @@ import smoketest_fixtures as sf_fixtures
 _REAL_OPEN = builtins.open
 
 
+
+class TestHostsHasAlias(unittest.TestCase):
+    def test_whole_name_on_uncommented_line_only(self):
+        # Tests [@ANCHOR: infrastructure:_hosts_has_alias]
+        self.assertTrue(infra._hosts_has_alias("127.0.0.1 localhost redis # x\n", "redis"))
+        self.assertTrue(infra._hosts_has_alias("::1\tredis\n", "redis"))
+        self.assertFalse(infra._hosts_has_alias("10.0.0.5 redis-cache\n", "redis"))
+        self.assertFalse(infra._hosts_has_alias("# 127.0.0.1 redis\n127.0.0.1 localhost # redis\n", "redis"))
+        self.assertFalse(infra._hosts_has_alias("redis\n", "redis"))
+        self.assertFalse(infra._hosts_has_alias("", "redis"))
+
 class _SafePatchTestCase(unittest.TestCase):
     """Matches test_provision.py's own convention: a self.safe_patch()
     wrapper instead of a bare `with patch(...)` context manager or
@@ -2010,6 +2021,7 @@ class CreateOdooRoleIfMissingTests(_SafePatchTestCase):
     def test_a_failing_extension_step_is_logged_not_raised(self):
         run = MagicMock(side_effect=RuntimeError("no pgvector package"))
         infra._precreate_odoo_extensions(run, "hams_prod")
+        self.assertEqual([n for n, _ in infra.get_hook_failures()], ["postgres_extensions"])
 
     def test_provisioning_precreates_the_extensions_after_the_database_owner_step(self):
         source = inspect.getsource(infra.provision_environment)
@@ -2078,6 +2090,11 @@ class CreateOdooRoleIfMissingTests(_SafePatchTestCase):
 
 class ProvisionSecretSchemaTests(_SafePatchTestCase):
     # Verified by [@ANCHOR: infrastructure:_provision_secret_schema]
+    def setUp(self):
+        super().setUp()
+        infra.reset_hook_failures()
+        self.addCleanup(infra.reset_hook_failures)
+
     def test_the_schema_is_owned_by_the_broker_role_and_revoked_from_public(self):
         self.safe_patch_object(infra, "_role_exists", return_value=False)
         run = MagicMock()
@@ -2099,6 +2116,7 @@ class ProvisionSecretSchemaTests(_SafePatchTestCase):
     def test_a_failure_is_logged_not_raised(self):
         self.safe_patch_object(infra, "_role_exists", return_value=True)
         infra._provision_secret_schema(MagicMock(side_effect=RuntimeError("no cluster")), "hams_prod")
+        self.assertEqual([n for n, _ in infra.get_hook_failures()], ["secret_schema"])
 
     def test_provisioning_creates_the_schema_after_the_extensions(self):
         source = inspect.getsource(infra.provision_environment)
@@ -2110,6 +2128,11 @@ class ProvisionSecretSchemaTests(_SafePatchTestCase):
 
 class ProvisionDxFirehoseRoleTests(_SafePatchTestCase):
     # Verified by [@ANCHOR: infrastructure:_provision_dx_firehose_role]
+    def setUp(self):
+        super().setUp()
+        infra.reset_hook_failures()
+        self.addCleanup(infra.reset_hook_failures)
+
     def test_the_role_has_no_password_and_only_select_on_its_tables(self):
         self.safe_patch_object(infra, "_role_exists", return_value=False)
         run = MagicMock()
@@ -2135,6 +2158,7 @@ class ProvisionDxFirehoseRoleTests(_SafePatchTestCase):
     def test_a_failure_is_logged_not_raised(self):
         self.safe_patch_object(infra, "_role_exists", return_value=True)
         infra._provision_dx_firehose_role(MagicMock(side_effect=RuntimeError("no cluster")), "hams_prod")
+        self.assertEqual([n for n, _ in infra.get_hook_failures()], ["dx_firehose_role"])
 
     def test_production_generates_no_database_password_and_provisioning_creates_the_role(self):
         self.assertNotIn('env_vars["DB_PASS"] = generate_secure_password()', inspect.getsource(infra.load_and_prompt_env))
@@ -3917,6 +3941,47 @@ class PgbackrestRepo1RetiredTests(unittest.TestCase):
         self.assertEqual(os.stat(self.path).st_mode & 0o7777, 0o640)
         # Idempotent.
         self.assertFalse(infra._retire_pgbackrest_repo1(self.path))
+
+    def test_replacement_is_never_group_or_world_readable_while_written(self):
+        # Tests [@ANCHOR: infrastructure:_replace_file_keeping_owner]
+        self._write(self.CONF)
+        modes = []
+        real_replace = os.replace
+
+        def spy(src, dst):
+            modes.append(os.stat(src).st_mode & 0o7777)
+            return real_replace(src, dst)
+
+        old_umask = os.umask(0o022)
+        self.addCleanup(os.umask, old_umask)
+        with unittest.mock.patch.object(os, "replace", spy):
+            self.assertTrue(infra._retire_pgbackrest_repo1(self.path))
+        self.assertEqual(modes, [0o640])
+        self.assertFalse(os.path.exists(self.path + ".hams-provision.tmp"))
+
+    def test_stale_loose_tmp_file_is_tightened_and_failure_removes_tmp(self):
+        # Tests [@ANCHOR: infrastructure:_replace_file_keeping_owner]
+        self._write("a\n")
+        tmp = self.path + ".hams-provision.tmp"
+        with open(tmp, "w") as f:
+            f.write("old")
+        os.chmod(tmp, 0o666)
+        seen = []
+        real_fdopen = os.fdopen
+
+        def spy(fd, *a, **k):
+            seen.append(os.fstat(fd).st_mode & 0o7777)
+            return real_fdopen(fd, *a, **k)
+
+        with unittest.mock.patch.object(os, "fdopen", spy):
+            infra._replace_file_keeping_owner(self.path, "b\n")
+        self.assertEqual(seen, [0o600])
+        with unittest.mock.patch.object(os, "chown", side_effect=OSError("boom")):
+            with self.assertRaises(OSError):
+                infra._replace_file_keeping_owner(self.path, "c\n")
+        self.assertFalse(os.path.exists(tmp))
+        with open(self.path) as f:
+            self.assertEqual(f.read(), "b\n")
 
     def test_leaves_a_host_whose_only_repository_is_repo1(self):
         text = "[global]\nrepo1-type=s3\nrepo1-path=/x\n"
@@ -7387,6 +7452,7 @@ class CallsignParkingProvisioningTests(_TmpDirTestCase):
     def test_a_failure_is_logged_and_never_raised(self):
         self.safe_patch_object(infra, "_provision_cache_manager_role", side_effect=RuntimeError("psql down"))
         infra._provision_parking_role(MagicMock(), "hams_test")
+        self.assertEqual([n for n, _ in infra.get_hook_failures()], ["parking_role"])
 
     def test_the_narrow_family_path_makes_the_login_too_and_only_for_this_family(self):
         for name in ("provision_system_accounts", "apply_production_directories", "provision_static_files"):
@@ -7818,6 +7884,30 @@ class PagerLogAnalyzerUnitTests(_SafePatchTestCase):
         caps = re.search(r"^CapabilityBoundingSet=(.*)$", text, re.M).group(1).split()
         self.assertEqual(sorted(caps), ["CAP_DAC_READ_SEARCH", "CAP_SETGID", "CAP_SETPCAP", "CAP_SETUID", "CAP_SYS_CHROOT"])
         self.assertEqual(infra.systemd_unit_sandbox_gaps(infra.MANIFEST, self.UNIT), set())
+
+    def test_the_sample_unit_in_hams_open_carries_the_same_sandbox_and_capability_set(self):
+        # The sample unit next to the daemon (copied by pager_duty/DEPLOYMENT.md on stock Odoo hosts) was root with no
+        # sandbox at all; it now carries the MANIFEST unit's sandbox directives and capability set.
+        here = os.path.dirname(os.path.realpath(infra.__file__))
+        sample = None
+        while here != os.path.dirname(here):
+            candidate = os.path.join(here, "pager_duty", "daemon", "pager-log-analyzer.service")
+            if os.path.isfile(candidate):
+                sample = candidate
+                break
+            here = os.path.dirname(here)
+        if sample is None:  # a hams_shared-only checkout has no hams_open above it
+            self.skipTest("no hams_open checkout above this hams_shared")
+        with open(sample, encoding="utf-8") as f:
+            text = f.read()
+        for line in ("ProtectSystem=strict", "ProtectHome=read-only", "PrivateTmp=true", "PrivateDevices=true",
+                     "ProtectKernelTunables=true", "ProtectKernelModules=true", "ProtectControlGroups=true",
+                     "NoNewPrivileges=true", "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX"):
+            self.assertIn(line + "\n", text)
+        self.assertNotRegex(text, r"(?m)^User=")
+        self.assertNotIn("ReadWritePaths", text)
+        caps = re.search(r"^CapabilityBoundingSet=(.*)$", text, re.M).group(1).split()
+        self.assertEqual(sorted(caps), ["CAP_DAC_READ_SEARCH", "CAP_SETGID", "CAP_SETPCAP", "CAP_SETUID", "CAP_SYS_CHROOT"])
 
     def test_unit_is_prod_only_local_only_and_not_a_shared_odoo_unit(self):
         spec = [s for s in infra.MANIFEST["static_files"] if s["path"] == "/opt/hams/systemd/" + self.UNIT][0]

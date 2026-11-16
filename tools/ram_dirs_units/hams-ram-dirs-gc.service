@@ -3,6 +3,8 @@ Description=Remove idle, ownerless RAM build directories (/dev/shm/hams-cargo-ta
 
 [Service]
 Type=oneshot
+# A oneshot has no start timeout. The timer re-arms from the last activation (OnUnitActiveSec), so a hung run would silently stop every later gc.
+TimeoutStartSec=30min
 Nice=10
 # The path is the dev box's checkout; change it if hams_shared lives elsewhere.
 ExecStart=/usr/bin/python3 %h/workspace/hams_open/hams_shared/tools/ram_dirs.py gc

@@ -623,11 +623,15 @@ def dump_database(cfg, source, runner):
         return directory
     shutil.rmtree(directory, ignore_errors=True)
     os.makedirs(directory, mode=0o700)
-    fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "wb") as f:
-        runner.run(dump_argv, stdout=f)
-    with open(target, "rb") as f:  # audit-ignore-path
-        runner.run(["pg_restore", "--list"], stdin=f, stdout=subprocess.DEVNULL)
+    try:
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            runner.run(dump_argv, stdout=f)
+        with open(target, "rb") as f:  # audit-ignore-path
+            runner.run(["pg_restore", "--list"], stdin=f, stdout=subprocess.DEVNULL)
+    except (BackupError, OSError):
+        shutil.rmtree(directory, ignore_errors=True)  # snapshot_source's cleanup only runs once this returns
+        raise
     return directory
 
 
@@ -845,7 +849,7 @@ def cmd_backup(cfg, runner, only=None):
                     if entry["errors"]:
                         entry["ok"] = False
                         entry["error"] = f"{entry['errors']} file errors in the snapshot"
-            except (BackupError, OSError, ConfigError) as exc:
+            except (BackupError, OSError, ConfigError, ValueError) as exc:  # ValueError: kopia's `snapshot list --json` was not JSON
                 entry["error"] = str(exc)
             entry["finished"] = now_utc().isoformat()
             results.append(entry)

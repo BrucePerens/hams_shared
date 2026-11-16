@@ -195,6 +195,8 @@ class Fetcher:
                 return response.status, response.read() if method == "GET" else b"", dict(response.headers)
         except urllib.error.HTTPError as exc:
             return exc.code, exc.read() if method == "GET" else b"", dict(exc.headers)
+        except OSError:  # refused, reset, timed out, DNS: URLError and socket.timeout are OSErrors; status 0 = no answer
+            return 0, b"", {}
 
 
 # [@ANCHOR: site_compare:site_compare__no_redirect_class]
@@ -223,7 +225,7 @@ def run(original_dir, fetcher, paths, hosts=(), out=print):
         diff = compare_pages(old_html, new_html, hosts)
         broken = []
         for image in sorted(set(parse_page(new_html)["images"])):
-            if image.startswith("/") and fetcher.get(image, "HEAD")[0] >= 400:
+            if image.startswith("/") and not 0 < fetcher.get(image, "HEAD")[0] < 400:
                 broken.append(image)
         same_text = "same" if not diff["text"] else f"{len(diff['text'])} difference(s)"
         images = "all answer" if not broken else f"{len(broken)} broken"

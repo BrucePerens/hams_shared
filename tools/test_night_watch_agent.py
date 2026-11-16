@@ -28,6 +28,15 @@ class TestNightWatchAgent(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp)
 
+    def test_corrupt_state_file_counts_as_no_agent(self):
+        path = os.path.join(self.tmp, "agent.json")
+        for text in ("{not json", "[]", '{"name": "x"}'):
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text)
+            self.assertIsNone(nwa.read_state(path))
+            rc, state = nwa.claim(path, "a", "r1")
+            self.assertEqual((rc, state["ref"]), (0, "r1"))
+
     def test_no_state_file_means_no_agent(self):
         self.assertEqual(nwa.describe(nwa.read_state(self.path)), {"agent": None})
 

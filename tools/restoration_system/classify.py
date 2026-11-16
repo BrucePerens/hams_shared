@@ -31,11 +31,11 @@ NETWORK_NAMED_FILE = re.compile(r"No such file or directory.*(?:\.sock|:\d+)", r
 OK, EXPECTED, REAL, NOT_STARTED = "ok", "expected_network_failure", "real_failure", "not_started"
 
 
-def line_is_loopback_refusal(line):
+def line_is_loopback_refusal(line: str) -> bool:
     return bool(NETWORK_SIGNATURES.search(line)) and bool(LOOPBACK.search(line))
 
 
-def traceback_final_line(journal):
+def traceback_final_line(journal: str) -> str | None:
     """The exception line that closes the LAST Python traceback in the journal text, or None when there is no traceback."""
     lines = journal.splitlines()
     starts = [i for i, ln in enumerate(lines) if "Traceback (most recent call last)" in ln]
@@ -47,7 +47,7 @@ def traceback_final_line(journal):
     return ""
 
 
-def classify(state, journal):
+def classify(state: dict[str, str], journal: str) -> tuple[str, str]:
     """Category for one unit. `state` is a dict with ActiveState, SubState, Result, ExecMainStatus, ExecMainStartTimestamp, NRestarts (strings).
 
     Returns (category, reason). Units that are running or finished cleanly are ok; not started at all is its own failure."""
@@ -79,6 +79,6 @@ def classify(state, journal):
     return REAL, "failed with no network or known error text (result %s, status %s): %s" % (result, state.get("ExecMainStatus"), " | ".join(lines[-4:])[:400])
 
 
-def network_attempt_seen(journal):
+def network_attempt_seen(journal: str) -> bool:
     """True when the journal shows an attempt to reach something outside this machine (it failed, as it must in the isolated VM)."""
     return any(NETWORK_SIGNATURES.search(ln) and not LOOPBACK.search(ln) for ln in journal.splitlines())
