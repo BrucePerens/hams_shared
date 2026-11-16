@@ -112,6 +112,16 @@ class PythonTests(unittest.TestCase):
             """), [])
 
 
+    def test_deadline_inside_a_polling_loop_is_a_timeout_guard(self):
+        self.assertEqual(_py("""
+            import time
+            def test_x():
+                start = time.monotonic()
+                while not done():
+                    assert time.monotonic() - start < 5, "timed out"
+            """), [])
+
+
 class JsTests(unittest.TestCase):
     def test_date_now_delta_is_flagged(self):
         self.assertEqual(chk.check_js("const t0 = Date.now();\nawait run();\nexpect(Date.now() - t0).toBeLessThan(2000);\n"), [3])
@@ -123,6 +133,7 @@ class JsTests(unittest.TestCase):
     def test_lower_bound_and_plain_timestamps_are_allowed(self):
         self.assertEqual(chk.check_js("const t0 = Date.now();\nexpect(Date.now() - t0 >= 29).toBe(true);\n"), [])
         self.assertEqual(chk.check_js("expect(entry.at).toBe(NOW - 86400e3);\n"), [])
+        self.assertEqual(chk.check_js("expect(device.expiresAt > Date.now() - 1).toBe(true);\n"), [])
 
 
 class RustTests(unittest.TestCase):
@@ -142,6 +153,11 @@ class RustTests(unittest.TestCase):
     def test_paused_tokio_clock_is_virtual_time(self):
         self.assertEqual(chk.check_rust(
             "#[tokio::test(start_paused = true)]\nasync fn t() { assert!(t.elapsed() < Duration::from_secs(5)); }\n"), [])
+
+    def test_deadline_inside_a_polling_loop_is_a_timeout_guard(self):
+        self.assertEqual(chk.check_rust(
+            "#[test]\nfn t() {\n    let start = Instant::now();\n    while !done() {\n        if x {\n"
+            "            assert!(start.elapsed() < Duration::from_secs(5), \"timed out\");\n        }\n    }\n}\n"), [])
 
     def test_non_test_helper_name_does_not_match(self):
         self.assertEqual(chk.check_rust("#[test]\nfn t() { assert!(x.len() < 5); }\n"), [])
