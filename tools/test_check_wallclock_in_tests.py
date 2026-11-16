@@ -85,6 +85,14 @@ class PythonTests(unittest.TestCase):
                 self.assertEqual(rec.date, since)
             """), [])
 
+    def test_attribute_of_a_variable_holding_a_record_is_not_a_reading(self):
+        self.assertEqual(_py("""
+            import time
+            def test_x(self):
+                wide = self.make(at=time.time())
+                self.assertTrue(wide.stop - wide.start <= 7200)
+            """), [])
+
     def test_virtual_clock_is_allowed(self):
         self.assertEqual(_py("""
             def test_x():

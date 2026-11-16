@@ -78,8 +78,15 @@ def _scope_nodes(scope):
 def _has_clock_sub(expr, clock_vars):
     """True when expr holds `reading - reading`: both sides a clock call or a variable holding one. `now - timedelta(1)`
     is a shifted timestamp (test data), not an elapsed time."""
-    def clocky(side):
-        return any(_is_clock_call(n) or _key(n) in clock_vars for n in ast.walk(side))
+    def clocky(node):
+        if _is_clock_call(node):
+            return True
+        if isinstance(node, ast.Name):
+            return node.id in clock_vars
+        if isinstance(node, ast.Attribute):  # `record.field` of a variable is not a reading of that variable
+            return ast.unparse(node) in clock_vars or (not isinstance(node.value, ast.Name) and clocky(node.value))
+        return any(clocky(child) for child in ast.iter_child_nodes(node))
+
     return any(isinstance(n, ast.BinOp) and isinstance(n.op, ast.Sub) and clocky(n.left) and clocky(n.right)
                for n in ast.walk(expr))
 
