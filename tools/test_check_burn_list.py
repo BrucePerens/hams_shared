@@ -6708,6 +6708,22 @@ def test_a_module_colon_test_class_target_is_still_accepted(tmp_path):
     result = _run_burn_list(tmp_path / "some_module:TestThing")
     assert result.returncode == 0, result.stdout
 
+# Tests [@ANCHOR: check_burn_list:repo_relative_rule_path]
+def test_test_rules_judge_repo_relative_path_not_checkout_path(tmp_path):
+    """A checkout whose absolute path contains `test_` (batch_test_hams_open_x) must not make a production
+    daemon file count as a test file for the /tmp rule; a real test file there still does."""
+    root = tmp_path / "batch_test_hams_open_x" / "hams_open" / "pager_duty" / "daemon"
+    root.mkdir(parents=True)
+    prod = root / "pager_synthetic_spooler.py"
+    prod.write_text('ARGS = ["--tmpfs", "/tmp"]\n', encoding="utf-8")
+    real_test = root / "test_thing.py"
+    real_test.write_text('P = "/tmp/x"\n', encoding="utf-8")
+    prod_errors, _w = scan_file(str(prod), is_odoo_module=False)
+    test_errors, _w = scan_file(str(real_test), is_odoo_module=False)
+    assert not [e for e in prod_errors if "Hardcoding '/tmp'" in e]
+    assert [e for e in test_errors if "Hardcoding '/tmp'" in e]
+
+
 # Class anchors (ADR 0113) exercised by the tests above.
 # Tests [@ANCHOR: check_burn_list:check_burn_list_taint_visitor_class]
 # Tests [@ANCHOR: check_burn_list:check_burn_list_odoo_htmlparser_class]
