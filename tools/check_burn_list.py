@@ -54,6 +54,20 @@ def _repo_of_path(filepath):
     return None
 
 
+# [@ANCHOR: check_burn_list:repo_relative_rule_path]
+def _repo_relative_rule_path(filepath):
+    """The path the path-keyed rules judge: relative to the nearest repo-name directory, so a checkout directory
+    named like `batch_test_hams_open_x` cannot make a production file look like a test file. Paths with no repo
+    component (fixtures, /tmp labels) are judged as given. The result keeps a leading "/" so rules anchored
+    on a preceding slash (`(?<!/tools)/test_`) still see the first directory."""
+    norm = filepath.replace("\\", "/")
+    parts = norm.split("/")
+    for i in range(len(parts) - 2, -1, -1):
+        if parts[i] in _LICENSE_REPO_NAMES:
+            return "/" + "/".join(parts[i + 1:])
+    return norm
+
+
 # [@ANCHOR: check_burn_list:check_burn_list_xmlnode_class]
 class XMLNode:
     def __init__(self, tag, attrs, lineno):
@@ -4802,7 +4816,7 @@ def scan_file(filepath, is_odoo_module=False):
     # Which line rules apply to this file depends on its path only, never on a line: decide it
     # once per file. (It was a `re.search(ext_pattern, path)` per rule per line, 8 million
     # string-pattern searches in one scan of hams_open; same rules, same order, same findings.)
-    _norm_path = filepath.replace("\\", "/")
+    _norm_path = _repo_relative_rule_path(filepath)
     _general_rules = [
         (regex, msg)
         for ext_pattern, regex, msg in GENERAL_ERROR_RULES
