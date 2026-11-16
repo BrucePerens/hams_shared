@@ -26,6 +26,7 @@ class PrePushCheckTests(unittest.TestCase):
         runner = ppc.deadline_runner(run, 160.0, clock=lambda: now[0])
         self.assertEqual(runner(["fast"]).returncode, 0)
         self.assertEqual(calls, [60.0])
+        # Tests [@ANCHOR: pre_push_check_out_of_time]
         with self.assertRaises(ppc.OutOfTime):
             runner(["slow"])
         now[0] = 161.0
