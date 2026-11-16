@@ -4678,6 +4678,10 @@ the Odoo known-red baseline and are not bisected) and a relay `error` as a shard
 
 A bug-hunt claim's `code_hash` is stale only when the anchored code changed, never for a comment or a formatter. The claim records `hash_algorithm: v2` next to `code_hash`: the sha256 of the item's token stream (Python `tokenize`, a Rust lexer, a JavaScript lexer that tells a regex from a division, canonical XML for XML/QWeb, a shell lexer and an SQL lexer), so formatting, comments, quote style and trailing commas do not reach it and every code token and string value does. `v1` (raw text) and `v1b` (comment-insensitive text, Python only) are the older algorithms. A claim with no `hash_algorithm` is legacy; the date table `ALGORITHM_BY_DATE` maps the date of the commit that last wrote the claim file (or a front matter `date:`, never the mtime) to its algorithm. When a legacy claim's exact hash no longer matches, `check_claims_freshness.py` and `check_claims.py` load the function as of the claim's commit, compute v2 over that text and over the current text, and treat the claim as fresh when they are equal; the verdict is cached in `~/.cache/hams_claims/` (`HAMS_CLAIM_CACHE_DIR`). There is no repo-wide re-hash: old claims are never rewritten to survive a tool change. `bug-hunt/normalized_view.py <file> [--function NAME]` (hams_com) prints the normalized text.
 
+## Lint autofix (`lint_autofix.py`)
+
+Run `python3 hams_shared/tools/lint_autofix.py` in your worktree before `merge_pr.py`. For the files changed against origin/main it runs `cargo fmt` in touched crates, removes unused imports (F401) and placeholder-less f-prefixes (F541), and lists what only a person can settle: stale claim hashes, anchor-docs-standard findings, function-test anchors. It never confirms a claim by itself: after reading the claim and the code, `--confirm-claim <claim.md>` rewrites that claim's hash. Tests: `test_lint_autofix.py`.
+
 ## Mutation testing (`mutation_harness.py`)
 
 `mutation_harness.py --root TREE --file REL --cwd REL --test "CMD"` mutates one Python file (flipped comparisons, negated
