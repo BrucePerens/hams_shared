@@ -153,6 +153,7 @@ def follow_imports_flags(candidate):
 STRICT_TYPED_PREFIXES = [
     "hams_shared/tools/restoration_system",
     "hams_shared/tools/test_order_hook",
+    "daemons/amsat_tle_sync",
 ]
 
 
@@ -171,6 +172,7 @@ SCAN_ROOTS = [
     "ingest",
     "hams_shared/tools/restoration_system",
     "hams_shared/tools/test_order_hook",
+    "daemons/amsat_tle_sync",
 ]
 
 # Repo-relative directory prefixes to never scan, even under SCAN_ROOTS.
