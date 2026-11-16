@@ -233,6 +233,7 @@ STEP_META = {
     # Backup encryption, stanza creation, key generation and secret-file overwrites need Bruce's recorded approval (2026-11-09).
     "check_backup_encryption_changes": {"suffixes": frozenset({".py", ".sh", ".service", ".timer", ".conf", ".md"})},
     "check_test_tags": {"suffixes": _PY},
+    "check_unrun_odoo_tests": {"suffixes": _PY},
     "check_rabbitmq_pool": {"suffixes": _PY},
     "check_init_imports": {"suffixes": _PY},
     "check_model_extension_collisions": {"suffixes": _PY},
@@ -2537,6 +2538,14 @@ def main():
         dir_path,
         sibling_dir,
     ],
+    )
+
+    # 44b. check_unrun_odoo_tests -- a module test Odoo never runs (a plain unittest.TestCase class, or a test_*.py that
+    # tests/__init__.py does not import): hamcall_verify's address matcher test failed on main unnoticed (2026-11-16).
+    _add(
+        "check_unrun_odoo_tests",
+        [python_exec, os.path.join(dir_path, "tools", "check_unrun_odoo_tests.py"), dir_path]
+        + ([sibling_dir] if sibling_dir else []),
     )
 
     _pair_roots = [dir_path] + ([sibling_dir] if sibling_dir else [])
