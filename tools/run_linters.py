@@ -250,6 +250,8 @@ STEP_META = {
     "check_anchor_docs_standard": {"suffixes": frozenset({".md", ".rs", ".py", ".js", ".mjs", ".txt"})},
     "check_int_float_overflow": {"suffixes": _PY},
     "check_float_isfinite": {"suffixes": _PY},
+    # Test files (.py/.js/.mjs/.rs) plus the checker's own allowlist and ratchet baseline.
+    "check_wallclock_in_tests": {"suffixes": frozenset({".py", ".js", ".mjs", ".rs", ".txt", ".json"})},
     # Reads every .py and .sh file of both repositories and its own known list (boundary_hazards_known.json).
     "check_boundary_hazards": {"suffixes": frozenset({".py", ".sh", ".json"})},
     # A secret written to ir.config_parameter or kept in a model field instead of the secret store (2026-11-09).
@@ -2658,6 +2660,16 @@ def main():
     _add(
         "check_float_isfinite",
         [python_exec, os.path.join(dir_path, "tools", "check_float_isfinite.py"), *_pair_roots],
+        print_ok=False,
+    )
+
+    # check_wallclock_in_tests -- Bruce's 2026-11-16 policy: no test may depend on wall-clock timing or system load. Fails on a
+    # test that asserts on an elapsed time (time.time/monotonic/perf_counter/Date.now/Instant difference (upper bounds; a lower bound
+    # after a real sleep is fine). Existing findings are a ratchet baseline (wallclock_in_tests_baseline.json): none may be
+    # added, a file may only shrink. One process over both roots.
+    _add(
+        "check_wallclock_in_tests",
+        [python_exec, os.path.join(dir_path, "tools", "check_wallclock_in_tests.py"), *_pair_roots],
         print_ok=False,
     )
 

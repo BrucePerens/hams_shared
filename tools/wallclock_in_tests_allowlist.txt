@@ -1,0 +1,3 @@
+# Files where asserting on elapsed wall-clock time is legitimate (tools/check_wallclock_in_tests.py).
+# One entry per line: <repo>/<path relative to the repo root>  # reason. A file listed here is not scanned.
+# Keep this short. Prefer process_time(), a counter, an injected clock or tokio::time::pause.
