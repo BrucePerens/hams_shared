@@ -531,6 +531,60 @@ def adopt_legacy_dir(target, environ=None):
     return legacy
 
 
+# [@ANCHOR: lint_cache:scratch_root]
+def scratch_root(environ=None):
+    """The directory for lint and test scratch: `HAMS_LINT_SCRATCH`, else `<cache>/hams-lint-scratch` (on the disk, never the tmpfs
+    /tmp, which filled to 79% with cold cargo builds). Created on demand; None (use the system temp) when it cannot be made."""
+    environ = os.environ if environ is None else environ
+    path = environ.get("HAMS_LINT_SCRATCH") or os.path.join(cache_root(environ), "hams-lint-scratch")
+    try:
+        os.makedirs(path, exist_ok=True)
+    except OSError:
+        return None
+    return path if os.access(path, os.W_OK) else None
+
+
+# [@ANCHOR: lint_cache:scratch_mkdtemp]
+def scratch_mkdtemp(prefix, environ=None):
+    """`tempfile.mkdtemp(prefix)` in `scratch_root` (the system temp directory when there is none)."""
+    return tempfile.mkdtemp(prefix=prefix, dir=scratch_root(environ))
+
+
+def _tree_bytes(path):
+    total = 0
+    for directory, _dirs, names in os.walk(path):
+        for name in names:
+            try:
+                total += os.lstat(os.path.join(directory, name)).st_size
+            except OSError:
+                pass
+    return total
+
+
+# [@ANCHOR: lint_cache:tmp_entries]
+def tmp_entries(tmp=None):
+    """The names directly under /tmp (or `tmp`): the 'before' picture for `tmp_growth_report`."""
+    try:
+        return set(os.listdir(tmp or "/tmp"))
+    except OSError:
+        return set()
+
+
+# [@ANCHOR: lint_cache:tmp_growth_report]
+def tmp_growth_report(before, tmp=None, limit_bytes=500 * 1024 * 1024):
+    """The warning text when the entries that appeared under /tmp (or `tmp`) since `before` (a `tmp_entries` set) hold more than
+    `limit_bytes` in total, naming the biggest of them; None otherwise. Only new entries count, so a directory that belongs to
+    another run that was already there is never blamed or touched."""
+    tmp = tmp or "/tmp"
+    sizes = {name: _tree_bytes(os.path.join(tmp, name)) for name in tmp_entries(tmp) - set(before)}
+    total = sum(sizes.values())
+    if total <= limit_bytes:
+        return None
+    worst = sorted(sizes.items(), key=lambda item: -item[1])[:5]
+    listing = ", ".join(f"{os.path.join(tmp, name)} ({size / 1e6:.0f} MB)" for name, size in worst)
+    return f"[!] /tmp grew by {total / 1e6:.0f} MB during this run (limit {limit_bytes / 1e6:.0f} MB): {listing}. Scratch belongs under {scratch_root() or 'the disk'}; remove these once their jobs are done."
+
+
 # [@ANCHOR: lint_cache:cargo_session]
 @contextlib.contextmanager
 def cargo_session(environ=None, log=None):
@@ -541,7 +595,7 @@ def cargo_session(environ=None, log=None):
     target = environ.get("CARGO_TARGET_DIR")
     managed = environ.get("HAMS_LINT_CARGO_MANAGED")
     if environ.get("HAMS_LINT_NO_CACHE") == "1":
-        scratch = tempfile.mkdtemp(prefix="hams-lint-cold-cargo-")
+        scratch = scratch_mkdtemp("hams-lint-cold-cargo-", environ)
         try:
             if log:
                 log(f"lint cache: --no-cache: cold cargo build in {scratch}")
@@ -575,7 +629,7 @@ def named_cargo_session(name, environ=None, log=None):
     yielded untouched; HAMS_LINT_NO_CACHE=1 yields a throwaway directory deleted afterwards."""
     environ = os.environ if environ is None else environ
     if environ.get("HAMS_LINT_NO_CACHE") == "1":
-        scratch = tempfile.mkdtemp(prefix=f"hams-{name}-cold-cargo-")
+        scratch = scratch_mkdtemp(f"hams-{name}-cold-cargo-", environ)
         try:
             if log:
                 log(f"lint cache: --no-cache: cold cargo build in {scratch}")
