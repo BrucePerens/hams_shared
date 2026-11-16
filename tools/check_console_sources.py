@@ -13,6 +13,8 @@ import shutil
 import subprocess
 import sys
 
+import check_target
+
 MAIN_RS = """#[allow(dead_code)]
 #[path = "{pipeline}"]
 mod pipeline;
@@ -30,13 +32,12 @@ fn main() {{
 
 # [@ANCHOR: check_console_sources:main]
 def main(argv=None):
-    """Validate the console sources of `repo_root` (default: the current directory). Returns the exit code: 0 clean (or no shack_console crate), 1 problems."""
+    """Validate the console sources of `repo_root` (default: the current directory). Returns the exit code: 0 clean, 1 problems, 2 not checked (no such directory or no shack_console crate: run_linters only adds the step when the crate exists)."""
     argv = sys.argv[1:] if argv is None else argv
-    repo_root = os.path.realpath(argv[0] if argv else ".")
+    repo_root = check_target.require_directory(os.path.realpath(argv[0] if argv else "."), "check_console_sources")
     crate = os.path.join(repo_root, "daemons", "shack_console")
     manifest = os.path.join(crate, "Cargo.toml")
-    if not os.path.isfile(manifest):
-        return 0
+    check_target.require_file(manifest, "check_console_sources")
     with open(manifest, encoding="utf-8") as handle:
         match = re.search(r"^\[build-dependencies\]\n(.*?)(?=^\[|\Z)", handle.read(), re.M | re.S)
     deps = "\n".join(line for line in (match.group(1) if match else "").splitlines() if line.strip() and not line.startswith("#"))
