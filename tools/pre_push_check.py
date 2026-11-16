@@ -21,8 +21,9 @@ NOTE_DIRS = ("night_shift_todo/", "night_shift_history/", "night_shift_questions
 ZERO = "0" * 40
 
 
+# [@ANCHOR: pre_push_check_out_of_time]
 class OutOfTime(Exception):
-    pass
+    """Raised by the deadline runner when the push-check budget is used up or one command times out."""
 
 
 def git(args, cwd=None):
