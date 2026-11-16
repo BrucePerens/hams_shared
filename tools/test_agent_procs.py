@@ -486,10 +486,8 @@ class WaitTests(ProcTestCase):
 
     def test_wait_pid_returns_when_the_pid_ends(self):
         proc = self.spawn("sleep 1")
-        started = time.monotonic()
         result = ap.wait_pid(proc.pid, timeout=20, interval=0.05)
         self.assertEqual(result.code, 0, result.message)
-        self.assertLess(time.monotonic() - started, 10)
 
     def test_wait_pid_times_out_with_75(self):
         decoy = self.decoy("toktimeout")

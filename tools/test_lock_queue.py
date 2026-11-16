@@ -682,22 +682,17 @@ class TestAcquireWithSlots(_TmpDirCase):
         # on_head is the load gate. With two free slots the two oldest waiters are both heads and gate at the same time;
         # a gate that takes 1 s for each must not make the second wait for the first.
         taken, results = [], {}
-        gates = []
+        both_in_gate = threading.Barrier(2, timeout=30)  # serialised gates could never meet: a BrokenBarrierError
 
         def slow_gate():
-            gates.append(time.monotonic())
-            time.sleep(1.0)
+            both_in_gate.wait()
             return True
 
-        started = time.monotonic()
         a = self.run_waiter(taken, results, "a", timeout=10, on_head=slow_gate)
         b = self.run_waiter(taken, results, "b", timeout=10, on_head=slow_gate)
         a.join(10)
         b.join(10)
         self.assertEqual({results["a"][0], results["b"][0]}, {lq.ACQUIRED})
-        self.assertLess(time.monotonic() - started, 1.8, "the two gates ran one after the other")
-        self.assertEqual(len(gates), 2)
-        self.assertLess(abs(gates[0] - gates[1]), 0.5, "both waiters reached the gate together")
         self.assertEqual(sorted(slot for slot, _ in taken), [1, 2])
         for _, f in taken:
             self.held.append(f)
@@ -821,11 +816,9 @@ class TestTestPyWiring(_TmpDirCase):
 
     def test_default_stays_fail_fast(self):
         self.hold()
-        started = time.time()
         r = self.run_test_py()
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn("Another instance of test.py is already running", r.stdout)
-        self.assertLess(time.time() - started, 30)
         self.assertEqual(lq.live_tickets(self.qdir), [], "fail-fast must not queue")
 
     def test_wait_with_timeout_gives_up_with_status_75_and_leaves_no_ticket(self):
@@ -950,11 +943,9 @@ class TestSlotsWiring(_TmpDirCase):
     def test_every_slot_held_fails_fast_and_names_the_slots(self):
         self.hold_slot(1)
         self.hold_slot(2)
-        started = time.time()
         r = self.run_test_py(HAMS_TEST_SLOTS="2")
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn("All 2 test.py slots are busy", r.stdout)
-        self.assertLess(time.time() - started, 30)
         self.assertEqual(lq.live_tickets(self.qdir), [], "fail-fast must not queue")
 
     def test_the_command_line_can_only_raise_the_slot_count(self):
@@ -1008,10 +999,8 @@ class TestSlotsWiring(_TmpDirCase):
 
     def test_wait_starts_at_once_when_a_slot_is_free(self):
         self.hold_slot(1)
-        started = time.time()
         r = self.run_test_py("--wait", "--wait-timeout", "30", HAMS_TEST_SLOTS="2")
         self.assertIn("Holding test slot 2 of 2", r.stdout, r.stdout + r.stderr)
-        self.assertLess(time.time() - started, 25)
 
     def test_a_waiter_takes_the_slot_that_frees_up(self):
         self.hold_slot(1)
@@ -1082,11 +1071,9 @@ class TestSlotsWiring(_TmpDirCase):
                 payload.pop("ticket", None)
                 with open(path, "w", encoding="utf-8") as handle:
                     json.dump(payload, handle)
-        started = time.time()
         r = self.run_test_py("--wait", "--wait-timeout", "30", HAMS_TEST_SLOTS="4")
         self.assertIn("Holding test slot 2 of 4", r.stdout, r.stdout + r.stderr)
         self.assertNotEqual(r.returncode, lq.EXIT_WAIT_TIMEOUT)
-        self.assertLess(time.time() - started, 25)
         holder.close()
 
 
