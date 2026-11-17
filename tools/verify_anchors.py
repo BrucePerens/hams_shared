@@ -621,6 +621,8 @@ def find_anchors_in_docs(root_dir, repo_root):
                 except PermissionError as error:
                     _note_unreadable(full_path, error)
                     continue
+                except OSError:
+                    continue  # a broken symlink or a tracked file gone from the disk holds no anchors to read
 
     return doc_anchors, contract_anchors, doc_anchor_lines
 
@@ -825,6 +827,8 @@ def find_anchors_in_code(root_dir, repo_root):
                 except PermissionError as error:
                     _note_unreadable(full_path, error)
                     continue
+                except OSError:
+                    continue  # a broken symlink or a tracked file gone from the disk holds no anchors to read
 
     for island in CODE_ISLANDS_UNDER_DOCS:
         island_path = os.path.join(root_dir, island)
@@ -856,6 +860,8 @@ def find_anchors_in_code(root_dir, repo_root):
                     except PermissionError as error:
                         _note_unreadable(full_path, error)
                         continue
+                    except OSError:
+                        continue  # a broken symlink or a tracked file gone from the disk holds no anchors to read
 
     return (
         code_anchors,
