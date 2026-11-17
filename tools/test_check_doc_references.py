@@ -120,6 +120,19 @@ class LayoutTests(unittest.TestCase):
                          [(1, "path", "../../../mod/docs/gone.md")])
 
 
+class SiblingRootsTests(unittest.TestCase):
+    def test_a_worktree_job_directory_finds_its_sibling_repositories_through_symlinks(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        base = os.path.realpath(tmp.name)
+        for rel in ("main/hams_open/hams_shared", "main/hams_com", "job/hams_com"):
+            os.makedirs(os.path.join(base, rel))
+        os.symlink(os.path.join(base, "main", "hams_open"), os.path.join(base, "job", "hams_open"))
+        os.symlink("../hams_open/hams_shared", os.path.join(base, "job", "hams_com", "hams_shared"))
+        roots = cdr.sibling_roots(os.path.join(base, "job", "hams_com"))
+        self.assertEqual([cdr.repo_name(r) for r in roots], ["hams_com", "hams_open", "hams_shared"])
+
+
 # Tests [@ANCHOR: check_doc_references:check_doc_references_knowledge_class] (ADR numbers, units, identifiers, words, tracked paths and tails are all read through it)
 class AdrAnchorUnitConfigFunctionTests(unittest.TestCase):
     def setUp(self):
