@@ -188,6 +188,11 @@ class CreateTests(SnapshotTestBase):
             self.assertNotIn(stale, command)
         self.assertEqual(gs.verify_snapshot(trees["parent"], environ=self.env(manifest)), [])
         self.assertTrue(os.path.isfile(os.path.join(trees["open"], "daemons/cloudflared-ffi/libcloudflared.so")))
+        # every gate worktree is locked, so a `git worktree prune` elsewhere cannot drop its registration mid-run
+        for repo, key in (("hams_com", "com"), ("hams_open", "open")):
+            listing = git(self.ws.path(repo), "worktree", "list", "--porcelain")
+            block = [b for b in listing.split("\n\n") if "worktree " + trees[key] in b]
+            self.assertTrue(block and "locked" in block[0], listing)
 
     # Tests [@ANCHOR: gate_snapshot:create_snapshot]
     def test_a_second_create_for_the_same_commits_reuses_the_trees_and_builds_nothing(self):

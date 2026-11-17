@@ -141,6 +141,10 @@ def create_trees(workspace, parent, com_commit, open_commit, shared_commit):
         if os.path.isdir(shared) and not os.listdir(shared):
             os.rmdir(shared)  # hams_open's checkout leaves the gitlink as an empty directory
         _git(shared_main, "worktree", "add", "--detach", "-f", shared, shared_commit)
+    # Locked: a `git worktree prune` run by anyone else must not drop a gate tree's registration while the lint and tests use it
+    # (round 134: hams_open's registration vanished mid-run, `git ls-files` failed there and 510 references read as broken).
+    for source, target in ((com_main, com), (open_main, open_), (shared_main, shared)):
+        _git(source, "worktree", "lock", "--reason", "gate snapshot", target, check=False)
     link = os.path.join(com, "hams_shared")
     if os.path.realpath(link) != os.path.realpath(shared):
         raise SnapshotError("%s resolves to %s, not to %s" % (link, os.path.realpath(link), shared))
@@ -597,8 +601,8 @@ def prune_snapshots(parent, keep=1, out=print):
             if os.path.exists(os.path.join(path, ".git")):
                 owner = _git(path, "rev-parse", "--git-common-dir", check=False)
                 if owner:
-                    subprocess.run(["git", "--git-dir", os.path.abspath(os.path.join(path, owner)), "worktree", "remove", "--force", path],
-                                   capture_output=True)
+                    subprocess.run(["git", "--git-dir", os.path.abspath(os.path.join(path, owner)), "worktree", "remove", "--force", "--force", path],
+                                   capture_output=True)  # twice: the snapshot's worktrees are locked
         shutil.rmtree(gate, ignore_errors=True)
         removed.append(gate)
         out("gate_snapshot: removed %s" % gate)
