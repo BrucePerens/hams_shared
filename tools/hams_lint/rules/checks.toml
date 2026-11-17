@@ -57,6 +57,24 @@ exts = [".py", ".js", ".xml", ".csv", ".md", ".json", ".txt", ".sh", ".html", ".
 names = ["Makefile"]
 skip_names = ["course_*.json", "orphaned-worktree-*.md", "night_shift_history.md", "check_absolute_paths.py",
     "test_check_absolute_paths.py"]
+[check.allow]
+"daemons/hams_local_relay/src/crash_scrub.rs" = 4
+"daemons/hams_local_relay/src/crash_scrub_tests.rs" = 10
+"daemons/hams_local_relay/src/crash_report_tests.rs" = 4
+"daemons/hams_local_relay/src/data_dir.rs" = 2
+"daemons/hams_local_relay/src/tool_install.rs" = 1
+"daemons/hams_local_relay/src/updater.rs" = 1
+"daemons/hams_simulated_bots/jetson_ai_server/hams-llama-server.service" = 1
+"daemons/hams_simulated_bots/jetson_ai_server/hams-simulated-bots.service" = 2
+"daemons/hams_simulated_bots/jetson_ai_server/hams-whisper-server.service" = 1
+"devbox_tools/pacificon_demo_kit/host/hams-demo-bots.service" = 1
+"devbox_tools/pacificon_demo_kit/host/hams-demo-observer.service" = 1
+".github/workflows/build-relay.yml" = 10
+".github/workflows/build-server-daemons.yml" = 1
+"tools/hams_lint/rules/checks.toml" = 6
+"daemons/radioctl/crates/radioctld/src/rigs.rs" = 3
+"daemons/radioctl/crates/radioctl-protocols/src/perseus.rs" = 3
+"daemons/ham_digital_modes/examples/ratet27_dump_frames_for_mbelib.rs" = 1
 [[check.rule]]
 id = "home-path"
 literal = "/home/"

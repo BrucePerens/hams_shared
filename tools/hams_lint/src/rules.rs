@@ -47,6 +47,10 @@ pub struct CheckSpec {
     #[serde(default = "default_scanned_check")]
     pub scanned_check: String,
     pub files: FileSpec,
+    /// Files whose findings are legitimate content: path (`hams_shared/` prefix dropped) -> the exact number
+    /// of findings allowed. More is reported (marked), fewer is a stale count; `lines_strict` checks only.
+    #[serde(default)]
+    pub allow: std::collections::BTreeMap<String, usize>,
     /// `lines_strict` (Python line iteration, utf-8, partial on a decode error),
     /// `text_replace` (whole text, invalid bytes replaced, `splitlines()` numbering).
     pub read: String,
@@ -361,6 +365,26 @@ impl Check {
                 for (i, line) in lines.iter().enumerate() {
                     self.apply_rules(line, i + 1, None, &mut result.findings);
                 }
+                let key = rel.strip_prefix("hams_shared/").unwrap_or(rel);
+                if let Some(&allowed) = self.spec.allow.get(key) {
+                    let found = result.findings.len();
+                    if found > allowed {
+                        for f in &mut result.findings {
+                            f.message
+                                .push_str(&format!(" (more than the {allowed} allowlisted lines)"));
+                        }
+                    } else {
+                        result.findings.clear();
+                        if found < allowed {
+                            result.findings.push(Finding {
+                                line: 1,
+                                message: format!(
+                                    "allowlist expects {allowed} findings but finds {found}; lower the count"
+                                ),
+                            });
+                        }
+                    }
+                }
                 if let Some(err) = err {
                     result.warning = self.warning(abs_display, &err.message);
                 }
@@ -450,6 +474,22 @@ mod tests {
     // Tests [@ANCHOR: hams_lint:rules_file_result_struct]
     // Tests [@ANCHOR: hams_lint:rules_line_rule_struct]
     // Tests [@ANCHOR: hams_lint:rules_check_struct]
+
+    #[test]
+    fn allowlisted_file_must_match_its_count_exactly() {
+        let checks = load(crate::DEFAULT_RULES).expect("rules load");
+        let check = checks
+            .iter()
+            .find(|c| c.spec.name == "check_absolute_paths")
+            .expect("check present");
+        let (path, count) = check.spec.allow.iter().next().expect("an allowlist");
+        let lines = |n: usize| "/home/x\n".repeat(n);
+        let eval = |rel: &str, n: usize| check.eval(rel, rel, lines(n).as_bytes()).findings;
+        assert!(eval(path, *count).is_empty());
+        assert!(eval(path, count + 1)[0].message.contains("allowlisted"));
+        assert!(eval(path, count - 1)[0].message.contains("allowlist expects"));
+        assert_eq!(eval("other/file.rs", 1).len(), 1);
+    }
 
     #[test]
     fn name_patterns_take_one_star() {
