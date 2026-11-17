@@ -2393,7 +2393,7 @@ def main():
             ),
         ],
     )
-    if os.path.basename(main_checkout_root) == "hams_open":
+    if layout is not None:  # only a hams_shared tree: dir_path is then hams_shared, the repo this baseline records
         _add(
             "check_doc_references_shared",
             [
