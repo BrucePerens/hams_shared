@@ -37,6 +37,7 @@ Tests [@ANCHOR: batch_queue:format_verdicts]
 
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -550,6 +551,365 @@ class CoalesceTests(unittest.TestCase):
         thread, box = self.start(1, runner)
         thread.join(10)
         self.assertEqual(box["out"]["status"], bq.SOLO)
+
+
+class ScriptedCoalesceTests(unittest.TestCase):
+    """coalesce driven single-threaded with a fake clock and a scripted `sleep`: exact output, order and state.
+
+    Mutation run 2026-11-17 on coalesce: 172/269 killed by the older tests, 267/269 with these. The two survivors are
+    equivalent: `while True` -> `while <True>` (the same loop) and `if event == "runner_died"` -> `if True` (prune returns
+    no other event)."""
+
+    def setUp(self):
+        ALIVE.clear()
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.caps = {"max_branches": 8, "max_seconds": 0}
+        self.lines = []
+        self.t = 1000.0
+        self.sleeps = []
+        self.script = lambda n: None
+
+    def now(self):
+        return self.t
+
+    def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self.t += seconds
+        self.script(len(self.sleeps))
+
+    def hold_slot_one(self, members=()):
+        """Batch 1 is running here, its runner alive (this process), started 5 s ago."""
+        with bq.locked(self.tmp) as state:
+            state["next_id"] = 2
+            state["running"] = {"id": 1, "members": list(members), "runner": {
+                "pid": os.getpid(), "start": lock_queue.proc_start_time(os.getpid())}, "started": self.t - 5}
+
+    def call(self, n=1, runner=None, **kw):
+        member = fake_member(n)
+        ALIVE.add((member["pid"], member["start"]))
+        args = dict(caps=self.caps, poll=1.0, report_every=10.0, handle_signals=False, live=live,
+                    out=self.lines.append, now=self.now, sleep=self.sleep)
+        args.update(kw)
+        return bq.coalesce(self.tmp, member, runner or (lambda *a: None), **args)
+
+    def test_a_lone_leader_runs_at_once_and_returns_its_whole_result(self):
+        calls = []
+
+        def runner(batch_id, members, log):
+            calls.append((batch_id, [m["branch"] for m in members], log))
+            with bq.locked(self.tmp) as state:  # while it runs, its slot is held
+                self.assertEqual(state["running"]["id"], 1)
+            return {"verdicts": {members[0]["tip"]: {"status": "passed", "exit_code": 0}}, "log": log}
+
+        result = self.call(1, runner, log_for=lambda batch_id: "/logs/%d.log" % batch_id)
+        self.assertEqual(calls, [(1, ["br1"], "/logs/1.log")])
+        self.assertEqual(self.lines, ["[*] batch 1: nothing is running here; starting at once",
+                                      "[*] batch 1 starts with 1 branch: br1"])
+        self.assertEqual(self.sleeps, [])
+        tip = fake_member(1)["tip"]
+        self.assertEqual(result["status"], bq.PASSED)
+        self.assertEqual(result["verdict"], {"status": "passed", "exit_code": 0})
+        self.assertEqual((result["batch"], result["others"], result["ran"]), (1, [], True))
+        self.assertEqual(sorted(result["doc"]), ["batch", "log", "members", "verdicts"])
+        self.assertEqual(result["doc"]["batch"], 1)
+        self.assertEqual(result["doc"]["log"], "/logs/1.log")
+        self.assertEqual(result["doc"]["verdicts"], {tip: {"status": "passed", "exit_code": 0}})
+        self.assertEqual([m["branch"] for m in result["doc"]["members"]], ["br1"])
+        self.assertEqual(bq.read_verdicts(self.tmp, 1), dict(result["doc"], finished=1000.0))  # published, stamped by the injected clock
+        with bq.locked(self.tmp) as state:
+            self.assertEqual(bq.running_batches(state), [])  # the slot is free again
+
+    def test_without_log_for_the_runner_gets_an_empty_log_path(self):
+        logs = []
+        self.call(1, lambda batch_id, members, log: logs.append(log) or {"verdicts": {}, "log": log})
+        self.assertEqual(logs, [""])
+
+    def test_a_runner_that_returns_nothing_or_an_unknown_status_fails_the_member_and_frees_the_slot(self):
+        result = self.call(1, lambda *a: None)
+        self.assertEqual(result, {"status": bq.FAILED, "verdict": None, "batch": 1, "others": [], "ran": True, "doc": None})
+        self.assertIsNone(bq.read_verdicts(self.tmp, 1))  # nothing to publish
+        with bq.locked(self.tmp) as state:
+            self.assertEqual(bq.running_batches(state), [])
+        member = fake_member(2)
+        result = self.call(2, lambda b, members, log: {"verdicts": {members[0]["tip"]: {"status": "bogus"}}, "log": log})
+        self.assertEqual((result["status"], result["verdict"], result["batch"]), (bq.FAILED, {"status": "bogus"}, 2))
+        self.assertEqual(member["branch"], "br2")
+
+    def test_each_known_status_is_returned_as_it_is(self):
+        for n, status in enumerate((bq.PASSED, bq.FAILED, bq.SOLO), start=1):
+            result = self.call(n, lambda b, members, log, s=status: {"verdicts": {members[0]["tip"]: {"status": s}}})
+            self.assertEqual(result["status"], status)
+
+    def test_a_runner_that_raises_still_frees_the_slot_and_publishes_nothing(self):
+        def runner(*a):
+            raise RuntimeError("boom")
+
+        with self.assertRaises(RuntimeError):
+            self.call(1, runner)
+        with bq.locked(self.tmp) as state:
+            self.assertEqual(bq.running_batches(state), [])
+        self.assertIsNone(bq.read_verdicts(self.tmp, 1))
+
+    def test_waiting_behind_a_running_batch_reports_on_the_report_interval_only(self):
+        self.hold_slot_one([fake_member(9)])
+        result = self.call(1, timeout=25.0)
+        self.assertEqual(result, {"status": bq.TIMEOUT, "verdict": None, "batch": 2, "others": [], "ran": False, "doc": None})
+        self.assertEqual(self.sleeps, [1.0] * 25)  # timeout is reached at exactly 25 s, not 24 or 26
+        self.assertEqual(self.lines, [
+            "[*] joined batch 2 with 0 other branches (batch 1 running for 5 s (1 branch))",
+            "[*] batch 2 is forming behind batch 1 running for 5 s (1 branch)",
+            "[*] batch 2 is forming behind batch 1 running for 15 s (1 branch)",
+            "[*] batch 2 is forming behind batch 1 running for 25 s (1 branch)"])
+        with bq.locked(self.tmp) as state:
+            self.assertIsNone(state["forming"])  # a timed-out member leaves the queue
+
+    def test_joining_a_forming_batch_names_the_other_branches_and_their_count(self):
+        self.hold_slot_one([fake_member(9)])
+        with bq.locked(self.tmp) as state:
+            for n in (7, 8):
+                ALIVE.add((fake_member(n)["pid"], fake_member(n)["start"]))
+                bq.join(state, fake_member(n), self.caps)
+        self.call(1, timeout=0.5)
+        self.assertEqual(self.lines[0], "[*] joined batch 2 with 2 other branches (batch 1 running for 5 s (1 branch))")
+        self.lines.clear()
+        with bq.locked(self.tmp) as state:
+            state["forming"]["members"] = state["forming"]["members"][:1]
+        self.call(2, timeout=0.5)
+        self.assertEqual(self.lines[0], "[*] joined batch 2 with 1 other branch (batch 1 running for 6 s (1 branch))")  # the first call ran 1 s
+
+    def test_a_full_batch_announces_waiting_for_the_next_one_once(self):
+        self.caps = {"max_branches": 1, "max_seconds": 0}
+        self.hold_slot_one()
+        with bq.locked(self.tmp) as state:
+            ALIVE.add((fake_member(8)["pid"], fake_member(8)["start"]))
+            bq.join(state, fake_member(8), self.caps)
+        result = self.call(1, timeout=25.0)
+        self.assertEqual(result["status"], bq.TIMEOUT)
+        self.assertEqual(result["batch"], None)
+        self.assertEqual(self.lines, ["[*] the forming batch is full (1 branches): waiting for the next one"])
+
+    def test_a_member_of_the_running_batch_reports_waiting_for_it_then_returns_its_verdict(self):
+        leader, me = fake_member(8), fake_member(1)
+        ALIVE.update({(leader["pid"], leader["start"]), (me["pid"], me["start"])})
+        self.hold_slot_one()
+        with bq.locked(self.tmp) as state:
+            bq.join(state, leader, self.caps)
+
+        def script(n):
+            with bq.locked(self.tmp) as state:
+                if n == 1:  # batch 1 ends; the leader seals and runs batch 2, which includes us
+                    bq.finish(state, 1)
+                    bq.seal(state, leader, now=self.now, log="/l")
+                elif n == 12:
+                    batch = bq.running_batches(state)[0]
+                    bq.write_verdicts(self.tmp, 2, {"verdicts": {me["tip"]: {"status": "failed", "exit_code": 3},
+                                                                 leader["tip"]: {"status": "passed"}},
+                                                    "log": "/l", "members": batch["members"], "batch": 2}, now=self.now)
+                    bq.finish(state, 2)
+        self.script = script
+        result = self.call(1, timeout=100.0)
+        self.assertEqual(result["status"], bq.FAILED)
+        self.assertEqual(result["verdict"], {"status": "failed", "exit_code": 3})
+        self.assertEqual((result["batch"], result["others"], result["ran"]), (2, ["br8"], False))
+        self.assertEqual(result["doc"]["log"], "/l")
+        self.assertEqual(len(self.sleeps), 12)
+        self.assertEqual(self.lines[0], "[*] joined batch 2 with 1 other branch (batch 1 running for 5 s (0 branches))")
+        self.assertEqual(self.lines[1:], ["[*] batch 2 is forming behind batch 1 running for 5 s (0 branches)",
+                                          "[*] waiting for batch 2 running for 9 s (2 branches)"])
+
+    def test_a_verdict_file_that_does_not_name_this_member_is_ignored(self):
+        self.hold_slot_one()
+        me, other = fake_member(1), fake_member(2)
+
+        def script(n):
+            if n == 1:  # a stale file of an older state, from another process, for the same batch id
+                bq.write_verdicts(self.tmp, 2, {"verdicts": {me["tip"]: {"status": "passed"}}, "log": "",
+                                                "members": [other], "batch": 2}, now=self.now)
+            elif n == 3:
+                bq.write_verdicts(self.tmp, 2, {"verdicts": {me["tip"]: {"status": "failed"}}, "log": "",
+                                                "members": [me, other], "batch": 2}, now=self.now)
+        self.script = script
+        result = self.call(1, timeout=100.0)
+        self.assertEqual((result["status"], len(self.sleeps), result["others"]), (bq.FAILED, 3, ["br2"]))
+
+    def test_a_verdict_document_without_this_member_makes_it_join_again(self):
+        self.hold_slot_one()
+        me, other = fake_member(1), fake_member(2)
+
+        def script(n):
+            if n == 10:  # a report is due right now, while this member has no batch
+                bq.write_verdicts(self.tmp, 2, {"verdicts": {other["tip"]: {"status": "passed"}}, "log": "",
+                                                "members": [me, other], "batch": 2}, now=self.now)
+            elif n == 13:
+                bq.write_verdicts(self.tmp, 2, {"verdicts": {me["tip"]: {"status": "passed"}}, "log": "",
+                                                "members": [me], "batch": 2}, now=self.now)
+        self.script = script
+        result = self.call(1, timeout=100.0)
+        self.assertEqual((result["status"], len(self.sleeps), result["others"]), (bq.PASSED, 13, []))
+        self.assertFalse(any("ended without a verdict" in line for line in self.lines))
+        # the report due at 10 s falls while the member has no batch: it prints nothing (and does not crash on batch None)
+        self.assertEqual(self.lines, [
+            "[*] joined batch 2 with 0 other branches (batch 1 running for 5 s (0 branches))",
+            "[*] batch 2 is forming behind batch 1 running for 5 s (0 branches)"] + [
+            "[*] joined batch 2 with 0 other branches (batch 1 running for %d s (0 branches))" % age for age in (16, 17, 18)])
+
+    def test_a_batch_that_keeps_ending_without_a_verdict_gives_up_after_the_requeue_limit(self):
+        self.hold_slot_one()
+
+        def script(n):
+            with bq.locked(self.tmp) as state:
+                state["forming"] = None  # the forming batch vanishes: its runner died before sealing
+        self.script = script
+        result = self.call(1, timeout=1000.0)
+        self.assertEqual(result, {"status": bq.GAVE_UP, "verdict": None, "batch": None, "others": [], "ran": False, "doc": None})
+        self.assertEqual(bq.MAX_REQUEUES, 3)
+        died = [line for line in self.lines if "ended without a verdict (its runner died); joining again" in line]
+        self.assertEqual(len(died), bq.MAX_REQUEUES + 1)
+        self.assertEqual(died[0], "[*] batch 2 ended without a verdict (its runner died); joining again")
+        self.assertEqual(len(self.sleeps), bq.MAX_REQUEUES + 1)
+
+    def test_a_dead_runner_is_reported_before_the_member_joins_again(self):
+        with bq.locked(self.tmp) as state:
+            state["next_id"] = 6
+            state["running"] = {"id": 5, "members": [], "runner": {"pid": 424242, "start": 1}, "started": self.t}
+        result = self.call(1, lambda b, members, log: {"verdicts": {members[0]["tip"]: {"status": "passed"}}, "log": log})
+        self.assertEqual(self.lines[0], "[*] batch 5: its runner died; waiting members re-queue")
+        self.assertEqual((result["status"], result["batch"], result["ran"]), (bq.PASSED, 6, True))
+
+    def test_a_follower_gets_a_failed_status_for_an_unknown_verdict_status(self):
+        self.hold_slot_one()
+        me = fake_member(1)
+        self.script = lambda n: bq.write_verdicts(self.tmp, 2, {"verdicts": {me["tip"]: {"status": "weird"}}, "log": "",
+                                                                "members": [me], "batch": 2}, now=self.now)
+        result = self.call(1, timeout=100.0)
+        self.assertEqual((result["status"], result["verdict"], len(self.sleeps)), (bq.FAILED, {"status": "weird"}, 1))
+
+    def test_waiting_for_the_batch_leader_names_no_running_batch_and_is_not_the_full_message(self):
+        leader, me = fake_member(8), fake_member(1)
+        ALIVE.add((leader["pid"], leader["start"]))
+        dead = fake_member(7)  # never alive: pruned, and the runner_died event is not printed for it
+        with bq.locked(self.tmp) as state:
+            bq.join(state, dead, self.caps)
+            bq.join(state, leader, self.caps)
+            self.assertEqual(state["forming"]["id"], 1)
+
+        def script(n):
+            if n == 3:
+                bq.write_verdicts(self.tmp, 1, {"verdicts": {me["tip"]: {"status": "passed"}}, "log": "",
+                                                "members": [leader, me], "batch": 1}, now=self.now)
+        self.script = script
+        result = self.call(1, timeout=100.0)
+        self.assertEqual(result["status"], bq.PASSED)
+        self.assertEqual(self.lines, ["[*] joined batch 1 with 1 other branch"])  # nothing running, nothing full, nobody died
+        self.assertEqual(len(self.sleeps), 3)
+
+    def test_a_leader_of_several_branches_names_them_all_in_order(self):
+        self.hold_slot_one()
+        other = fake_member(2)
+        ALIVE.add((other["pid"], other["start"]))
+
+        def script(n):
+            if n == 2:
+                with bq.locked(self.tmp) as state:
+                    bq.join(state, other, self.caps)
+                    bq.finish(state, 1)  # the slot frees: the first member of the forming batch seals it
+        self.script = script
+        calls = []
+
+        def runner(batch_id, members, log):
+            calls.append([m["branch"] for m in members])
+            return {"verdicts": {m["tip"]: {"status": "passed"} for m in members}, "log": log}
+        result = self.call(1, runner, timeout=100.0)
+        self.assertEqual(calls, [["br1", "br2"]])
+        self.assertEqual(self.lines[-1], "[*] batch 2 starts with 2 branches: br1, br2")
+        self.assertEqual((result["status"], result["others"], result["ran"]), (bq.PASSED, ["br2"], True))
+
+    def test_a_slot_available_while_others_run_is_announced_with_the_counts(self):
+        self.caps = {"max_branches": 8, "max_seconds": 0, "max_running": 2}
+        self.hold_slot_one([fake_member(9)])
+        self.call(1, lambda b, members, log: {"verdicts": {}, "log": log})
+        self.assertEqual(self.lines[0], "[*] batch 2: 1 of 2 running slots are in use here; starting at once")
+
+    def test_handle_signals_defaults_on_and_off_leaves_the_handlers_alone(self):
+        def sentinel(signum, _frame):
+            raise AssertionError("not expected")
+
+        old = {s: signal.signal(s, sentinel) for s in (signal.SIGTERM, signal.SIGHUP)}
+        self.addCleanup(lambda: [signal.signal(s, h) for s, h in old.items()])
+        self.hold_slot_one()
+        seen = []
+
+        def script(n):
+            seen.append((signal.getsignal(signal.SIGTERM) is sentinel, signal.getsignal(signal.SIGHUP) is sentinel))
+        self.script = script
+        self.call(1, timeout=2.0, handle_signals=False)
+        self.call(2, timeout=2.0, handle_signals=True)
+        kw = dict(caps=self.caps, poll=1.0, timeout=2.0, live=live, out=self.lines.append, now=self.now, sleep=self.sleep)
+        member = fake_member(3)
+        ALIVE.add((member["pid"], member["start"]))
+        bq.coalesce(self.tmp, member, lambda *a: None, **kw)  # handle_signals not given: the default
+        self.assertEqual(seen, [(True, True)] * 2 + [(False, False)] * 2 + [(False, False)] * 2)
+
+    def test_a_signal_while_waiting_leaves_the_queue_exits_128_plus_it_and_restores_the_handlers(self):
+        for sig, code in ((signal.SIGTERM, 143), (signal.SIGHUP, 129)):
+            self.lines.clear()
+            self.hold_slot_one()
+            seen = {}
+
+            def sentinel(signum, _frame):
+                raise AssertionError("the sentinel handler ran: coalesce did not install its own")
+
+            old = {s: signal.signal(s, sentinel) for s in (signal.SIGTERM, signal.SIGHUP)}
+            self.addCleanup(lambda old=old: [signal.signal(s, h) for s, h in old.items()])
+
+            def script(n, sig=sig, seen=seen):
+                seen["handler"] = signal.getsignal(sig)
+                signal.raise_signal(sig)
+            self.script = script
+            with self.assertRaises(SystemExit) as caught:
+                self.call(1, handle_signals=True, timeout=1000.0)
+            self.assertEqual(caught.exception.code, code)
+            self.assertIsNot(seen["handler"], sentinel)
+            self.assertIs(signal.getsignal(signal.SIGTERM), sentinel)
+            self.assertIs(signal.getsignal(signal.SIGHUP), sentinel)
+            self.assertEqual(self.sleeps[-1:], [1.0])
+            with bq.locked(self.tmp) as state:
+                self.assertIsNone(state["forming"])  # it left the queue
+
+    def test_leaving_on_a_signal_survives_an_unusable_state_directory(self):
+        self.hold_slot_one()
+
+        def script(n):
+            shutil.rmtree(self.tmp)
+            with open(self.tmp, "w"):
+                pass
+        self.script = script
+        self.addCleanup(lambda: os.path.isfile(self.tmp) and os.remove(self.tmp))
+        old = signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        self.addCleanup(signal.signal, signal.SIGTERM, old)
+
+        def fire(n):
+            script(n)
+            signal.raise_signal(signal.SIGTERM)
+        self.script = fire
+        with self.assertRaises(SystemExit) as caught:
+            self.call(1, handle_signals=True, timeout=1000.0)
+        self.assertEqual(caught.exception.code, 143)
+
+    def test_handle_signals_off_the_main_thread_is_harmless_and_handlers_are_restored_after_a_normal_run(self):
+        outcome = {}
+
+        def work():
+            outcome["result"] = self.call(1, lambda b, members, log: {"verdicts": {members[0]["tip"]: {"status": "passed"}}},
+                                          handle_signals=True)
+        thread = threading.Thread(target=work)
+        thread.start()
+        thread.join()
+        self.assertEqual(outcome["result"]["status"], bq.PASSED)
+        before = signal.getsignal(signal.SIGTERM)
+        self.call(2, lambda b, members, log: {"verdicts": {members[0]["tip"]: {"status": "passed"}}}, handle_signals=True)
+        self.assertIs(signal.getsignal(signal.SIGTERM), before)
 
 
 class TreeTests(unittest.TestCase):
