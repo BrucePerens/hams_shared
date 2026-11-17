@@ -685,7 +685,7 @@ def hook_enable_nginx_front_end(env_vars, dest_dir, path, run_cmd_func):
     Found and installed by hand on hams1, 2026-10-05; this makes a fresh provision reproduce it.
 
     Links the site into sites-enabled, removes the sites that would bind a public port (see
-    NGINX_SITES_TO_DISABLE), refuses to go further unless `nginx -t` passes, then enables nginx at
+    NGINX_SITES_TO_DISABLE), refuses to go further unless `nginx -t` passes (a failed test puts sites-enabled back as it was), then enables nginx at
     boot and reloads (or starts) it. A failure is recorded as a degraded step, never raised."""
     sites_enabled = os.path.join(dest_dir, NGINX_SITES_ENABLED.lstrip("/")) if dest_dir else NGINX_SITES_ENABLED
     link = os.path.join(sites_enabled, "hams-tunnel-origin.conf")
@@ -694,6 +694,9 @@ def hook_enable_nginx_front_end(env_vars, dest_dir, path, run_cmd_func):
         return
     try:
         os.makedirs(sites_enabled, exist_ok=True)
+        # What each touched entry was (a link target, or None for absent), to put back if `nginx -t` fails.
+        touched = [os.path.join(sites_enabled, name) for name in NGINX_SITES_TO_DISABLE] + [link]
+        previous = {p: os.readlink(p) if os.path.islink(p) else None for p in touched}
         for name in NGINX_SITES_TO_DISABLE:
             stale = os.path.join(sites_enabled, name)
             if os.path.lexists(stale):
@@ -704,7 +707,15 @@ def hook_enable_nginx_front_end(env_vars, dest_dir, path, run_cmd_func):
         os.symlink(NGINX_TUNNEL_ORIGIN_CONF, link)
         if dest_dir:
             return
-        run_cmd_func(["/usr/sbin/nginx", "-t"])
+        try:
+            run_cmd_func(["/usr/sbin/nginx", "-t"])
+        except subprocess.CalledProcessError:
+            for entry, target in previous.items():
+                if os.path.lexists(entry):
+                    os.remove(entry)
+                if target is not None:
+                    os.symlink(target, entry)
+            raise
         run_cmd_func(["systemctl", "enable", "nginx.service"])
         run_cmd_func(["systemctl", "reload-or-restart", "nginx.service"])
     except (OSError, subprocess.CalledProcessError) as e:
