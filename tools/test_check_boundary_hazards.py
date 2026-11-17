@@ -88,6 +88,15 @@ class CredentialRedirectTests(RuleTestCase):
                 return _OPENER.open(urllib.request.Request(url, headers={"X-API-Key": key}))
         """), [])
 
+    def test_the_marker_only_in_a_comment_or_string_does_not_silence_it(self):
+        self.assertEqual(self.rules("""
+            import urllib.request
+            # we should use an HTTPRedirectHandler here, and ssrf_safe_fetch( one day
+            NOTE = "safe_fetch("
+            def call(url, key):
+                return urllib.request.urlopen(urllib.request.Request(url, headers={"Authorization": key}))
+        """), ["credential-redirect"])
+
     def test_the_safe_fetch_helper_silences_it(self):
         self.assertEqual(self.rules("""
             import urllib.request
@@ -142,6 +151,14 @@ class ArgvLogTests(RuleTestCase):
             def scan(proc):
                 logger.warning("stray process %s", proc.info["cmdline"])
         """), ["argv-log"])
+
+    def test_a_logger_reached_through_getlogger_or_another_receiver_is_judged(self):
+        for receiver in ("logging.getLogger(__name__)", "self._log", "app.logger", "module_logger", "LOGGER"):
+            self.assertEqual(self.rules("""
+                import logging
+                def scan(self, app, proc):
+                    %s.warning("stray process %%s", proc.info["cmdline"])
+            """ % receiver), ["argv-log"], receiver)
 
     def test_the_joined_text_of_a_cmd_list_is_flagged(self):
         self.assertEqual(self.rules("""
@@ -290,6 +307,17 @@ class GhTruncatedListingTests(RuleTestCase):
                 return subprocess.run(["gh", "pr", "list", "--json", "number,files"], capture_output=True)
         """), ["gh-truncated-listing"])
 
+    def test_a_gh_command_in_a_python_string_or_behind_a_variable_is_judged(self):
+        self.assertEqual(self.rules("""
+            import subprocess
+            def a():
+                return subprocess.run("gh pr view 5 --json files", shell=True)
+            def b():
+                return subprocess.run([GH_BIN, "pr", "list", "--json", "files"])
+            def c():
+                return subprocess.run(["/usr/bin/gh", "api", "repos/x/y/pulls/5/files"])
+        """), ["gh-truncated-listing"] * 3)
+
     def test_json_files_with_changedfiles_next_to_it_is_fine(self):
         self.assertEqual(self.rules("""
             import subprocess
@@ -427,10 +455,24 @@ class TimestampRangeTests(RuleTestCase):
         """), ["timestamp-range"])
 
 
+class ScopeScanTests(RuleTestCase):
+    def test_the_isfinite_scan_of_a_scope_is_made_once_not_once_per_call(self):
+        from unittest import mock
+        source = "import datetime\n" + "".join("x%d = datetime.datetime.fromtimestamp(payload[%d])\n" % (i, i) for i in range(200))
+        path = _write(self.tmp, "big.py", source)
+        real_walk = chk.ast.walk
+        with mock.patch.object(chk.ast, "walk", wraps=real_walk) as walk:
+            found = chk.check_file(path)
+        self.assertEqual(len(found), 200)
+        self.assertLess(walk.call_count, 150)
+
+
 class UnparseableFileTests(RuleTestCase):
     # Tests [@ANCHOR: boundary_hazards:check_file]
-    def test_a_file_with_a_syntax_error_has_no_findings(self):
-        self.assertEqual(self.findings("def broken(:\n"), [])
+    def test_a_file_with_a_syntax_error_is_reported_not_passed(self):
+        found = self.findings("def broken(:\n")
+        self.assertEqual([f[0] for f in found], ["unparseable-source"])
+        self.assertIn("not checked", found[0][3])
 
 
 class KnownListTests(RuleTestCase):

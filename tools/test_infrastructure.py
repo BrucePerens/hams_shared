@@ -1798,7 +1798,7 @@ class LoadAndPromptEnvTests(_SafePatchTestCase):
         # swallowing the traceback).
         env_vars = {"DOMAIN": "hams.com", "CLOUDFLARE_API_TOKEN": "a-real-token"}
         with patch(
-            "urllib.request.urlopen",
+            "urllib.request.OpenerDirector.open",
             side_effect=OSError("simulated network failure"),
         ), self.assertLogs("infrastructure", level="WARNING") as log_ctx:
             infra.load_and_prompt_env(env_vars, is_test=False)
@@ -1806,6 +1806,10 @@ class LoadAndPromptEnvTests(_SafePatchTestCase):
         self.assertTrue(
             any("Failed to fetch Cloudflare Zone ID" in msg for msg in log_ctx.output)
         )
+
+    def test_the_zone_id_lookup_does_not_follow_a_redirect_with_the_bearer_token(self):
+        # The request carries `Authorization: Bearer ...`; urllib would copy it to whatever host a 3xx names.
+        self.assertIsNone(infra._NoRedirect().redirect_request(None, None, 302, "Found", {}, "https://evil.example/"))
 
     def test_never_reads_stdin(self):
         # A regression guard against prompting: nothing

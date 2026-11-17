@@ -41,6 +41,13 @@ import smoketest_fixtures
 _logger = logging.getLogger(__name__)
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuses every redirect: urllib copies all request headers, a bearer token included, to wherever a 3xx answer points."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 def _pg_version_sort_key(path):
     """
     Extracts the numeric PostgreSQL major-version directory component from a
@@ -13108,7 +13115,7 @@ def load_and_prompt_env(env_vars, is_test):
                         f"https://api.cloudflare.com/client/v4/zones?name={domain}",
                         headers={"Authorization": f"Bearer {cf_token}", "Content-Type": "application/json"}
                     )
-                    with urllib.request.urlopen(req, timeout=5) as response:
+                    with urllib.request.build_opener(_NoRedirect).open(req, timeout=5) as response:
                         data = json.loads(response.read().decode())
                         if data.get("success") and data.get("result"):
                             zone_id = data["result"][0]["id"]
