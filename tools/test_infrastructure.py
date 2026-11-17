@@ -8479,6 +8479,24 @@ class NginxFrontEndManifestTests(_TmpDirTestCase):
         self.assertEqual(run.call_count, 1)
         self.assertEqual([n for n, _ in infra.get_hook_failures()], ["hook_enable_nginx_front_end"])
 
+    def test_a_failed_config_test_puts_sites_enabled_back_as_it_was(self):
+        sites, conf = self._stage()
+        old = os.path.join(sites, "hams-tunnel-origin.conf")
+        os.symlink("/old/target.conf", old)
+        run = MagicMock(side_effect=subprocess.CalledProcessError(1, "nginx -t"))
+        infra.hook_enable_nginx_front_end({}, "", conf, run)
+        self.assertEqual(
+            sorted(os.listdir(sites)), ["acme-only.conf", "default", "hams-tunnel-origin.conf"]
+        )
+        self.assertEqual(os.readlink(old), "/old/target.conf")
+        self.assertEqual(os.readlink(os.path.join(sites, "default")), "/nonexistent")
+
+    def test_a_failed_config_test_leaves_no_new_link_behind(self):
+        sites, conf = self._stage()
+        run = MagicMock(side_effect=subprocess.CalledProcessError(1, "nginx -t"))
+        infra.hook_enable_nginx_front_end({}, "", conf, run)
+        self.assertNotIn("hams-tunnel-origin.conf", os.listdir(sites))
+
     def test_hook_is_idempotent(self):
         sites, conf = self._stage()
         run = MagicMock()
