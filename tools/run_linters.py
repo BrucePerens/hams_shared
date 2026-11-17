@@ -2550,7 +2550,9 @@ def main():
         + ([sibling_dir] if sibling_dir else []),
     )
 
-    _pair_roots = [dir_path] + ([sibling_dir] if sibling_dir else [])
+    # A hams_shared tree has no modules (and its directory is not named hams_shared, so the checkers do not take its parent):
+    # in a layout these steps scan the layout's hams_open, which holds this hams_shared, and hams_com.
+    _pair_roots = [repo_root if layout is not None else dir_path] + ([sibling_dir] if sibling_dir else [])
 
     # 45. check_window_fetch_reassignment -- direct `window.fetch = ...`/
     # `window['fetch'] = ...` reassignment in a *.test.js file throws under
