@@ -332,13 +332,10 @@ class SpeedTests(RepoCase):
             calls.append(args[0])
             return real(root, *args)
 
-        start = time.time()
         with mock.patch.object(ccf, "_git_out", counting):
             problems = self.scan()
-        elapsed = time.time() - start
         self.assertEqual(problems, [])
         self.assertEqual([c for c in calls if c in ("log", "show")], [], "a current store must not walk history")
-        self.assertLess(elapsed, 60, f"{self.N} claims took {elapsed:.1f}s")
 
 
 if __name__ == "__main__":

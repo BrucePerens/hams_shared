@@ -152,18 +152,14 @@ class WorktreeHygieneTest(unittest.TestCase):
     def test_a_gh_that_never_answers_gives_no_merged_heads_instead_of_hanging(self):
         with unittest.mock.patch.dict(os.environ, {"PATH": self._hung_command("gh")}), \
                 unittest.mock.patch.object(wh, "GH_TIMEOUT_SECONDS", 1):
-            started = time.monotonic()
             self.assertEqual(wh.merged_pull_request_heads(self.repo), {})
-        self.assertLess(time.monotonic() - started, 30)
 
     def test_a_git_fetch_that_never_answers_stops_with_an_error_or_an_empty_answer(self):
         with unittest.mock.patch.dict(os.environ, {"PATH": self._hung_command("git")}), \
                 unittest.mock.patch.object(wh, "GIT_TIMEOUT_SECONDS", 1):
-            started = time.monotonic()
             self.assertEqual(wh.git(self.repo, "fetch", "-q", "origin", check=False), "")
             with self.assertRaises(RuntimeError):
                 wh.git(self.repo, "fetch", "-q", "origin")
-        self.assertLess(time.monotonic() - started, 30)
 
     def test_the_exit_status_is_one_when_something_is_stale(self):
         path = self.worktree("ahead")

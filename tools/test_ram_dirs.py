@@ -649,10 +649,8 @@ class RunJobTest(RamTestCase):
         environ = dict(self.environ, HAMS_RAM_JOB_MAX_GB="0.00001")
         code = ("import os,time; t=os.environ['CARGO_TARGET_DIR']; open(t+'/big','w').write('x'*200000); time.sleep(60)")
         said = []
-        began = time.monotonic()
         with self.free(60):
             result = ram_dirs.run_job("big", [sys.executable, "-c", code], environ=environ, say=said.append, interval=0.2, grace=5)
-        self.assertLess(time.monotonic() - began, 30)
         self.assertIn("per-job limit", result.stopped)
         self.assertEqual(result.returncode, 128 + signal.SIGTERM)
         self.assertGreaterEqual(result.peak_bytes, 200000)

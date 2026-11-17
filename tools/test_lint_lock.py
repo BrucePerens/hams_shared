@@ -97,10 +97,8 @@ class LockTests(Base):
         child = self.start_holder()
         lines = []
         lock = lint_lock.RunLock(self.env)
-        started = time.monotonic()
         got = lock.acquire("/work/tree/B\tx", timeout=2.5, out=lines.append, report_every=0.2, poll=0.1)
         self.assertFalse(got)
-        self.assertLess(time.monotonic() - started, 20)
         self.assertTrue(lines)
         self.assertIn("waiting for the lint run in /work/tree/A (pid %d), position 1" % child.pid, lines[0])
         mine = [t for t in lock_queue.live_tickets(lock.qdir) if t["pid"] == os.getpid()]

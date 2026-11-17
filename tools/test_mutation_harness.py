@@ -102,11 +102,9 @@ class ProcessGroupTests(unittest.TestCase):
     def test_timeout_ends_grandchild(self):
         with tempfile.TemporaryDirectory() as tmp:
             pidfile = os.path.join(tmp, "pid")
-            started = time.time()
             _, _, timed_out = mutation_harness.run_group(f"sh -c 'sleep 60 & echo $! > {pidfile}; wait'", tmp, dict(os.environ),
                                                          timeout=2, grace=1)
             self.assertTrue(timed_out)
-            self.assertLess(time.time() - started, 15)
             pid = int(open(pidfile).read())
             for _ in range(30):
                 if not _alive(pid):

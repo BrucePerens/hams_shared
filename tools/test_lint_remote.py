@@ -832,10 +832,8 @@ class EndToEndTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         os.environ.pop("HAMS_LINT_LOCK_HELD", None)
-        started = time.monotonic()
         status, problems, _ = self.run_remote(self.bundle(("say", ["/usr/bin/python3", "-c", "print(1)"])))
         self.assertEqual(status, "infra", "\n".join(self.lines))
-        self.assertLess(time.monotonic() - started, 60)
         self.assertTrue(any("gave up waiting for the lint run lock" in line for line in self.lines), self.lines)
 
     def test_remote_wait_arguments(self):

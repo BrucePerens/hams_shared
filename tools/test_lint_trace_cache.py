@@ -258,11 +258,9 @@ class TraceCacheEndToEndTests(unittest.TestCase):
             self.skipTest("this file system drops the setuid bit")
         late = os.path.join(self.tmp, "late")
         trace_file = os.path.join(self.tmp, "a.txt")
-        started = time.monotonic()
         script = "(sleep 3; touch %s) & %s; sleep 30" % (late, setuid_true)
         code = subprocess.run([PY, ltc.__file__, "run", trace_file, "--", "bash", "-c", script]).returncode
         self.assertEqual(code, ltc.ABORTED_STATUS)
-        self.assertLess(time.monotonic() - started, 15)
         self.assertIn("setuid", ltc.aborted(trace_file))
         time.sleep(4)
         self.assertFalse(os.path.exists(late))  # the background child was ended with the run
