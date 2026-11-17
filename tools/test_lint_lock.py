@@ -595,6 +595,30 @@ class BurstSlotTests(Base):
         self.addCleanup(lock.release)
 
 
+class MutationPinTests(Base):
+    """Cases a mutation run (2026-11-17) showed the other tests did not pin."""
+
+    def test_lock_decision_names_the_reason_for_each_outcome(self):
+        heavy = {"a": 9999.0}
+        self.assertEqual(lint_lock.lock_decision({"HAMS_LINT_NO_LOCK": "1"}, ["a"], heavy), (False, "HAMS_LINT_NO_LOCK=1"))
+        self.assertEqual(lint_lock.lock_decision({lint_lock.HELD_ENV: "123"}, ["a"], heavy),
+                         (False, "the lock is held by the parent run (pid 123)"))
+        self.assertEqual(lint_lock.lock_decision({}, [], heavy),
+                         (False, "no step left to run here (cached passes, or sent to other machines)"))
+        take, reason = lint_lock.lock_decision({"HAMS_LINT_CHEAP_SECONDS": "100"}, ["a"], {"a": 5.0})
+        self.assertEqual((take, reason), (False, "cheap run (known steps total at most 100 s)"))
+        self.assertEqual(lint_lock.lock_decision({}, ["a"], heavy), (True, "heavy run"))
+
+    def test_mem_available_is_none_when_the_line_is_missing_or_malformed(self):
+        path = os.path.join(self.cache, "meminfo2")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("MemTotal: 1000 kB\nMemFree: 5 kB\n")
+        self.assertIsNone(lint_lock.mem_available_gb(path))
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("MemAvailable: lots kB\n")
+        self.assertIsNone(lint_lock.mem_available_gb(path))
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
 
