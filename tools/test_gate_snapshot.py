@@ -189,6 +189,18 @@ class CreateTests(SnapshotTestBase):
         self.assertEqual(gs.verify_snapshot(trees["parent"], environ=self.env(manifest)), [])
         self.assertTrue(os.path.isfile(os.path.join(trees["open"], "daemons/cloudflared-ffi/libcloudflared.so")))
 
+    # Tests [@ANCHOR: gate_snapshot:create_trees]
+    def test_the_snapshot_worktrees_are_locked_so_a_prune_or_a_hygiene_remove_cannot_drop_their_git_entry(self):
+        # Round 134: the gate tree's .git file outlived its entry under hams_open/.git/worktrees, so `git ls-files` failed in it and
+        # hams_helpdesk's tracked-file scan failed the gate. A locked worktree is skipped by `git worktree prune` and refused by `remove`.
+        trees = self.create()["trees"]
+        for key in ("com", "open", "shared"):
+            owner = git(trees[key], "rev-parse", "--git-common-dir")
+            listing = subprocess.run(["git", "--git-dir", os.path.abspath(os.path.join(trees[key], owner)), "worktree", "list", "--porcelain"],
+                                     capture_output=True, text=True).stdout
+            block = [b for b in listing.split("\n\n") if "worktree " + trees[key] in b]
+            self.assertTrue(block and "locked" in block[0], (key, listing))
+
     # Tests [@ANCHOR: gate_snapshot:create_snapshot]
     def test_a_second_create_for_the_same_commits_reuses_the_trees_and_builds_nothing(self):
         self.create()

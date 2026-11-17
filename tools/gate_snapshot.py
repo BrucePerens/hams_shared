@@ -117,6 +117,10 @@ def gate_dir_name(com_commit, open_commit):
     return "gate_%s_%s" % (com_commit[:9], open_commit[:9])
 
 
+# Locked so `git worktree prune` and the hygiene/batch removers leave a snapshot tree alone while a round uses it (prune_snapshots removes it).
+LOCK_REASON = "gate snapshot"
+
+
 # [@ANCHOR: gate_snapshot:create_trees]
 def create_trees(workspace, parent, com_commit, open_commit, shared_commit):
     """Makes `<parent>/gate_*/{hams_com,hams_open,hams_open/hams_shared}` as detached git worktrees at the given commits
@@ -136,11 +140,11 @@ def create_trees(workspace, parent, com_commit, open_commit, shared_commit):
     for source, target, commit in ((com_main, com, com_commit), (open_main, open_, open_commit)):
         if os.path.exists(os.path.join(target, ".git")):
             continue
-        _git(source, "worktree", "add", "--detach", "-f", target, commit)
+        _git(source, "worktree", "add", "--detach", "--lock", "--reason", LOCK_REASON, "-f", target, commit)
     if not os.path.exists(os.path.join(shared, ".git")):
         if os.path.isdir(shared) and not os.listdir(shared):
             os.rmdir(shared)  # hams_open's checkout leaves the gitlink as an empty directory
-        _git(shared_main, "worktree", "add", "--detach", "-f", shared, shared_commit)
+        _git(shared_main, "worktree", "add", "--detach", "--lock", "--reason", LOCK_REASON, "-f", shared, shared_commit)
     link = os.path.join(com, "hams_shared")
     if os.path.realpath(link) != os.path.realpath(shared):
         raise SnapshotError("%s resolves to %s, not to %s" % (link, os.path.realpath(link), shared))
@@ -597,7 +601,7 @@ def prune_snapshots(parent, keep=1, out=print):
             if os.path.exists(os.path.join(path, ".git")):
                 owner = _git(path, "rev-parse", "--git-common-dir", check=False)
                 if owner:
-                    subprocess.run(["git", "--git-dir", os.path.abspath(os.path.join(path, owner)), "worktree", "remove", "--force", path],
+                    subprocess.run(["git", "--git-dir", os.path.abspath(os.path.join(path, owner)), "worktree", "remove", "--force", "--force", path],
                                    capture_output=True)
         shutil.rmtree(gate, ignore_errors=True)
         removed.append(gate)
