@@ -686,6 +686,19 @@ class AttributionTests(unittest.TestCase):
         self.assertEqual(calls[0], ["b1", "b2", "b3", "b4"])
         self.assertLessEqual(len(calls), 2 * 2 + 1)  # 2*log2(K)+1
 
+    def test_settle_twins_of_one_tip_are_one_branch_when_a_failure_cannot_be_attributed(self):
+        # Two callers with the same tip share one slot (`join`); a split must not run the one branch twice more.
+        member = self.members(1)[0]
+        twins, calls = [member, dict(member, pid=999)], []
+
+        def run_once(group):
+            calls.append(len(group))
+            return {"exit_code": 1, "failures": {"anchors": "no path here"}, "conflicted": []}
+
+        verdicts = bq.settle(twins, run_once, self.attribute_factory([member]))
+        self.assertEqual(calls, [1])
+        self.assertEqual(verdicts[member["tip"]]["status"], bq.FAILED)
+
     def test_settle_red_main_stops_at_the_budget(self):
         members, calls = self.members(8), []
         verdicts = bq.settle(members, self.run_once_factory(set(), red_main=True, calls=calls),
