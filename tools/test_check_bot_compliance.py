@@ -62,31 +62,31 @@ class CheckFcrdnsTests(unittest.TestCase):
     def test_matching_forward_and_reverse_dns_passes(self, mock_reverse, mock_forward):
         mock_reverse.return_value = ("host.example.com", [], ["203.0.113.5"])
         mock_forward.return_value = "203.0.113.5"
-        self.assertTrue(chk.check_fcrdns("203.0.113.5"))
+        self.assertIs(chk.check_fcrdns("203.0.113.5"), True)
 
     @patch("check_bot_compliance.socket.gethostbyname")
     @patch("check_bot_compliance.socket.gethostbyaddr")
     def test_forward_dns_resolving_to_a_different_ip_fails(self, mock_reverse, mock_forward):
         mock_reverse.return_value = ("host.example.com", [], ["203.0.113.5"])
         mock_forward.return_value = "198.51.100.9"
-        self.assertFalse(chk.check_fcrdns("203.0.113.5"))
+        self.assertIs(chk.check_fcrdns("203.0.113.5"), False)
 
     @patch("check_bot_compliance.socket.gethostbyname")
     @patch("check_bot_compliance.socket.gethostbyaddr")
     def test_forward_lookup_raising_gaierror_fails(self, mock_reverse, mock_forward):
         mock_reverse.return_value = ("host.example.com", [], ["203.0.113.5"])
         mock_forward.side_effect = socket.gaierror("no such host")
-        self.assertFalse(chk.check_fcrdns("203.0.113.5"))
+        self.assertIs(chk.check_fcrdns("203.0.113.5"), False)
 
     @patch("check_bot_compliance.socket.gethostbyaddr")
     def test_reverse_lookup_raising_herror_fails(self, mock_reverse):
         mock_reverse.side_effect = socket.herror("no PTR record")
-        self.assertFalse(chk.check_fcrdns("203.0.113.5"))
+        self.assertIs(chk.check_fcrdns("203.0.113.5"), False)
 
     @patch("check_bot_compliance.socket.gethostbyaddr")
     def test_reverse_lookup_raising_a_generic_oserror_fails(self, mock_reverse):
         mock_reverse.side_effect = OSError("dns server unreachable")
-        self.assertFalse(chk.check_fcrdns("203.0.113.5"))
+        self.assertIs(chk.check_fcrdns("203.0.113.5"), False)
 
 
 class MainTests(unittest.TestCase):
