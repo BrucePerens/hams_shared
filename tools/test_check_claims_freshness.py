@@ -255,6 +255,58 @@ class CheckClaimsFreshnessTests(unittest.TestCase):
 
 # Tests [@ANCHOR: COMM_claim_retirement]
 
+class NotComputableClaimTests(unittest.TestCase):
+    """`code_hash: not computable` is a declared tooling gap; it must not outlive the gap for an anchor that is now hashable."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        _write(os.path.join(self.tmp, "mod.py"), "def foo(x):\n    # [@ANCHOR: my_module:foo]\n    return x + 1\n")
+        _write(os.path.join(self.tmp, "claims", "foo.md"),
+               "---\nanchor: my_module:foo\ncode_hash: not computable -- tooling gap\n---\n\n1. Returns x + 1.\n")
+        _init_git_repo(self.tmp)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_a_hashable_anchor_with_a_not_computable_claim_is_a_problem(self):
+        problems, _retired = ccf.scan_claims(self.tmp, hashable_baseline=set())
+        self.assertEqual(len(problems), 1)
+        self.assertIn("now hashable", problems[0][1])
+
+    def test_a_grandfathered_claim_passes_and_the_baseline_names_it(self):
+        problems, _retired = ccf.scan_claims(self.tmp, hashable_baseline={os.path.join("claims", "foo.md")})
+        self.assertEqual(problems, [])
+        self.assertEqual(ccf.hashable_not_computable(self.tmp), [os.path.join("claims", "foo.md")])
+
+    def test_a_not_computable_claim_for_an_anchor_that_cannot_be_hashed_passes(self):
+        _write(os.path.join(self.tmp, "claims", "foo.md"),
+               "---\nanchor: some_crate:missing\ncode_hash: not computable -- no code\n---\n\n1. x.\n")
+        problems, _retired = ccf.scan_claims(self.tmp, hashable_baseline=set())
+        self.assertEqual(problems, [])
+
+
+class OddInputTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_git_output_that_is_not_utf8_does_not_crash_the_history_check(self):
+        with open(os.path.join(self.tmp, "old.py"), "wb") as handle:
+            handle.write(b"# caf\xe9\ndef foo():\n    pass\n")
+        _init_git_repo(self.tmp)
+        self.assertIn("def foo", ccf._git_out(self.tmp, "show", "HEAD:old.py"))
+
+    def test_a_damaged_verdict_cache_is_ignored_not_a_crash(self):
+        for text in ("[]", '{"k": 5}', '{"k": ["maybe", "x"]}', "not json"):
+            _write(os.path.join(self.tmp, "cache", "history_verdicts.json"), text)
+            context = ccf.FreshnessContext(cache_dir=os.path.join(self.tmp, "cache"))
+            self.assertEqual(context._load(), {}, text)
+        _write(os.path.join(self.tmp, "cache", "history_verdicts.json"), '{"k": ["fresh", "ok"]}')
+        self.assertEqual(ccf.FreshnessContext(cache_dir=os.path.join(self.tmp, "cache"))._load(), {"k": ["fresh", "ok"]})
+
+
 class ClaimRetirementTests(unittest.TestCase):
     """A claim whose anchored function was deliberately deleted or renamed is kept on purpose --
     it holds the original finding -- but its anchor can no longer resolve. Before the retirement
