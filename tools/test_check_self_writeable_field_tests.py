@@ -179,6 +179,24 @@ class FindTestsAnchorTests(unittest.TestCase):
         self.assertIsNotNone(node)
         self.assertEqual(node.name, "test_self_write_works")
 
+    def test_a_tests_comment_wins_over_an_earlier_bare_mention_in_another_file(self):
+        _write(
+            os.path.join(self.module_dir, "tests", "test_a_helper.py"),
+            "class H(TransactionCase):\n"
+            "    def helper(self):\n"
+            "        # see [@ANCHOR: mod_a:self_write]\n"
+            "        pass\n",
+        )
+        _write(
+            os.path.join(self.module_dir, "tests", "test_z_real.py"),
+            "class T(TransactionCase):\n"
+            "    def test_self_write_works(self):\n"
+            "        # Tests [@ANCHOR: mod_a:self_write]\n"
+            "        pass\n",
+        )
+        _path, node, _content = chk._find_tests_anchor(self.module_dir, "mod_a:self_write")
+        self.assertEqual(node.name, "test_self_write_works")
+
     def test_falls_back_to_a_bare_anchor_form(self):
         # The "elaborate form" this codebase also uses: a bare
         # [@ANCHOR: X] on the test side, not a "# Tests [@ANCHOR: X]" line.
@@ -256,6 +274,34 @@ class VerifyWriteProofShapeTests(unittest.TestCase):
             "    self.assertEqual(user.callsign, 'K6BP')\n"
         )
         self.assertEqual(chk._verify_write_proof_shape(node), [])
+
+    def test_a_write_that_must_raise_does_not_prove_the_self_write_works(self):
+        node = _func_node(
+            "def test_self_write_works(self):\n"
+            "    user = self.env['res.users'].create({'name': 'x', 'login': 'x'})\n"
+            "    with self.assertRaises(AccessError):\n"
+            "        user.with_user(user).write({'callsign': 'K6BP'})\n"
+            "    self.assertEqual(user.callsign, False)\n"
+        )
+        self.assertTrue(any("assertRaises" in e for e in chk._verify_write_proof_shape(node)))
+
+    def test_a_plain_assert_statement_counts_as_the_assertion(self):
+        node = _func_node(
+            "def test_self_write_works(self):\n"
+            "    user = self.env['res.users'].create({'name': 'x', 'login': 'x'})\n"
+            "    user.with_user(user).write({'callsign': 'K6BP'})\n"
+            "    assert user.callsign == 'K6BP'\n"
+        )
+        self.assertEqual(chk._verify_write_proof_shape(node), [])
+
+    def test_a_skipped_or_non_test_function_proves_nothing(self):
+        body = ("    user = self.env['res.users'].create({'name': 'x', 'login': 'x'})\n"
+                "    user.with_user(user).write({'callsign': 'K6BP'})\n"
+                "    self.assertEqual(user.callsign, 'K6BP')\n")
+        for head in ("def helper_self_write(self):\n", "@unittest.skip('later')\ndef test_self_write_works(self):\n",
+                     "@skipIf(True, 'x')\ndef test_self_write_works(self):\n"):
+            node = _func_node(head + body)
+            self.assertTrue(any("never runs" in e for e in chk._verify_write_proof_shape(node)), head)
 
     def test_missing_write_call_is_flagged(self):
         node = _func_node(

@@ -70,6 +70,18 @@ WRITE_ASSERTIONS = {
     "assertIn",
     "assertNotEqual",
 }
+EXPECT_RAISE = {"assertRaises", "assertRaisesRegex"}
+
+
+def _inside_expected_raise(func_node):
+    """ids of every node under a `with self.assertRaises(...)`: a write there is expected to FAIL, so it proves the opposite."""
+    ids = set()
+    for node in ast.walk(func_node):
+        if isinstance(node, ast.With) and any(
+                isinstance(i.context_expr, ast.Call) and getattr(i.context_expr.func, "attr", "") in EXPECT_RAISE
+                for i in node.items):
+            ids.update(id(n) for n in ast.walk(node))
+    return ids
 
 
 def _owning_module(path, repo_root):
@@ -127,6 +139,7 @@ def _find_tests_anchor(module_dir, anchor):
     tests_dir = os.path.join(module_dir, "tests")
     if not os.path.isdir(tests_dir):
         return None, None, None
+    candidates = []
     for root, _dirs, files in tree_walk(tests_dir, ".py", untracked=True):
         for f in files:
             if not f.endswith(".py"):
@@ -137,36 +150,41 @@ def _find_tests_anchor(module_dir, anchor):
                 print(f"❌ ERROR: {problem}")
                 continue
             lines = content.splitlines()
-            anchor_line = None
+            # A `# Tests` line is the stated test; a bare mention (docstring, helper, elaborate form) only a fallback.
             for i, line in enumerate(lines, 1):
-                m = ANCHOR_TESTS_RE.search(line) or ANCHOR_BARE_RE.search(line)
+                m = ANCHOR_TESTS_RE.search(line)
                 if m and m.group(1) == anchor:
-                    anchor_line = i
+                    candidates.append((0, path, i, content))
                     break
-            if anchor_line is None:
-                continue
-            try:
-                tree = ast.parse(content, filename=path)
-            except SyntaxError:
-                continue
-            # Method-level anchor (most specific) wins if present.
-            for node in ast.walk(tree):
-                if isinstance(node, ast.FunctionDef):
-                    start = getattr(node, "lineno", 0)
-                    end = getattr(node, "end_lineno", float("inf"))
-                    if start <= anchor_line <= end:
-                        return path, node, content
-            # Fall back to a class-level anchor (e.g. right after the
-            # `class Foo(...):` line, not inside any one method) -- the
-            # write-proof shape then needs to be found somewhere in the
-            # class as a whole, since ast.walk() on the ClassDef covers
-            # every method's body.
-            for node in ast.walk(tree):
-                if isinstance(node, ast.ClassDef):
-                    start = getattr(node, "lineno", 0)
-                    end = getattr(node, "end_lineno", float("inf"))
-                    if start <= anchor_line <= end:
-                        return path, node, content
+            else:
+                for i, line in enumerate(lines, 1):
+                    m = ANCHOR_BARE_RE.search(line)
+                    if m and m.group(1) == anchor:
+                        candidates.append((1, path, i, content))
+                        break
+    for _rank, path, anchor_line, content in sorted(candidates, key=lambda c: c[0]):
+        try:
+            tree = ast.parse(content, filename=path)
+        except SyntaxError:
+            continue
+        # Method-level anchor (most specific) wins if present.
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef):
+                start = getattr(node, "lineno", 0)
+                end = getattr(node, "end_lineno", float("inf"))
+                if start <= anchor_line <= end:
+                    return path, node, content
+        # Fall back to a class-level anchor (e.g. right after the
+        # `class Foo(...):` line, not inside any one method) -- the
+        # write-proof shape then needs to be found somewhere in the
+        # class as a whole, since ast.walk() on the ClassDef covers
+        # every method's body.
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef):
+                start = getattr(node, "lineno", 0)
+                end = getattr(node, "end_lineno", float("inf"))
+                if start <= anchor_line <= end:
+                    return path, node, content
     return None, None, None
 
 
@@ -188,6 +206,14 @@ def _verify_write_proof_shape(func_node):
     """Returns a list of missing-shape error strings (empty if the shape
     is satisfied)."""
     found_with_user = False
+    errors = []
+    if isinstance(func_node, ast.FunctionDef):
+        skipped = any("skip" in ast.unparse(d).lower() for d in func_node.decorator_list)
+        if skipped or not func_node.name.startswith("test"):
+            errors.append("never runs: the anchored function is %s, so it proves nothing" % (
+                "skipped" if skipped else "not a test_* method"))
+    expect_raise = _inside_expected_raise(func_node)
+    raising_writes = []
     write_lines = []
     proven_write_lines = []
     assertion_lines = []
@@ -213,6 +239,9 @@ def _verify_write_proof_shape(func_node):
             attr = getattr(node.func, "attr", "")
             if attr == "write":
                 lineno = getattr(node, "lineno", 0)
+                if id(node) in expect_raise:
+                    raising_writes.append(lineno)
+                    continue
                 write_lines.append(lineno)
                 receiver = getattr(node.func, "value", None)
                 # A test can call BOTH .with_user(...)
@@ -229,6 +258,8 @@ def _verify_write_proof_shape(func_node):
                 found_with_user = True
             if attr in WRITE_ASSERTIONS:
                 assertion_lines.append(getattr(node, "lineno", 0))
+        elif isinstance(node, ast.Assert):
+            assertion_lines.append(node.lineno)
 
     found_write = bool(write_lines)
     write_chained_to_with_user = bool(proven_write_lines)
@@ -236,8 +267,12 @@ def _verify_write_proof_shape(func_node):
         a >= min(proven_write_lines) for a in assertion_lines
     )
 
-    errors = []
-    if not found_write:
+    if not found_write and raising_writes:
+        errors.append(
+            "its only .write(...) is inside `with self.assertRaises(...)`: a write that must fail does not prove the "
+            "self-write works"
+        )
+    elif not found_write:
         errors.append("does not call .write(...) at all")
     if not found_with_user:
         errors.append(
