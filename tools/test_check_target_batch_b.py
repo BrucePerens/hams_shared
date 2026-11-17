@@ -23,6 +23,7 @@ CHECKERS = (
     "check_window_fetch_reassignment.py",
     "check_owl_templates.py",
     "check_scss_math_functions.py",
+    "check_view_xpath_conflicts.py",
     "check_xml_attribute_position_comment.py",
     "check_xml_comment_double_hyphen.py",
     "check_external_library_locality.py",

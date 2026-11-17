@@ -264,6 +264,7 @@ STEP_META = {
     "check_xml_attribute_position_comment": {"suffixes": _XML},
     "check_owl_templates": {"suffixes": frozenset({".xml", ".js"})},
     "check_scss_math_functions": {"suffixes": frozenset({".scss"})},
+    "check_view_xpath_conflicts": {"suffixes": _XML},
     "check_window_fetch_reassignment": {"suffixes": _JS},
     "check_js_test_hook_gating": {"suffixes": _JS},
     "check_minified_js_nested_templates": {"suffixes": frozenset({".js", ".py"})},
@@ -2816,6 +2817,18 @@ def main():
         [
         python_exec,
         os.path.join(dir_path, "tools", "check_scss_math_functions.py"),
+        *scss_roots,
+    ],
+    )
+
+    # 57. check_view_xpath_conflicts -- two inheriting views of one parent editing the same xpath
+    # (round 138: both removed `//button[@onclick]`, the second found no target and the deploy failed).
+    # Scans both repos together: the views conflict across modules and repos.
+    _add(
+        "check_view_xpath_conflicts",
+        [
+        python_exec,
+        os.path.join(dir_path, "tools", "check_view_xpath_conflicts.py"),
         *scss_roots,
     ],
     )
