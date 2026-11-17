@@ -239,7 +239,7 @@ def main():
     # The Chrome profile is ~2 MB per run and was never removed, so every pre-commit/CI run
     # leaked a directory into /tmp. Always remove it, on success, failure and early return.
     # Short prefix: Chrome puts `com.google.Chrome.x/SingletonSocket` inside it and the whole path must stay under the 107 bytes of
-    # a unix socket address (a lint slot scratch dir under /home/bruce/.cache was already at 108 with the long name).
+    # a unix socket address (a lint slot scratch dir under the user cache directory was already at 108 with the long name).
     user_data_dir = tempfile.mkdtemp(prefix="owl_")
     try:
         return _check_with_chrome(args, user_data_dir, xml_files, xml_file_contents)
