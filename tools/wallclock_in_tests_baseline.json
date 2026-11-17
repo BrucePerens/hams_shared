@@ -1,11 +1,4 @@
 {
- "hams_com/daemons/hams_local_relay/src/audio_device_guard.rs": 2,
- "hams_com/daemons/hams_local_relay/src/bounded_command.rs": 2,
- "hams_com/daemons/hams_local_relay/src/ice_link/tests.rs": 3,
- "hams_com/daemons/hams_local_relay/src/shared_receiver/radiod_backend.rs": 2,
- "hams_com/daemons/hams_local_relay/src/webrtc.rs": 1,
- "hams_com/daemons/hams_local_relay/src/winkeyer_daemon.rs": 1,
- "hams_com/daemons/hams_local_relay/tools/test_winkeyer_capture.py": 1,
  "hams_com/daemons/hams_simulated_band/src/recording.rs": 1,
  "hams_com/daemons/hams_simulated_bots/tests/test_ai_service.py": 3,
  "hams_com/daemons/hams_simulated_bots/tests/test_data_modes_bot.py": 1,
