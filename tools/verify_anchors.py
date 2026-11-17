@@ -1321,7 +1321,29 @@ def _report_documentation_gaps(
 
 # Statements that do nothing a test could be judged by: `pass`, a docstring or bare literal (`...` included), and an
 # assertion that cannot fail.
-_ALWAYS_TRUE_ASSERTIONS = {"assertTrue": True, "assertFalse": False}
+
+
+_UNCONDITIONAL_SKIPS = {"unittest.skip", "skip", "pytest.mark.skip", "mark.skip"}
+
+
+def _is_constant_assertion(call):
+    """An assertion call that cannot fail: a constant that is already what it asserts, or the same plain expression on both
+    sides of a comparison (`assertEqual(x, x)`)."""
+    name = call.func.attr
+    args = call.args
+    if not args:
+        return False
+    first = args[0]
+    if name == "assertTrue":
+        return isinstance(first, ast.Constant) and bool(first.value)
+    if name == "assertFalse":
+        return isinstance(first, ast.Constant) and not first.value
+    if name == "assertIsNone":
+        return isinstance(first, ast.Constant) and first.value is None
+    if name in ("assertEqual", "assertIs", "assertCountEqual", "assertListEqual", "assertDictEqual") and len(args) >= 2:
+        plain = not any(isinstance(n, (ast.Call, ast.Await, ast.Subscript)) for n in ast.walk(first))
+        return plain and ast.dump(first) == ast.dump(args[1])
+    return False
 
 
 def _is_no_op_statement(stmt):
@@ -1329,20 +1351,21 @@ def _is_no_op_statement(stmt):
         return True
     if isinstance(stmt, ast.Assert):
         return isinstance(stmt.test, ast.Constant) and bool(stmt.test.value) is True
+    if isinstance(stmt, ast.Raise):  # `raise unittest.SkipTest(...)`: the test never gets to fail
+        return stmt.exc is not None and "SkipTest" in ast.unparse(stmt.exc)
     if isinstance(stmt, ast.Expr):
         value = stmt.value
         if isinstance(value, ast.Constant):
             return True
-        if (
-            isinstance(value, ast.Call)
-            and isinstance(value.func, ast.Attribute)
-            and value.func.attr in _ALWAYS_TRUE_ASSERTIONS
-            and value.args
-            and isinstance(value.args[0], ast.Constant)
-            and value.args[0].value is _ALWAYS_TRUE_ASSERTIONS[value.func.attr]
-        ):
-            return True
+        if isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute):
+            if value.func.attr == "skipTest" or ast.unparse(value.func) == "pytest.skip":
+                return True
+            return _is_constant_assertion(value)
     return False
+
+
+def _has_unconditional_skip(node):
+    return any(ast.unparse(d.func if isinstance(d, ast.Call) else d) in _UNCONDITIONAL_SKIPS for d in node.decorator_list)
 
 
 # [@ANCHOR: tools:verify_anchors_dummy_tests]
@@ -1360,7 +1383,7 @@ def find_dummy_test_functions(source, filename="<string>"):
     found = []
     for node in _statement_nodes(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test"):
-            if all(_is_no_op_statement(stmt) for stmt in node.body):
+            if _has_unconditional_skip(node) or all(_is_no_op_statement(stmt) for stmt in node.body):
                 found.append((node.name, node.lineno))
     return found
 

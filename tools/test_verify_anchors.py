@@ -816,6 +816,26 @@ class DummyTestBodyTests(unittest.TestCase):
         self.assertEqual(self._names("def test_c(self):\n    self.assertFalse(False)\n"), ["test_c"])
         self.assertEqual(self._names("def test_d(self):\n    assert True\n"), ["test_d"])
 
+    def test_other_assertions_that_cannot_fail_are_dummy_tests(self):
+        for body in ("self.assertTrue(1)", "self.assertTrue('yes')", "self.assertFalse(0)", "self.assertFalse(None)",
+                     "self.assertIsNone(None)", "self.assertEqual(x, x)", "self.assertEqual(a.b, a.b)", "self.assertIs(x, x)",
+                     "assert 1", "assert 'text'"):
+            self.assertEqual(self._names("def test_a(self):\n    %s\n" % body), ["test_a"], body)
+
+    def test_a_body_that_only_skips_and_an_unconditional_skip_decorator_are_dummy_tests(self):
+        for body in ("self.skipTest('later')", "pytest.skip('later')", "raise unittest.SkipTest('later')"):
+            self.assertEqual(self._names("def test_a(self):\n    %s\n" % body), ["test_a"], body)
+        for deco in ("@unittest.skip('later')", "@skip('later')", "@pytest.mark.skip(reason='later')"):
+            self.assertEqual(self._names("%s\ndef test_a(self):\n    self.assertEqual(f(), 1)\n" % deco), ["test_a"], deco)
+
+    def test_conditional_skips_and_real_comparisons_are_not_dummy_tests(self):
+        for source in ("@unittest.skipIf(NO_X, 'no x')\ndef test_a(self):\n    self.assertEqual(f(), 1)\n",
+                       "@unittest.skipUnless(HAVE_X, 'x')\ndef test_a(self):\n    self.assertEqual(f(), 1)\n",
+                       "def test_a(self):\n    self.assertEqual(f(), f())\n",
+                       "def test_a(self):\n    self.assertTrue(x)\n",
+                       "def test_a(self):\n    if NO_X:\n        self.skipTest('x')\n    self.assertEqual(f(), 1)\n"):
+            self.assertEqual(self._names(source), [], source)
+
     def test_a_test_that_exercises_something_is_not_a_dummy_test(self):
         self.assertEqual(self._names("def test_a(self):\n    self.assertEqual(f(), 1)\n"), [])
         self.assertEqual(self._names("def test_b(self):\n    x = f()\n"), [])
