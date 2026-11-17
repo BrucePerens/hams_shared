@@ -108,12 +108,13 @@ class RealRepoBase(unittest.TestCase):
 
     @staticmethod
     def write_conf(path, repo, pgdata, cluster):
-        text = f"[global]\nrepo1-path={repo}\nrepo1-retention-full=3\nlog-level-console=warn\nlog-path={os.path.dirname(path)}/pgblog\nspool-path={os.path.dirname(path)}/spool\n"
+        text = f"[global]\nrepo1-path={repo}\nrepo1-retention-full=3\nlog-level-console=warn\nlog-path={os.path.dirname(path)}/pgblog\nspool-path={os.path.dirname(path)}/spool\nlock-path={os.path.dirname(path)}/lock\n"
         text += f"\n[selftest]\npg1-path={pgdata}\n"
         if cluster:
             text += f"pg1-port={cluster.port}\npg1-socket-path={cluster.sock}\n"
         os.makedirs(os.path.dirname(path) + "/pgblog", exist_ok=True)
         os.makedirs(os.path.dirname(path) + "/spool", exist_ok=True)
+        os.makedirs(os.path.dirname(path) + "/lock", exist_ok=True)
         with open(path, "w") as f:
             f.write(text)
 
