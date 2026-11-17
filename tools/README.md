@@ -3712,7 +3712,7 @@ Purpose: the `wait` subcommand: exactly one of `--pid [--start-time]`, `--job`, 
 
 ### `[@ANCHOR: agent_procs:default_mem_max]` `default_mem_max(command)`
 
-Purpose: the memory cap `run` uses when `--mem-max` is not given. Argument: `command`, the argv list (or None). Returns `CARGO_MEM_MAX` (`24G`) when any word's basename is `cargo` or `rustc`, and `LINT_MEM_MAX` (`24G`) for `run_linters.py` (a full lint run hit 6G and was SIGTERMed, exit 143) (so `nice -n 10 env X=1 cargo test` and `/home/u/.cargo/bin/cargo` count), else `DEFAULT_MEM_MAX` (`6G`, Odoo tests and everything else). Pure; no I/O. Test: `test_agent_procs.py`.
+Purpose: the memory cap `run` uses when `--mem-max` is not given. Argument: `command`, the argv list (or None). Returns `CARGO_MEM_MAX` (`24G`) when any word's basename is `cargo` or `rustc`, and `LINT_MEM_MAX` (`24G`) for `run_linters.py` (a full lint run hit 6G and was SIGTERMed, exit 143) (so `nice -n 10 env X=1 cargo test` and `/opt/u/.cargo/bin/cargo` count), else `DEFAULT_MEM_MAX` (`6G`, Odoo tests and everything else). Pure; no I/O. Test: `test_agent_procs.py`.
 
 ### `[@ANCHOR: agent_procs:default_timeout]` `default_timeout(command)`
 

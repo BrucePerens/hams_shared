@@ -1171,7 +1171,7 @@ class LimitTests(ProcTestCase):
         self.assertEqual(ap.default_mem_max(["python3", "test.py"]), "6G")
         self.assertEqual(ap.default_mem_max(None), "6G")
         self.assertEqual(ap.default_mem_max(["nice", "-n", "10", "env", "A=1", "cargo", "test"]), "24G")
-        self.assertEqual(ap.default_mem_max(["/home/u/.cargo/bin/cargo", "build"]), "24G")
+        self.assertEqual(ap.default_mem_max(["/opt/u/.cargo/bin/cargo", "build"]), "24G")
         self.assertEqual(ap.default_mem_max(["rustc", "x.rs"]), "24G")
         self.assertEqual(ap.default_mem_max(["echo", "cargo-deny"]), "6G")
         cli("run", "cg", "--", "cargo", "--version", env=self.env)
