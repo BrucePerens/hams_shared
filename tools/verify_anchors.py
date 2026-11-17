@@ -1649,7 +1649,27 @@ def main():
         loaded = [b for b in (load_baseline(path) for path in baseline_paths) if b is not None]
         _BASELINE = set().union(*loaded) if loaded else None
     _CURRENT_FINDINGS.clear()
-    target_dirs, sibling_warning = _add_sibling_repo_target(enclosing_repo_dir, target_dirs)
+    # This script lives in whichever repo hosts hams_shared (hams_open), which is not the repo being
+    # scanned when an agent worktree of hams_com runs it: the sibling is looked up from the scanned
+    # checkout itself, so a hams_com-only scan finds hams_open (a missing one used to give ~220
+    # false "missing from operational source code" failures).
+    sibling_base = enclosing_repo_dir
+    scanning_repo_root = False
+    for scanned in primary_dirs:
+        if repo_identity(scanned) and os.path.exists(os.path.join(scanned, ".git")):
+            sibling_base = scanned
+            scanning_repo_root = True
+            break
+    target_dirs, sibling_warning = _add_sibling_repo_target(sibling_base, target_dirs)
+    scanned_identities = {repo_identity(d) for d in target_dirs}
+    if scanning_repo_root and len(scanned_identities & set(_REAL_SIBLING_REPO_NAMES)) == 1:
+        missing = [n for n in _REAL_SIBLING_REPO_NAMES if n not in scanned_identities]
+        print(
+            f"[!] verify_anchors: scanning {sibling_base} but its sibling repo {missing[0]} was not "
+            f"found (looked for ${missing[0].upper()}_TREE and ../{missing[0]}). Anchors would be "
+            "reported missing falsely. Pass it explicitly: verify_anchors.py . ../" + missing[0]
+        )
+        sys.exit(2)
     if sibling_warning:
         print(
             "\n================================================================================"
