@@ -57,6 +57,36 @@ import check_target
 from tree_files import tree_walk
 
 
+# Files whose /home/ lines are legitimate content, keyed by repo-relative path (a leading "hams_shared/" is
+# dropped so the key is the same from hams_shared, hams_open and hams_com) -> (exact number of lines, why).
+# The count must match exactly: a new /home/ line in an allowlisted file is a violation (the baseline cannot
+# grow silently), and a count that went down is reported as a stale entry to be tightened.
+ALLOWED_HOME_PATHS = {
+    "daemons/hams_local_relay/src/crash_scrub.rs": (4, "doc comments naming the /home/<user> shapes the crash scrubber strips"),
+    "daemons/hams_local_relay/src/crash_scrub_tests.rs": (10, "test inputs: fake home paths the scrubber must strip"),
+    "daemons/hams_local_relay/src/crash_report_tests.rs": (4, "test inputs: fake backtrace paths the scrubber must strip"),
+    "daemons/hams_local_relay/src/data_dir.rs": (2, "unit-test fixture: a fake HOME for the data-dir resolver"),
+    "daemons/hams_local_relay/src/tool_install.rs": (1, "doc comment quoting a hostile tar entry path the installer must reject"),
+    "daemons/hams_local_relay/src/updater.rs": (1, "unit-test input: a path the updater must not treat as its own binary"),
+    "daemons/hams_simulated_bots/jetson_ai_server/hams-llama-server.service": (1, "systemd unit for the Jetson host, whose install location is /home/ai; a unit file cannot expand a home directory"),
+    "daemons/hams_simulated_bots/jetson_ai_server/hams-simulated-bots.service": (2, "systemd unit for the Jetson host, whose install location is /home/ai; a unit file cannot expand a home directory"),
+    "daemons/hams_simulated_bots/jetson_ai_server/hams-whisper-server.service": (1, "systemd unit for the Jetson host, whose install location is /home/ai; a unit file cannot expand a home directory"),
+    "devbox_tools/pacificon_demo_kit/host/hams-demo-bots.service": (1, "systemd unit for the demo host's dedicated hams_bots account (venv in its home)"),
+    "devbox_tools/pacificon_demo_kit/host/hams-demo-observer.service": (1, "systemd unit for the demo host's dedicated hams_bots account (venv in its home)"),
+    ".github/workflows/build-relay.yml": (10, "CI runner host paths (/home/github-runner/ci-cache bind mount, /github/home container home) and comments explaining them"),
+    ".github/workflows/build-server-daemons.yml": (1, "comment naming the runner's saved PATH entry"),
+    "tools/hams_lint/rules/checks.toml": (6, "lint-rule fixtures and the literal the rule itself searches for"),
+    "daemons/radioctl/crates/radioctld/src/rigs.rs": (3, "unit-test fixture: a fake HOME for firmware-path resolution"),
+    "daemons/radioctl/crates/radioctl-protocols/src/perseus.rs": (3, "unit-test fixture: a fake HOME for firmware-path resolution"),
+    "daemons/ham_digital_modes/examples/ratet27_dump_frames_for_mbelib.rs": (1, "doc comment naming where the developer built the reference mbelib decoder this example's output is compared with"),
+}
+
+
+def _allow_key(rel):
+    rel = rel.replace(os.sep, "/")
+    return rel[len("hams_shared/"):] if rel.startswith("hams_shared/") else rel
+
+
 # [@ANCHOR: tools:check_absolute_paths]
 def check_absolute_paths(repo_dir, stats=None):
     violations = []
@@ -114,6 +144,12 @@ def check_absolute_paths(repo_dir, stats=None):
         ".sh",
         ".html",
         ".css",
+        ".scss",
+        ".rs",
+        ".toml",
+        ".yml",
+        ".yaml",
+        ".service",
     }
 
     def not_in_ignored_rel_dir(rel):
@@ -165,14 +201,23 @@ def check_absolute_paths(repo_dir, stats=None):
             if stats is not None:
                 stats["files"] = stats.get("files", 0) + 1
             try:
+                rel = os.path.relpath(file_path, repo_dir)
+                hits = []
                 with open(file_path, "r", encoding="utf-8") as f:
                     for i, line in enumerate(f, 1):
                         if "/home/" in line:
-                            # Skip if it is a file URI which may be in SKILL.md examples or similar
-                            # Actually, we should even prohibit the h-o-m-e path because it's non-portable
-                            violations.append(
-                                f"{os.path.relpath(file_path, repo_dir)}:{i} Contains hardcoded home path"
-                            )
+                            hits.append(i)
+                allowed = ALLOWED_HOME_PATHS.get(_allow_key(rel))
+                if allowed is None:
+                    violations.extend(f"{rel}:{i} Contains hardcoded home path" for i in hits)
+                elif len(hits) > allowed[0]:
+                    violations.extend(
+                        f"{rel}:{i} Contains hardcoded home path (more than the {allowed[0]} allowlisted lines)" for i in hits
+                    )
+                elif len(hits) < allowed[0]:
+                    violations.append(
+                        f"{rel}: allowlist expects {allowed[0]} /home/ lines but finds {len(hits)}; lower the count in ALLOWED_HOME_PATHS"
+                    )
             except (UnicodeDecodeError, OSError) as e:
                 # Skip binary files or files with weird encodings (UnicodeDecodeError), AND
                 # any other real, realistic filesystem condition open() can raise for a name
