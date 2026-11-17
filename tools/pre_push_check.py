@@ -57,7 +57,7 @@ def deadline_runner(run, deadline, clock=time.monotonic):
         left = deadline - clock()
         if left <= 0:
             raise OutOfTime()
-        result = run(argv, cwd=cwd, timeout=left)
+        result = run(argv, cwd=cwd, timeout=left, wall=left)  # wall: a busy check never idles, and the 3-minute budget must still end it
         if result.returncode == 124:
             raise OutOfTime()
         return result

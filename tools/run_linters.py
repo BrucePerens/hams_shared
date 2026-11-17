@@ -2402,6 +2402,8 @@ def main():
                 dir_path,
                 "--baseline",
                 os.path.join(dir_path, "tools", "doc_references_baseline_hams_shared.json"),
+                # the layout's repositories, not whatever sits beside the tree (a baseline canary tree has nothing beside it)
+                "--sibling", repo_root, *(["--sibling", sibling_dir] if sibling_dir else []),
             ],
         )
 

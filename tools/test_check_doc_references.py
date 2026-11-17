@@ -132,6 +132,16 @@ class SiblingRootsTests(unittest.TestCase):
         roots = cdr.sibling_roots(os.path.join(base, "job", "hams_com"))
         self.assertEqual([cdr.repo_name(r) for r in roots], ["hams_com", "hams_open", "hams_shared"])
 
+    def test_explicit_siblings_are_used_when_nothing_sits_beside_the_tree(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        base = os.path.realpath(tmp.name)
+        shared, opened, com = (os.path.join(base, name) for name in ("canary/hams_shared", "layout/hams_open", "layout/hams_com"))
+        for path in (shared, opened, com):
+            os.makedirs(path)
+        self.assertEqual(cdr.sibling_roots(shared), [shared])
+        self.assertEqual(cdr.sibling_roots(shared, [opened, com, shared]), [shared, opened, com])
+
 
 # Tests [@ANCHOR: check_doc_references:check_doc_references_knowledge_class] (ADR numbers, units, identifiers, words, tracked paths and tails are all read through it)
 class AdrAnchorUnitConfigFunctionTests(unittest.TestCase):

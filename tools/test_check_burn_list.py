@@ -6728,3 +6728,17 @@ def test_test_rules_judge_repo_relative_path_not_checkout_path(tmp_path):
 # Tests [@ANCHOR: check_burn_list:check_burn_list_taint_visitor_class]
 # Tests [@ANCHOR: check_burn_list:check_burn_list_odoo_htmlparser_class]
 # Tests [@ANCHOR: check_burn_list:check_burn_list_xmlnode_class]
+
+
+def test_xml_existing_entities_are_not_double_escaped():
+    root = parse_odoo_xml('<a t="x &amp; y &#38; &lt;">fish &amp; chips &#169; &nbsp; a & b</a>')
+    node = next(n for n in root.walk() if n.tag == "a")
+    assert node.attrs["t"] == "x & y & <"
+    assert node.text == "fish & chips © &nbsp; a & b"
+
+
+def test_deeply_nested_xml_and_html_do_not_crash():
+    depth = 5000
+    xml = "<d>" * depth + "</d>" * depth
+    assert sum(1 for _ in parse_odoo_xml(xml).walk()) >= depth
+    assert sum(1 for _ in parse_odoo_html(xml).walk()) >= depth

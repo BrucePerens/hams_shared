@@ -12,7 +12,7 @@ import sys
 import check_target
 from tree_files import tree_files
 
-_HEREDOC_OPEN = re.compile(r"<<-?\s*(?:'([^']+)'|\"([^\"]+)\"|\\?([A-Za-z_][A-Za-z0-9_]*))")
+_HEREDOC_OPEN = re.compile(r"(?<!<)<<(?!<)-?\s*(?:'([^']+)'|\"([^\"]+)\"|\\?([A-Za-z_][A-Za-z0-9_]*))")
 
 
 def check_shebang(repo_dir, stats=None):
@@ -74,7 +74,7 @@ def check_shebang(repo_dir, stats=None):
                         continue
                     if ext != ".py" and not line.lstrip().startswith("#"):
                         opener = _HEREDOC_OPEN.search(line)
-                        if opener:
+                        if opener and "((" not in line[:opener.start()]:  # `$((1<<n))` is a shift
                             heredoc_end = next(g for g in opener.groups() if g)
                             continue
                     if line.startswith("#!") and i != 1:

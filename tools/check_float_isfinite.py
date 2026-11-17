@@ -68,6 +68,9 @@ IGNORE_DIR_NAMES = {
 
 _IGNORE_COMMENT = "float-isfinite-ignore:"
 
+# `except*` (ast.TryStar, Python 3.11+) guards a parse exactly like a plain try.
+_TRY_TYPES = tuple(t for t in (ast.Try, getattr(ast, "TryStar", None)) if t)
+
 _VALUEERROR_CATCHING_NAMES = {"ValueError", "Exception", "BaseException"}
 
 
@@ -145,13 +148,12 @@ def check_file(path):
             continue
 
         enclosing_try = None
-        cur = parent_of.get(node)
+        child, cur = node, parent_of.get(node)
         while cur is not None:
-            if isinstance(cur, ast.Try):
-                if any(node is d or node in ast.walk(d) for d in cur.body):
-                    enclosing_try = cur
-                    break
-            cur = parent_of.get(cur)
+            if isinstance(cur, _TRY_TYPES) and any(child is d for d in cur.body):
+                enclosing_try = cur
+                break
+            child, cur = cur, parent_of.get(cur)
 
         if enclosing_try is None:
             continue  # a bare float() with no try/except is a different, out-of-scope shape

@@ -67,6 +67,68 @@ class CheckFileTests(unittest.TestCase):
         self.assertEqual(len(findings), 1)
         self.assertIn("st", findings[0][1])
 
+    def test_a_guard_bound_across_several_lines_is_flagged(self):
+        """rustfmt breaks a long binding over lines (`let st = self\n.state\n.lock()\n.await;`): that is still a guard."""
+        path = _write_rs(
+            self.tmp,
+            """
+            async fn f() {
+                let st = self
+                    .state
+                    .lock()
+                    .await;
+                client.post().send().await;
+            }
+            """,
+        )
+        findings = chk.check_file(path)
+        self.assertEqual([n for n, _ in findings], [7])
+
+    def test_a_brace_inside_a_string_or_char_literal_or_comment_does_not_move_the_scope(self):
+        path = _write_rs(
+            self.tmp,
+            """
+            async fn f() {
+                let st = state.read().await;
+                let close = b'}'; // a stray } in a comment
+                if close == 1 {
+                    note();
+                }
+                client.post().send().await;
+            }
+            """,
+        )
+        self.assertEqual([n for n, _ in chk.check_file(path)], [8])
+
+    def test_an_await_in_a_comment_or_string_is_not_a_call(self):
+        path = _write_rs(
+            self.tmp,
+            """
+            async fn f() {
+                let st = state.read().await;
+                // later we .await the reply
+                let hint = "then .await it";
+                use_it(st.value);
+            }
+            """,
+        )
+        self.assertEqual(chk.check_file(path), [])
+
+    def test_a_block_initialiser_is_not_a_guard_binding(self):
+        path = _write_rs(
+            self.tmp,
+            """
+            async fn f() {
+                let replaced = {
+                    let mut slot = ACTIVE.lock().await;
+                    slot.take()
+                };
+                other().await;
+            }
+            """,
+        )
+        self.assertEqual(chk.check_file(path), [])
+
     def test_a_guard_dropped_before_the_later_await_is_not_flagged(self):
         path = _write_rs(
             self.tmp,

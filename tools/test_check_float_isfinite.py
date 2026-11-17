@@ -52,6 +52,19 @@ class CheckFileTests(unittest.TestCase):
         self.assertEqual(len(findings), 1)
         self.assertIn("math.isfinite", findings[0][1])
 
+    def test_float_in_an_except_star_try_is_flagged(self):
+        path = _write_py(
+            self.tmp,
+            """
+            def parse(val):
+                try:
+                    return float(val)
+                except* ValueError:
+                    return 0.0
+            """,
+        )
+        self.assertEqual(len(chk.check_file(path)), 1)
+
     def test_float_with_math_isfinite_check_in_the_same_function_is_silent(self):
         path = _write_py(
             self.tmp,

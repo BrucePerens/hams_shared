@@ -60,6 +60,7 @@ IGNORE_DIR_NAMES = {
 _BINDING_RE = re.compile(
     r"^\s*let\s+(?:mut\s+)?(\w+)\s*=.*?\.(?:read|write|lock)\(\)\s*\.await\s*;\s*(?://.*)?$"
 )
+_LET_OPEN_RE = re.compile(r"^\s*let\s+(?:mut\s+)?\w+\s*=")
 _DROP_RE_TEMPLATE = r"\bdrop\(\s*{name}\s*\)"
 _IGNORE_RE = re.compile(r"lock-scope-ignore\s*:\s*\S")
 # A `tokio::sync::RwLock`/`Mutex` guard from `.read()`/`.write()`/`.lock()` (not the distinct
@@ -80,12 +81,57 @@ def find_rust_files(repo_root):
     return tree_files(repo_root, ".rs", IGNORE_DIR_NAMES, skip_hidden=True)
 
 
+def _code_only(source):
+    """`source` with comments, string literals and char literals blanked (newlines kept), so a `}` in `b'}'`, a `{` in a
+    string or a `.await` in a comment neither moves the brace depth nor counts as an await."""
+    out = []
+    i, n = 0, len(source)
+
+    def blank(text):
+        return "".join(c if c == "\n" else " " for c in text)
+
+    while i < n:
+        two = source[i:i + 2]
+        if two == "//":
+            j = source.find("\n", i)
+            j = n if j < 0 else j
+        elif two == "/*":
+            level, j = 1, i + 2
+            while j < n and level:
+                if source.startswith("/*", j):
+                    level, j = level + 1, j + 2
+                elif source.startswith("*/", j):
+                    level, j = level - 1, j + 2
+                else:
+                    j += 1
+        elif source[i] == "r" and (i == 0 or not (source[i - 1].isalnum() or source[i - 1] == "_")) \
+                and re.match(r'r#*"', source[i:i + 40]):
+            hashes = len(re.match(r"r(#*)", source[i:]).group(1))
+            end = source.find('"' + "#" * hashes, i + 2 + hashes)
+            j = n if end < 0 else end + 1 + hashes
+        elif source[i] == '"':
+            j = i + 1
+            while j < n and source[j] != '"':
+                j += 2 if source[j] == "\\" else 1
+            j = min(j + 1, n)
+        elif source[i] == "'" and re.match(r"'(?:\\[^']*|[^\\'\n])'", source[i:i + 14]):
+            j = i + re.match(r"'(?:\\[^']*|[^\\'\n])'", source[i:i + 14]).end()
+        else:
+            out.append(source[i])
+            i += 1
+            continue
+        out.append(blank(source[i:j]))
+        i = j
+    return "".join(out)
+
+
 def check_file(path):
     """Returns a list of (line_num, message) findings for one .rs file."""
     source, problem = read_source(path)
     if problem:
         return [(0, problem)]
     lines = source.splitlines(True)
+    code_lines = _code_only(source).splitlines(True)
 
     findings = []
     depth = 0
@@ -98,13 +144,13 @@ def check_file(path):
 
     for i, raw_line in enumerate(lines):
         line_num = i + 1
-        line = raw_line
+        line = code_lines[i] if i < len(code_lines) else raw_line
 
         # A suppression comment on this exact line (or the line immediately
         # above, for a binding annotated on its own preceding line) exempts
         # this line from both starting new tracking and from raising a
         # violation against already-tracked guards.
-        suppressed = bool(_IGNORE_RE.search(line)) or (
+        suppressed = bool(_IGNORE_RE.search(raw_line)) or (
             i > 0 and bool(_IGNORE_RE.search(lines[i - 1]))
         )
 
@@ -137,6 +183,16 @@ def check_file(path):
             tracked = [t for t in tracked if t["name"] not in explicit_drop_names]
 
             m = _BINDING_RE.match(line)
+            bound_until = i
+            if not m and _LET_OPEN_RE.match(line) and ";" not in line and "{" not in line:
+                # rustfmt breaks a long binding over several lines: join up to the statement's `;`.
+                for k in range(i + 1, min(i + 12, len(code_lines))):
+                    if "{" in code_lines[k] or "}" in code_lines[k]:
+                        break  # a block initialiser (`let x = { ... };`), not a plain binding
+                    if ";" in code_lines[k]:
+                        m = _BINDING_RE.match(" ".join(c.strip() for c in code_lines[i:k + 1]))
+                        bound_until = k
+                        break
             # `let x = *cell.lock().await;` copies the value out: the guard is a temporary that
             # dies at the end of this statement, and `x` holds no lock.
             if m and re.search(r"=\s*\*", line):
@@ -149,7 +205,8 @@ def check_file(path):
             # winlink.rs), not an accidental forgot-to-drop bug. Real values worth flagging are
             # always named for what they still need to read/write through (`st`, `session`).
             if m and not m.group(1).startswith("_"):
-                tracked.append({"name": m.group(1), "depth": depth_for_this_line + open_count, "bind_line": line_num})
+                tracked.append({"name": m.group(1), "depth": depth_for_this_line + open_count, "bind_line": line_num,
+                                "live_from": bound_until + 1})
             elif ".await" in line:
                 # A guard bound OUTSIDE a currently-open spawn boundary can never actually be
                 # held at this .await -- see _SPAWN_BOUNDARY_RE's own comment.
@@ -159,7 +216,7 @@ def check_file(path):
                 # lock sits idle.
                 reachable = [
                     t for t in tracked
-                    if not any(barrier > t["depth"] for barrier in spawn_barriers)
+                    if not any(barrier > t["depth"] for barrier in spawn_barriers) and line_num > t["live_from"]
                     and not re.match(
                         r"^\s*(?:let\s+(?:mut\s+)?\w+\s*=\s*|return\s+)?" + re.escape(t["name"]) + r"\.\w+\(",
                         line,

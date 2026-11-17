@@ -208,6 +208,12 @@ def _is_test_fixture_script(parts):
     return any(p == "fixtures" or p.endswith("_fixtures") for p in below_tests)
 
 
+def _is_main_guard(node):
+    test = getattr(node, "test", None)
+    return (isinstance(node, ast.If) and isinstance(test, ast.Compare) and isinstance(test.left, ast.Name)
+            and test.left.id == "__name__")
+
+
 def _direct_functions(body, class_stack):
     """Yields (qualname, node) for every FunctionDef/AsyncFunctionDef
     directly in `body` (a module or class body) -- recurses into nested
@@ -219,6 +225,15 @@ def _direct_functions(body, class_stack):
             yield ".".join(class_stack + [node.name]), node
         elif isinstance(node, ast.ClassDef):
             yield from _direct_functions(node.body, class_stack + [node.name])
+        elif isinstance(node, (ast.If, ast.Try, ast.With, ast.AsyncWith, ast.For, ast.AsyncFor, ast.While)):
+            # A function defined under `if`/`try`/`with` (an ImportError fallback, a platform branch) is as real as a
+            # top-level one; only the `if __name__ == "__main__":` block is script glue.
+            if _is_main_guard(node):
+                continue
+            for field in ("body", "orelse", "finalbody"):
+                yield from _direct_functions(getattr(node, field, []), class_stack)
+            for handler in getattr(node, "handlers", []):
+                yield from _direct_functions(handler.body, class_stack)
 
 
 def _function_span(node, lines):
@@ -260,18 +275,19 @@ def _function_span(node, lines):
     return start, end
 
 
-def scan_file(filepath, repo_root):
+def scan_file(filepath, repo_root, problems=None):
     """Returns a list of (identity, has_anchor) for every in-scope
     function in `filepath`. `identity` is a stable string (relative path
-    + qualified name) usable as a baseline dictionary key across runs."""
+    + qualified name) usable as a baseline dictionary key across runs. A file that cannot be read or parsed yields
+    nothing, and is described in `problems` (a list) when the caller passes one: its functions were not checked."""
     try:
         with open(filepath, "r", encoding="utf-8") as f:
             content = f.read()
-    except (OSError, UnicodeDecodeError):
-        return []
-    try:
         tree = ast.parse(content, filename=filepath)
-    except SyntaxError:
+    except (OSError, UnicodeDecodeError, SyntaxError, ValueError, RecursionError) as error:
+        if problems is not None:
+            problems.append("%s: cannot be read or parsed (%s): its functions were not checked"
+                            % (os.path.relpath(filepath, repo_root), type(error).__name__))
         return []
 
     lines = content.splitlines()
@@ -301,7 +317,8 @@ def scan_tree(repo_root, stats=None):
     for filepath in _git_tracked_python_files(repo_root):
         if stats is not None:
             stats["files"] = stats.get("files", 0) + 1
-        for identity, has_anchor in scan_file(filepath, repo_root):
+        problems = stats.setdefault("problems", []) if stats is not None else None
+        for identity, has_anchor in scan_file(filepath, repo_root, problems):
             if not has_anchor:
                 gaps[identity] = True
     return gaps
@@ -344,6 +361,12 @@ def main():
     current_gaps = scan_tree(repo_root, stats)
     # `git ls-files` failing (not a git work tree) yields no files too: either way nothing was scanned.
     check_target.require_scanned(stats.get("files", 0), repo_root, "check_function_test_anchors", "git-tracked Python files (a git work tree is required)")
+
+    if stats.get("problems"):
+        print("[!] CI/CD FAILURE: files that could not be read or parsed (no function in them was checked):")
+        for problem in stats["problems"]:
+            print(f"    - {problem}")
+        return 1
 
     if args.generate_baseline:
         save_baseline(baseline_path, current_gaps)

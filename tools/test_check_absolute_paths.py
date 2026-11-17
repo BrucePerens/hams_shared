@@ -268,5 +268,37 @@ class MainIntegrationTests(unittest.TestCase):
         self.assertIn("other_script.py:1", violations[0])
 
 
+class NewFileTypeAndAllowlistTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_rust_toml_yaml_service_and_scss_are_scanned(self):
+        for name in ("a.rs", "b.toml", "c.yml", "d.yaml", "e.service", "f.scss"):
+            _write(os.path.join(self.tmp, name), f"x = '{_HOME}/t'\n")
+        found = chk.check_absolute_paths(self.tmp)
+        self.assertEqual(len(found), 6, found)
+
+    def test_allowlisted_file_passes_at_its_exact_count_only(self):
+        key = "devbox_tools/pacificon_demo_kit/host/hams-demo-bots.service"
+        path = os.path.join(self.tmp, key)
+        _write(path, f"ExecStart={_HOME}/x\n")
+        self.assertEqual(chk.check_absolute_paths(self.tmp), [])
+        _write(path, f"ExecStart={_HOME}/x\nWorkingDirectory={_HOME}/y\n")
+        found = chk.check_absolute_paths(self.tmp)
+        self.assertEqual(len(found), 2, found)
+        _write(path, "ExecStart=/opt/x\n")
+        found = chk.check_absolute_paths(self.tmp)
+        self.assertEqual(len(found), 1, found)
+        self.assertIn("allowlist expects", found[0])
+
+    def test_every_allowlist_entry_has_a_justification(self):
+        for key, (count, why) in chk.ALLOWED_HOME_PATHS.items():
+            self.assertGreater(count, 0, key)
+            self.assertGreater(len(why), 20, key)
+
+
 if __name__ == "__main__":
     unittest.main()

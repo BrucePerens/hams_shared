@@ -84,3 +84,31 @@ class UnreadableFileTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BrokenSymlinkTests(unittest.TestCase):
+    """A tracked symlink whose target is gone (or a loop) is not a crash and not an unreadable-file finding."""
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.root, True)
+        _write(os.path.join(self.root, "mod", "README.md"), "# mod\n")
+        for name in ("mod/models/broken.py", "docs/broken.md"):
+            os.makedirs(os.path.dirname(os.path.join(self.root, name)), exist_ok=True)
+            os.symlink("/nonexistent/target", os.path.join(self.root, name))
+        os.symlink("loop.py", os.path.join(self.root, "mod", "models", "loop.py"))
+        subprocess.run(["git", "init", "-q"], cwd=self.root, check=True)
+        subprocess.run(["git", "add", "-A"], cwd=self.root, check=True)
+        va.UNREADABLE_FILES.clear()
+        self.addCleanup(va.UNREADABLE_FILES.clear)
+
+    def test_the_scans_skip_a_dangling_or_looping_symlink(self):
+        va.find_anchors_in_docs(self.root, self.root)
+        va.find_anchors_in_code(self.root, self.root)
+        self.assertEqual(va.UNREADABLE_FILES, [])
+
+    def test_the_command_line_scan_does_not_traceback(self):
+        result = subprocess.run(
+            [sys.executable, os.path.join(HERE, "verify_anchors.py"), self.root], capture_output=True, text=True
+        )
+        self.assertNotIn("Traceback", result.stderr)

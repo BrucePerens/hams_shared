@@ -184,7 +184,9 @@ def load_acl(roots, core_addons=CORE_ADDONS):
     wanted = {"base", "mail", "portal", "web"}
     for root in roots:
         wanted |= _manifest_depends(root)
-    if core_addons and os.path.isdir(core_addons):
+    if core_addons and not os.path.isdir(core_addons):
+        raise RuntimeError(f"check_service_account_acl: Odoo core addons directory {core_addons} is missing; core ACL rows cannot be loaded, so the result would be wrong. Install Odoo or pass core_addons.")
+    if core_addons:
         sources += [(os.path.join(core_addons, m), m) for m in sorted(wanted) if os.path.isdir(os.path.join(core_addons, m))]
     for root in roots:
         sources += [(d, os.path.basename(d)) for d in sorted(glob.glob(os.path.join(root, "*"))) if os.path.exists(os.path.join(d, "__manifest__.py"))]
@@ -422,7 +424,11 @@ if __name__ == "__main__":
     check_target.require_directory(sys.argv[1], "check_service_account_acl")
     stats = {}
     roots = _resolve_repo_roots(sys.argv[1])
-    violations = check_service_account_acl(roots, stats)
+    try:
+        violations = check_service_account_acl(roots, stats)
+    except RuntimeError as err:
+        print(f"❌ {err}")
+        sys.exit(1)
     check_target.require_scanned(stats.get("files", 0), ", ".join(roots), "check_service_account_acl", "Python files")
     if violations:
         print("❌ Service account ACL violations:")

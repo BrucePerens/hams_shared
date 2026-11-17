@@ -580,6 +580,16 @@ class WaitTests(ProcTestCase):
         self.assertEqual(result.code, 1)
         self.assertIn("its own timeout", result.message)
 
+    def test_wait_job_names_the_memory_cap_when_a_capped_job_dies_by_a_signal(self):
+        for code in (137, 143):
+            rec = ap.JobRecord("capped", "", 11, 11, 11, 5, "/w", ["x"], "/l", 1.0, "bruce", exit_code=code, mem_max="6G")
+            ap.write_record(rec, self.jobs)
+            result = ap.wait_job("capped", timeout=5, interval=0.01, directory=self.jobs)
+            self.assertIn("memory cap of 6G", result.message)
+        rec = ap.JobRecord("plain", "", 11, 11, 11, 5, "/w", ["x"], "/l", 1.0, "bruce", exit_code=143)
+        ap.write_record(rec, self.jobs)
+        self.assertNotIn("memory cap", ap.wait_job("plain", timeout=5, interval=0.01, directory=self.jobs).message)
+
     def test_wait_file_fails_when_the_producer_dies_first(self):
         producer = self.spawn("sleep 0.5")
         result = ap.wait_file(os.path.join(self.tmp, "never"), while_pid=producer.pid, timeout=20, interval=0.05)
@@ -1165,6 +1175,8 @@ class LimitTests(ProcTestCase):
         self.assertEqual(ap.default_mem_max(cmd), "24G")
         self.assertEqual(ap.default_timeout(["python3", "test.py"]), 1800)
         self.assertEqual(ap.default_timeout(None), 1800)
+        merge = ["python3", "devbox_tools/merge_pr.py", "hams_com", "1"]  # runs the whole lint in its tree: same limits as run_linters.py
+        self.assertEqual((ap.default_timeout(merge), ap.default_mem_max(merge)), (5400, "24G"))
 
     # Tests [@ANCHOR: agent_procs:default_mem_max]
     def test_cargo_and_rustc_commands_get_the_higher_default_cap(self):
