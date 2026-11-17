@@ -225,6 +225,23 @@ module.exports = tseslint.config(
     },
   },
   {
+    // Node harness scripts that Python tests start with `node` (`tests/*_harness.js`, `tests/*_harness.cjs`): CommonJS,
+    // with `require` and `process` as real globals, and not part of the browser TypeScript project, so the type-aware
+    // layer (and its two promise rules) does not apply to them.
+    files: ["**/tests/*_harness.js", "**/tests/*_harness.cjs"],
+    extends: [tseslint.configs.disableTypeChecked],
+    languageOptions: {
+      sourceType: "commonjs",
+      globals: {
+        ...globals.node,
+      },
+    },
+    rules: {
+      "@typescript-eslint/no-floating-promises": "off",
+      "@typescript-eslint/no-misused-promises": "off",
+    },
+  },
+  {
     ignores: [
       "**/node_modules/**",
       "**/target/**",
