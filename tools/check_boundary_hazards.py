@@ -165,7 +165,22 @@ _CREDENTIAL_HEADERS = {
     "x-api-key", "authorization", "proxy-authorization", "x-auth-token", "x-auth-key", "x-api-token",
     "private-token", "api-key", "x-token", "cf-access-client-secret", "x-cf-secret", "apikey",
 }
-_REDIRECT_SAFE_MARKERS = ("HTTPRedirectHandler", "ssrf_safe_fetch", "safe_fetch(")
+_REDIRECT_SAFE_NAMES = {"HTTPRedirectHandler", "ssrf_safe_fetch", "safe_fetch"}
+
+
+def _refuses_redirects(t):
+    """True when the code itself (not a comment or a string) uses a redirect-refusing handler or the safe-fetch helper: a
+    name, attribute, call or import of one of `_REDIRECT_SAFE_NAMES`."""
+    for node in ast.walk(t.tree):
+        if isinstance(node, ast.Name) and node.id in _REDIRECT_SAFE_NAMES:
+            return True
+        if isinstance(node, ast.Attribute) and node.attr in _REDIRECT_SAFE_NAMES:
+            return True
+        if isinstance(node, ast.alias) and node.name.split(".")[-1] in _REDIRECT_SAFE_NAMES:
+            return True
+        if isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[-1] in _REDIRECT_SAFE_NAMES:
+            return True
+    return False
 
 
 def _credential_sites(t):
@@ -191,7 +206,7 @@ def _rule_credential_redirect(t):
         return []
     if not re.search(r"\burlopen\s*\(|\bbuild_opener\s*\(|\.open\s*\(", src):
         return []
-    if any(marker in src for marker in _REDIRECT_SAFE_MARKERS):
+    if _refuses_redirects(t):
         return []
     findings, seen = [], set()
     for lineno, node in _credential_sites(t):
@@ -209,19 +224,21 @@ def _rule_credential_redirect(t):
 # --------------------------------------------------------------------------------------------------
 # argv-log
 
-_LOG_RECEIVER = re.compile(r"(?i)^_?(logger|log|logging|_log|self\.logger|self\._logger|self\.log|_logger)$")
+_LOG_RECEIVER = re.compile(r"(?i)^_*(?:\w*_)?(?:logger|log|logging)$")
 _LOG_METHODS = {"debug", "info", "warning", "warn", "error", "exception", "critical", "log", "fatal"}
 _ARGV_NAMES = {"cmd", "argv", "cmdline", "full_cmd", "cmd_list", "argv_list", "command_line", "cmd_line"}
 _JOIN_NAMES = _ARGV_NAMES | {"command", "args"}
 _CMDLINE_WORD = re.compile(r"(?i)cmd_?line|command_?line")
 
 
-def _receiver_text(node):
+def _is_logger(node):
+    """A name or attribute that ends in logger/log/logging (`logger`, `self._log`, `app.logger`, `module_logger`), or a
+    `logging.getLogger(...)` call used directly."""
+    if isinstance(node, ast.Call):
+        return _call_name(node) == "getLogger"
     if isinstance(node, ast.Name):
-        return node.id
-    if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
-        return f"{node.value.id}.{node.attr}"
-    return ""
+        return bool(_LOG_RECEIVER.match(node.id))
+    return isinstance(node, ast.Attribute) and bool(_LOG_RECEIVER.match(node.attr))
 
 
 def _argv_hazard(expr):
@@ -257,7 +274,7 @@ def _rule_argv_log(t):
     for node in ast.walk(t.tree):
         if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in _LOG_METHODS):
             continue
-        if not _LOG_RECEIVER.match(_receiver_text(node.func.value)):
+        if not _is_logger(node.func.value):
             continue
         parts = list(node.args) + [kw.value for kw in node.keywords]
         for part in parts:
@@ -352,23 +369,35 @@ def _gh_findings_in_text(text, lineno):
     return out
 
 
+_GH_PROGRAM = re.compile(r"(?i)^(?:.*/)?gh(?:_\w+)?$")
+_GH_COMMAND = re.compile(r"^\s*gh\s+(?:pr|api|run|release|issue)\b")  # a command line, not prose that mentions one
+
+
 def _rule_gh_truncated_listing_py(t):
-    findings = []
+    findings, seen = [], set()
+
+    def report(node, text, lineno):
+        for at, message in _gh_findings_in_text(text, lineno):
+            if (at, message) not in seen and not t.ignored("gh-truncated-listing", lineno, at):
+                seen.add((at, message))
+                findings.append(("gh-truncated-listing", t.symbol(node), at, message))
+
     for node in ast.walk(t.tree):
-        if not isinstance(node, (ast.List, ast.Tuple)):
-            continue
-        strings = []
-        for elt in node.elts:
-            text = _const_str(elt)
-            if text is None and isinstance(elt, ast.JoinedStr):
-                text = "".join(v.value for v in elt.values if isinstance(v, ast.Constant) and isinstance(v.value, str))
-            if text is not None:
-                strings.append(text)
-        if not strings or "gh" not in strings[:1]:
-            continue
-        for lineno, message in _gh_findings_in_text(" ".join(strings), node.lineno):
-            if not t.ignored("gh-truncated-listing", node.lineno, lineno):
-                findings.append(("gh-truncated-listing", t.symbol(node), lineno, message))
+        if isinstance(node, (ast.List, ast.Tuple)) and node.elts:
+            strings = []
+            for elt in node.elts:
+                text = _const_str(elt)
+                if text is None and isinstance(elt, ast.JoinedStr):
+                    text = "".join(v.value for v in elt.values if isinstance(v, ast.Constant) and isinstance(v.value, str))
+                if text is not None:
+                    strings.append(text)
+            first = node.elts[0]
+            program = _const_str(first) if _const_str(first) is not None else (first.id if isinstance(first, ast.Name) else None)
+            if program is not None and _GH_PROGRAM.match(program):
+                strings = ["gh"] + (strings[1:] if _const_str(first) is not None else strings)
+                report(node, " ".join(strings), node.lineno)
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str) and _GH_COMMAND.search(node.value):
+            report(node, node.value, node.lineno)  # a whole command line in one string (`shell=True`, `shlex.split`)
     return findings
 
 
@@ -418,6 +447,29 @@ def _covers_range_errors(names):
             and bool(names & {"OSError", "EnvironmentError", "IOError"}))
 
 
+def _assignments(t, scope):
+    """`{name: [assigned value, ...]}` of one scope, computed once per scope."""
+    cache = t.__dict__.setdefault("_assignment_cache", {})
+    if id(scope) not in cache:
+        found = {}
+        for n in ast.walk(scope):
+            if isinstance(n, ast.Assign):
+                for target in n.targets:
+                    if isinstance(target, ast.Name):
+                        found.setdefault(target.id, []).append(n.value)
+            elif isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name) and n.value:
+                found.setdefault(n.target.id, []).append(n.value)
+        cache[id(scope)] = found
+    return cache[id(scope)]
+
+
+def _has_isfinite(t, scope):
+    cache = t.__dict__.setdefault("_isfinite_cache", {})
+    if id(scope) not in cache:
+        cache[id(scope)] = any(isinstance(n, ast.Call) and _call_name(n) == "isfinite" for n in ast.walk(scope))
+    return cache[id(scope)]
+
+
 def _trusted_time(t, expr, scope, depth=0):
     """True when `expr` is this machine's clock, a file time, a constant, or arithmetic of those (also through a local that
     is only ever assigned such values)."""
@@ -440,12 +492,7 @@ def _trusted_time(t, expr, scope, depth=0):
     if isinstance(expr, ast.IfExp):
         return _trusted_time(t, expr.body, scope, depth + 1) and _trusted_time(t, expr.orelse, scope, depth + 1)
     if isinstance(expr, ast.Name):
-        values = []
-        for n in ast.walk(scope):
-            if isinstance(n, ast.Assign) and any(isinstance(tg, ast.Name) and tg.id == expr.id for tg in n.targets):
-                values.append(n.value)
-            elif isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name) and n.target.id == expr.id and n.value:
-                values.append(n.value)
+        values = _assignments(t, scope).get(expr.id, [])
         return bool(values) and all(_trusted_time(t, v, scope, depth + 1) for v in values)
     return False
 
@@ -461,7 +508,7 @@ def _rule_timestamp_range(t):
             continue
         if any(_covers_range_errors(_caught_names(tr)) for tr in t.try_bodies_around(node)):
             continue
-        if any(isinstance(n, ast.Call) and _call_name(n) == "isfinite" for n in ast.walk(scope)):
+        if _has_isfinite(t, scope):
             continue
         if t.ignored("timestamp-range", node.lineno):
             continue
@@ -486,8 +533,11 @@ def check_file(path):
         return [list(f) for f in _rule_gh_truncated_listing_sh(path, source)]
     try:
         tree = _Tree(source, path)
-    except (SyntaxError, ValueError):
-        return []
+    except (SyntaxError, ValueError, RecursionError) as error:
+        if "vendor" in path.replace("\\", "/").split("/"):
+            return []  # third-party source kept in the tree (a Go dependency's helper script): not ours to fix
+        return [["unparseable-source", "<file>", 0,
+                 f"cannot be parsed ({type(error).__name__}): the file was not checked for boundary hazards"]]
     findings = []
     findings += _rule_gh_truncated_listing_py(tree)
     if not _is_test_path(path):
