@@ -228,7 +228,9 @@ class MainIntegrationTests(unittest.TestCase):
             with patch("builtins.open", side_effect=FileNotFoundError) as mock_open:
                 with self.assertRaises(FileNotFoundError):
                     chk.main()
-                mock_open.assert_called_once_with(expected, encoding="utf-8")
+                # Any other thread of the test process (a server from an earlier test) may call the patched open too:
+                # the manifest must have been opened with this path, whatever else was.
+                mock_open.assert_any_call(expected, encoding="utf-8")
 
 
 TODAY = datetime.date(2026, 11, 4)
