@@ -621,6 +621,7 @@ def settle(members, run_once, attribute, budget=MAX_SETTLE_RUNS, log=print):
     state = {"left": budget}
 
     def one(group, depth):
+        group = list({m["tip"]: m for m in group}.values())  # callers with one tip are one branch: a split must not separate or rerun them
         verdicts = {}
         if state["left"] <= 0:
             for m in group:
