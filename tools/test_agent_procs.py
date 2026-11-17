@@ -1158,6 +1158,14 @@ class LimitTests(ProcTestCase):
         self.assertIn("timeout=1800s mem=6G", listing)
         self.assertIn("timeout=none mem=none", listing)
 
+    # Tests [@ANCHOR: agent_procs:default_timeout]
+    def test_run_linters_gets_the_longer_timeout_and_higher_cap(self):
+        cmd = ["nice", "-n", "15", "python3", "hams_shared/tools/run_linters.py", "--no-baseline"]
+        self.assertEqual(ap.default_timeout(cmd), 5400)
+        self.assertEqual(ap.default_mem_max(cmd), "24G")
+        self.assertEqual(ap.default_timeout(["python3", "test.py"]), 1800)
+        self.assertEqual(ap.default_timeout(None), 1800)
+
     # Tests [@ANCHOR: agent_procs:default_mem_max]
     def test_cargo_and_rustc_commands_get_the_higher_default_cap(self):
         self.assertEqual(ap.default_mem_max(["python3", "test.py"]), "6G")
