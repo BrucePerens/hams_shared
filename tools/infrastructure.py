@@ -41,6 +41,7 @@ import smoketest_fixtures
 _logger = logging.getLogger(__name__)
 
 
+# [@ANCHOR: infrastructure:infrastructure__no_redirect_class]
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     """Refuses every redirect: urllib copies all request headers, a bearer token included, to wherever a 3xx answer points."""
 
