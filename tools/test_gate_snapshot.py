@@ -471,6 +471,20 @@ class ArtifactTests(SnapshotTestBase):
         with self.assertRaises(gs.SnapshotError):
             gs.build_artifact(gs.ARTIFACTS[0], self.trees, self.cargo, run=lambda *a: 1, out=lambda *_: None)
 
+    # Tests [@ANCHOR: gate_snapshot:build_artifact]
+    def test_the_relay_build_limits_cargo_jobs_unless_the_caller_set_them(self):
+        seen = []
+        def run(command, cwd, env):
+            seen.append(env.get("CARGO_BUILD_JOBS"))
+            return 1
+        for preset in (None, "3"):
+            with unittest.mock.patch.dict(os.environ, {} if preset is None else {"CARGO_BUILD_JOBS": preset}):
+                if preset is None:
+                    os.environ.pop("CARGO_BUILD_JOBS", None)
+                with self.assertRaises(gs.SnapshotError):
+                    gs.build_artifact(gs.ARTIFACTS[1], self.trees, self.cargo, run=run, out=lambda *_: None)
+        self.assertEqual(seen, [gs.CARGO_BUILD_JOBS, "3"])
+
     # Tests [@ANCHOR: gate_snapshot:artifact_problems]
     def test_fresh_outputs_have_no_problems(self):
         self.assertEqual(self.problems({gs.RELAY_BIN_ENV: self.relay}), [])
