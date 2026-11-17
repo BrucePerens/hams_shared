@@ -2956,6 +2956,10 @@ def main():
     if not run_ok:
         sys.exit(lint_lock.EXIT_TEMPFAIL)
     lock_waited = time.monotonic() - lock_wait_started
+    tmp_before = lint_cache.tmp_entries()
+    # Children's temporary directories (mkdtemp, TemporaryDirectory) go to the disk, not the tmpfs /tmp.
+    if "TMPDIR" not in os.environ and lint_cache.scratch_root():
+        os.environ["TMPDIR"] = lint_cache.scratch_root()
     if run_lock:
         import atexit
 
@@ -3065,6 +3069,10 @@ def main():
                 remote_siblings,
                 impact_counts,
             )
+
+    tmp_warning = lint_cache.tmp_growth_report(tmp_before)
+    if tmp_warning:
+        print(tmp_warning, file=sys.stderr)
 
     if linters_failed:
         print("\n🛑 Halting due to linter violations. Please review the output above.")

@@ -656,6 +656,46 @@ class ResultCacheTest(unittest.TestCase):
         self.assertLessEqual(os.path.getsize(cache.path), 1100)
 
 
+class TmpGuardTest(unittest.TestCase):
+    # Tests [@ANCHOR: lint_cache:scratch_root]
+    def test_scratch_root_is_on_the_disk_and_overridable(self):
+        with tempfile.TemporaryDirectory() as base:
+            self.assertEqual(lint_cache.scratch_root({"HAMS_LINT_SCRATCH": os.path.join(base, "s")}), os.path.join(base, "s"))
+            self.assertTrue(os.path.isdir(os.path.join(base, "s")))
+            self.assertEqual(lint_cache.scratch_root({"XDG_CACHE_HOME": base}), os.path.join(base, "hams-lint-scratch"))
+            self.assertIsNone(lint_cache.scratch_root({"HAMS_LINT_SCRATCH": "/proc/nope/x"}))
+
+    # Tests [@ANCHOR: lint_cache:scratch_mkdtemp]
+    def test_scratch_mkdtemp_lands_in_the_scratch_root(self):
+        with tempfile.TemporaryDirectory() as base:
+            made = lint_cache.scratch_mkdtemp("hams-x-", {"HAMS_LINT_SCRATCH": base})
+            self.assertEqual(os.path.dirname(made), base)
+            self.assertTrue(os.path.basename(made).startswith("hams-x-"))
+
+    # Tests [@ANCHOR: lint_cache:tmp_entries]
+    def test_tmp_entries_lists_names(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.mkdir(os.path.join(tmp, "a"))
+            self.assertEqual(lint_cache.tmp_entries(tmp), {"a"})
+            self.assertEqual(lint_cache.tmp_entries(os.path.join(tmp, "missing")), set())
+
+    # Tests [@ANCHOR: lint_cache:tmp_growth_report]
+    def test_growth_report_names_only_new_big_entries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.mkdir(os.path.join(tmp, "old"))
+            with open(os.path.join(tmp, "old", "f"), "wb") as fh:
+                fh.write(b"x" * 3000)  # already there before the run: never blamed
+            before = lint_cache.tmp_entries(tmp)
+            self.assertIsNone(lint_cache.tmp_growth_report(before, tmp, limit_bytes=1000))
+            os.mkdir(os.path.join(tmp, "hams-relay-structural-cold-cargo-abc"))
+            with open(os.path.join(tmp, "hams-relay-structural-cold-cargo-abc", "f"), "wb") as fh:
+                fh.write(b"x" * 2000)
+            self.assertIsNone(lint_cache.tmp_growth_report(before, tmp, limit_bytes=5000))
+            report = lint_cache.tmp_growth_report(before, tmp, limit_bytes=1000)
+            self.assertIn("hams-relay-structural-cold-cargo-abc", report)
+            self.assertNotIn(os.path.join(tmp, "old"), report)
+
+
 if __name__ == "__main__":
     unittest.main()
 

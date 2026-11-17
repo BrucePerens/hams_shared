@@ -341,6 +341,22 @@ Written 2026-11-07. Code: `tools/lint_cache.py`; the runbook is `docs/runbooks/L
 budget; on `mac1-vm` it reached 19 GB and the lint cache's free-space floor then cleared the warm Cargo directory on every
 run. These anchors put that build under the budget and make every other cache visible.
 
+### `[@ANCHOR: lint_cache:scratch_root]` `scratch_root(environ=None)`
+
+Purpose: the disk directory for lint and test scratch (`HAMS_LINT_SCRATCH`, else `<cache>/hams-lint-scratch`), created on demand; None when it cannot be made. `run_linters.py` sets `TMPDIR` to it so children do not fill the tmpfs /tmp.
+
+### `[@ANCHOR: lint_cache:scratch_mkdtemp]` `scratch_mkdtemp(prefix, environ=None)`
+
+Purpose: `tempfile.mkdtemp` inside `scratch_root` (the cold cargo build directories of `--no-cache` runs).
+
+### `[@ANCHOR: lint_cache:tmp_entries]` `tmp_entries(tmp=None)`
+
+Purpose: the names directly under /tmp; the "before" picture for `tmp_growth_report`. Returns a set (empty when unreadable).
+
+### `[@ANCHOR: lint_cache:tmp_growth_report]` `tmp_growth_report(before, tmp=None, limit_bytes=524288000)`
+
+Purpose: the end-of-run warning of `run_linters.py`: when the entries that appeared under /tmp since `before` hold more than `limit_bytes`, returns text naming the five biggest; else None. Entries that were already there are never counted.
+
 ### `[@ANCHOR: lint_cache:named_cargo_session]` `named_cargo_session(name, environ=None, log=None)`
 
 Purpose: a context manager that gives a test which runs cargo (the relay export test) a Cargo target directory under the
