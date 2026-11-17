@@ -162,6 +162,11 @@ class MainIntegrationTests(unittest.TestCase):
         _write(os.path.join(self.tmp, "gen.sh"), "#!/bin/bash\ncat <<EOS\nx\nEOS\n#!/bin/sh\n")
         self.assertEqual(len(chk.check_shebang(self.tmp)), 1)
 
+    def test_a_here_string_or_shift_is_not_a_here_document(self):
+        for opener in ("cat <<< foo", "x=$((1<<n))", "(( y = 1 << n ))"):
+            _write(os.path.join(self.tmp, "gen.sh"), "#!/bin/bash\n%s\n#!/bin/sh\n" % opener)
+            self.assertEqual(len(chk.check_shebang(self.tmp)), 1, opener)
+
     def test_a_clean_repo_passes(self):
         _write(os.path.join(self.tmp, "script.py"), "#!/usr/bin/env python3\nprint(1)\n")
         code, out = self._run()
