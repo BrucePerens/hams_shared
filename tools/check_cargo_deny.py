@@ -10,9 +10,8 @@ run_linters.py at all, a real gap: running cargo-deny by hand for
 the first time in this codebase's history found 11 real, previously-unremediated
 advisory/license/unmaintained findings in hams_local_relay alone (an HTTP/2
 unbounded-DATA-frame DoS vector among them). Runs `cargo deny check` in every daemons/
-subdirectory that has both a Cargo.toml and a deny.toml -- a crate with no deny.toml is
-skipped, not failed, the same way check_pip_audit.py skips a repo with no requirements.txt
-rather than treating "not configured yet" as a failure.
+subdirectory that has both a Cargo.toml and a deny.toml. A crate with a Cargo.lock and no deny.toml
+get `cargo deny check advisories` only (no licence or ban policy exists to apply).
 
 Scans the whole repo rather than a possibly-scoped `targets` list, same reasoning as
 check_pip_audit.py: a vulnerable dependency can be introduced in any crate, not just
@@ -94,6 +93,15 @@ def find_deny_crates(repo_root):
     return sorted(found)
 
 
+def find_lockfile_only_crates(repo_root):
+    """Crates with a Cargo.lock and no deny.toml: they get the advisories check only (no licence or ban policy to apply)."""
+    found = []
+    for root, _dirs, filenames in tree_walk(repo_root, (".toml", ".lock"), IGNORE_DIR_NAMES, untracked=True):
+        if "Cargo.toml" in filenames and "Cargo.lock" in filenames and "deny.toml" not in filenames:
+            found.append(root)
+    return sorted(found)
+
+
 def main():
     if len(sys.argv) < 2:
         print("Usage: check_cargo_deny.py <repo_root>")
@@ -101,9 +109,13 @@ def main():
 
     target = check_target.require_directory(sys.argv[1], "check_cargo_deny")
     crate_dirs = [
-        (repo_root, crate_dir)
+        (repo_root, crate_dir, ["cargo", "deny", "check"])
         for repo_root in _resolve_repo_roots(target)
         for crate_dir in find_deny_crates(repo_root)
+    ] + [
+        (repo_root, crate_dir, ["cargo", "deny", "check", "advisories"])
+        for repo_root in _resolve_repo_roots(target)
+        for crate_dir in find_lockfile_only_crates(repo_root)
     ]
     check_target.require_scanned(len(crate_dirs), target, "check_cargo_deny", "crates with a Cargo.toml and a deny.toml")
     if not crate_dirs:
@@ -140,11 +152,11 @@ def main():
         sys.exit(1)
 
     any_failed = False
-    for repo_root, crate_dir in crate_dirs:
+    for repo_root, crate_dir, deny_args in crate_dirs:
         rel_path = os.path.relpath(crate_dir, repo_root)
         try:
             res = subprocess.run(
-                ["cargo", "deny", "check"],
+                deny_args,
                 capture_output=True,
                 text=True,
                 cwd=crate_dir,

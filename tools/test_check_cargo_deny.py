@@ -193,6 +193,43 @@ class MainTests(unittest.TestCase):
             self.assertEqual(mock_run.call_count, 3)
 
 
+class LockOnlyCrateTests(unittest.TestCase):
+    """A crate with a Cargo.lock but no deny.toml still gets its advisories checked (about twenty crates had no deny.toml and
+    a chrono 'unmaintained' advisory in bench_mcp went unseen)."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
+    def test_a_crate_with_a_lockfile_and_no_deny_toml_is_found(self):
+        crate = os.path.join(self.tmp, "daemons", "bare")
+        _write(os.path.join(crate, "Cargo.toml"))
+        _write(os.path.join(crate, "Cargo.lock"))
+        self.assertEqual(chk.find_lockfile_only_crates(self.tmp), [crate])
+
+    def test_a_crate_with_a_deny_toml_or_no_lockfile_is_not_found(self):
+        has_deny = os.path.join(self.tmp, "daemons", "has_deny")
+        for name in ("Cargo.toml", "Cargo.lock", "deny.toml"):
+            _write(os.path.join(has_deny, name))
+        no_lock = os.path.join(self.tmp, "daemons", "no_lock")
+        _write(os.path.join(no_lock, "Cargo.toml"))
+        self.assertEqual(chk.find_lockfile_only_crates(self.tmp), [])
+
+    def test_main_runs_only_the_advisories_check_in_a_lockfile_only_crate(self):
+        crate = os.path.join(self.tmp, "daemons", "bare")
+        _write(os.path.join(crate, "Cargo.toml"))
+        _write(os.path.join(crate, "Cargo.lock"))
+        version_check = MagicMock(returncode=0)
+        finding = MagicMock(returncode=1, stdout="advisories FAILED", stderr="")
+        with patch.object(sys, "argv", ["check_cargo_deny.py", self.tmp]), patch(
+            "check_cargo_deny.subprocess.run", side_effect=[version_check, finding]
+        ) as mock_run:
+            with self.assertRaises(SystemExit) as ctx:
+                chk.main()
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertEqual(mock_run.call_args_list[1].args[0], ["cargo", "deny", "check", "advisories"])
+
+
 class TimeoutTests(unittest.TestCase):
     """Regression tests for the `timeout=` on both subprocess.run() calls in main(), as in
     check_pip_audit.py: `cargo deny check` can fetch a fresh advisory-db over the network, and
