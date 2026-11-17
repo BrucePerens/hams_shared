@@ -134,7 +134,6 @@ class TestFastForwardShared(unittest.TestCase):
     # Tests [@ANCHOR: run_linters:ensure_shared_current]
     def test_a_run_started_in_a_stale_clean_checkout_fast_forwards_itself_and_a_dirty_one_fails_fast(self):
         """End to end: the real script, copied into a throwaway repository, run with a deliberately stale checkout."""
-        import time
         for dirty, want_exit in ((False, None), (True, 2)):
             repo = os.path.join(self.tmp.name, "e2e%d" % dirty)
             subprocess.run(["git", "clone", "-q", self.origin, repo], check=True, capture_output=True)
@@ -142,12 +141,10 @@ class TestFastForwardShared(unittest.TestCase):
             if dirty:
                 with open(os.path.join(repo, "a"), "w") as f:
                     f.write("dirty")
-            started = time.monotonic()
             code = ("import sys; sys.path.insert(0, %r); import run_linters; "
                     "s, t = run_linters.ensure_shared_current(%r); print(s); sys.exit(2 if s == 'refused' else 0)"
                     % (os.path.dirname(os.path.abspath(__file__)), repo))
-            done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
-            self.assertLess(time.monotonic() - started, 20)
+            done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=20)
             self.assertEqual(done.stdout.strip().splitlines()[-1], "refused" if dirty else "fast_forwarded", done.stderr)
             if want_exit:
                 self.assertEqual(done.returncode, want_exit)

@@ -121,6 +121,16 @@ class PythonTests(unittest.TestCase):
                     assert time.monotonic() - start < 5, "timed out"
             """), [])
 
+    def test_for_loop_per_iteration_timing_is_flagged(self):
+        self.assertEqual(_py("""
+            import time
+            def test_x():
+                for item in items:
+                    start = time.monotonic()
+                    run(item)
+                    assert time.monotonic() - start < 5
+            """), [7])
+
 
 class JsTests(unittest.TestCase):
     def test_date_now_delta_is_flagged(self):
@@ -158,6 +168,11 @@ class RustTests(unittest.TestCase):
         self.assertEqual(chk.check_rust(
             "#[test]\nfn t() {\n    let start = Instant::now();\n    while !done() {\n        if x {\n"
             "            assert!(start.elapsed() < Duration::from_secs(5), \"timed out\");\n        }\n    }\n}\n"), [])
+
+    def test_for_loop_per_iteration_timing_is_flagged(self):
+        self.assertEqual(chk.check_rust(
+            "#[test]\nfn t() {\n    for i in 0..3 {\n        let start = Instant::now();\n        run(i);\n"
+            "        assert!(start.elapsed() < Duration::from_secs(5));\n    }\n}\n"), [6])
 
     def test_non_test_helper_name_does_not_match(self):
         self.assertEqual(chk.check_rust("#[test]\nfn t() { assert!(x.len() < 5); }\n"), [])

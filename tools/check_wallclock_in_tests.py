@@ -17,7 +17,7 @@ This gate FAILS when a test file asserts on an elapsed wall-clock value:
           or through a variable. A file that uses tokio's paused clock (`tokio::time::pause`, `start_paused`) is skipped:
           its elapsed() is virtual time and deterministic.
 `time.process_time()` is CPU time and is allowed. An assertion inside a polling loop (`while !done() { assert!(start.elapsed() < LIMIT) }`) is a timeout guard,
-not a measurement: allowed. A lower-bound-only comparison (`elapsed >= 0.5` after a real sleep) is
+not a measurement: allowed (`while`/`loop` only: a `for` loop timing each iteration is flagged). A lower-bound-only comparison (`elapsed >= 0.5` after a real sleep) is
 allowed too: a monotonic clock never runs short under load.
 
 Allowlist (tools/wallclock_in_tests_allowlist.txt): one `<repo>/<path>  # reason` per line, for a file where a
@@ -120,7 +120,7 @@ def _lower_bound_only(node, elapsed_vars, clock_vars):
 
 def _py_scope_findings(scope):
     nodes = list(_scope_nodes(scope))
-    in_loop = {id(n) for loop in nodes if isinstance(loop, (ast.While, ast.For)) for n in ast.walk(loop)}
+    in_loop = {id(n) for loop in nodes if isinstance(loop, ast.While) for n in ast.walk(loop)}
     clock_vars, elapsed_vars = set(), set()
     assigns = []
     for node in nodes:
@@ -263,7 +263,7 @@ def _rust_in_loop(lines, i):
             continue
         here = len(lines[j]) - len(lines[j].lstrip())
         if here < indent:
-            if re.match(r"(?:'\w+:\s*)?(?:while|loop|for)\b", text):
+            if re.match(r"(?:'\w+:\s*)?(?:while|loop)\b", text):
                 return True
             indent = here
     return False
