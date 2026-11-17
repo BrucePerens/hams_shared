@@ -12,7 +12,6 @@ import os
 import subprocess
 import sys
 import threading
-import time
 import unittest
 
 import mcp_watchdog_client as client
@@ -35,9 +34,7 @@ class _SilentSSEHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache")
         self.end_headers()
         self.wfile.flush()
-        deadline = time.monotonic() + 60
-        while time.monotonic() < deadline and not self.server.stop_flag.is_set():
-            time.sleep(0.1)
+        self.server.stop_flag.wait()  # held open until the test sets the flag; no wall-clock deadline
 
     def log_message(self, *args):  # keep the test output readable
         pass

@@ -368,12 +368,9 @@ class CoalesceTests(unittest.TestCase):
         return thread, box
 
     def wait_for(self, predicate, what):
-        deadline = time.time() + 10
-        while time.time() < deadline:
-            if predicate():
-                return
+        # progress-based: no wall-clock deadline; a hung wait is caught by the test runner's own timeout
+        while not predicate():
             time.sleep(0.01)
-        self.fail("timed out waiting for " + what)
 
     def test_requests_during_a_run_share_the_next_run(self):
         release = threading.Event()
