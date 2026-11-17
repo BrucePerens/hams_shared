@@ -186,6 +186,12 @@ class CheckServiceAccountAclTests(unittest.TestCase):
         )
         self.assertEqual(csa.check_service_account_acl([self.tmp], core_addons=""), [])
 
+    def test_missing_core_addons_directory_fails_loudly(self):
+        missing = os.path.join(self.tmp, "no_such_core_addons")
+        with self.assertRaises(RuntimeError) as ctx:
+            csa.check_service_account_acl([self.tmp], core_addons=missing)
+        self.assertIn(missing, str(ctx.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
