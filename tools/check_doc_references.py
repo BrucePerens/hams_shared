@@ -96,9 +96,12 @@ def is_excluded(rel):
 
 
 def tracked_files(root):
-    """Absolute paths of the files git tracks in `root` (none if it is not a git work tree)."""
-    out = subprocess.run(["git", "-C", root, "ls-files", "-z"], capture_output=True, check=False).stdout
-    return [os.path.join(root, os.fsdecode(name)) for name in out.split(b"\0") if name]
+    """Absolute paths of the files git tracks in `root` (none if it is not a git work tree). A checkout whose git directory is
+    broken is an error: reading it as having no files made every reference into it look broken (round 134: 510 false findings)."""
+    done = subprocess.run(["git", "-C", root, "ls-files", "-z"], capture_output=True, check=False)
+    if done.returncode != 0 and os.path.exists(os.path.join(root, ".git")):
+        sys.exit(f"check_doc_references: git ls-files failed in {root}: {done.stderr.decode('utf-8', 'replace').strip()}")
+    return [os.path.join(root, os.fsdecode(name)) for name in done.stdout.split(b"\0") if name]
 
 
 # [@ANCHOR: check_doc_references:check_doc_references_knowledge_class]

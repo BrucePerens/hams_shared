@@ -49,6 +49,18 @@ BASE = {
 }
 
 
+class TrackedFilesTests(unittest.TestCase):
+    def test_a_checkout_whose_git_directory_is_gone_is_an_error_not_an_empty_repository(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.assertEqual(cdr.tracked_files(directory.name), [])  # not a git work tree at all: nothing to read
+        with open(os.path.join(directory.name, ".git"), "w", encoding="utf-8") as handle:
+            handle.write("gitdir: " + os.path.join(directory.name, "missing") + "\n")
+        with self.assertRaises(SystemExit) as raised:
+            cdr.tracked_files(directory.name)
+        self.assertIn("git ls-files failed", str(raised.exception))
+
+
 class PathTests(unittest.TestCase):
     def setUp(self):
         self.tree = Tree(self, BASE)
