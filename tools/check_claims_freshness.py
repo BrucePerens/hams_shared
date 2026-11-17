@@ -716,6 +716,14 @@ def _read_claim_fields(path):
         return None
 
 
+def _claim_module(claim_path, rel):
+    """The module a claim file covers: `va.get_module` of its path, except that `daemons/claims/` (the claims of the daemons'
+    top-level files, whose own module is `daemons`) is `daemons` and not the directory name `claims`."""
+    if rel.split(os.sep)[:2] == ["daemons", "claims"]:
+        return "daemons"
+    return va.get_module(claim_path)
+
+
 def build_claim_index(repo_root, store_roots=()):
     """Returns the set of `(module, base_name)` keys covered by a claim file.
 
@@ -733,7 +741,7 @@ def build_claim_index(repo_root, store_roots=()):
         rel = os.path.relpath(claim_path, repo_root)
         if rel.split(os.sep)[:2] == ["docs", "bug_hunt_claims"]:
             continue
-        keys |= _claim_keys(claim_path, _read_claim_fields(claim_path), va.get_module(claim_path))
+        keys |= _claim_keys(claim_path, _read_claim_fields(claim_path), _claim_module(claim_path, rel))
     for store in store_roots:
         for dirpath, _dirs, files in os.walk(store):
             if os.path.basename(dirpath) != "claims":

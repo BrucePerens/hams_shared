@@ -495,6 +495,12 @@ class UnclaimedAnchorTests(unittest.TestCase):
         self.assertEqual(self._unclaimed(), [])
 
     # Tests [@ANCHOR: COMM_unclaimed_anchors]
+    def test_a_bare_claim_in_daemons_claims_covers_the_daemons_top_level_files(self):
+        self._src("daemons/helper.py", "def f():\n    # [@ANCHOR: helper_f]\n    pass\n")
+        self._claim("daemons/claims/helper_f.md", "helper_f")
+        self.assertEqual(self._unclaimed(), [])
+
+    # Tests [@ANCHOR: COMM_unclaimed_anchors]
     def test_a_claim_in_another_modules_claims_directory_does_not_count(self):
         _write(os.path.join(self.tmp, "other_mod", "__manifest__.py"), "{'name': 'other_mod'}\n")
         self._src("my_mod/models/thing.py", "def f():\n    # [@ANCHOR: shared_name]\n    pass\n")
