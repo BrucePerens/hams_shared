@@ -487,7 +487,9 @@ mod tests {
         let eval = |rel: &str, n: usize| check.eval(rel, rel, lines(n).as_bytes()).findings;
         assert!(eval(path, *count).is_empty());
         assert!(eval(path, count + 1)[0].message.contains("allowlisted"));
-        assert!(eval(path, count - 1)[0].message.contains("allowlist expects"));
+        assert!(eval(path, count - 1)[0]
+            .message
+            .contains("allowlist expects"));
         assert_eq!(eval("other/file.rs", 1).len(), 1);
     }
 
