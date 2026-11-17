@@ -80,9 +80,12 @@ class XMLNode:
         self.text = ""
 
     def walk(self):
-        yield self
-        for child in self.children:
-            yield from child.walk()
+        # Iterative pre-order: deeply nested markup must not hit the recursion limit.
+        pending = [self]
+        while pending:
+            node = pending.pop()
+            yield node
+            pending.extend(reversed(node.children))
 
     def get_ancestors(self):
         anc = []
@@ -165,7 +168,7 @@ def parse_odoo_xml(content):
         content_clean,
         flags=re.IGNORECASE,
     )
-    content_clean = content_clean.replace("&", "&amp;")
+    content_clean = re.sub(r"&(?!(?:amp|lt|gt|quot|apos|#[0-9]+|#x[0-9a-fA-F]+);)", "&amp;", content_clean)
 
     wrapped = f"\x3croot_wrapper\x3e{content_clean}\x3c/root_wrapper\x3e"
     parser = xml.parsers.expat.ParserCreate()
