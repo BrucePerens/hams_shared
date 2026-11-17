@@ -6014,6 +6014,15 @@ Every class of the tools that is not a function, with its fields, who creates it
 
 **Notes.** Subclass of `SnapshotError`; catch it before the parent when behind-ness is to be handled differently. Introduced so that moving main never invalidates a snapshot silently.
 
+### `_NoRedirect` [@ANCHOR: infrastructure:infrastructure__no_redirect_class]
+
+**Purpose.** Refuses every redirect: urllib copies all request headers, a bearer token included, to wherever a 3xx answer points.
+**Definition.** `class _NoRedirect(urllib.request.HTTPRedirectHandler)` in `tools/infrastructure.py`.
+
+**Methods.** `redirect_request(self, req, fp, code, msg, headers, newurl)`.
+
+**Notes.** `redirect_request` returns None. No state. Used for the Cloudflare zone-id lookup.
+
 ### `ProvisionPlan` [@ANCHOR: infrastructure:infrastructure_provision_plan_class]
 
 **Purpose.** Recorder used by infrastructure when provisioning is run in plan mode: instead of changing the machine, each step records its kind and a detail text, so the plan can be printed or checked by a test.
