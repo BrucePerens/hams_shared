@@ -166,6 +166,16 @@ class SiblingRootsTests(unittest.TestCase):
         roots = cdr.sibling_roots(os.path.join(base, "job", "hams_com"))
         self.assertEqual([cdr.repo_name(r) for r in roots], ["hams_com", "hams_open", "hams_shared"])
 
+    def test_a_lone_canary_tree_finds_the_main_checkout_through_its_hams_shared_link(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        base = os.path.realpath(tmp.name)
+        for rel in ("main/hams_open/hams_shared", "canary/hams_com"):
+            os.makedirs(os.path.join(base, rel))
+        os.symlink(os.path.join(base, "main", "hams_open", "hams_shared"), os.path.join(base, "canary", "hams_com", "hams_shared"))
+        roots = cdr.sibling_roots(os.path.join(base, "canary", "hams_com"))
+        self.assertEqual([cdr.repo_name(r) for r in roots], ["hams_com", "hams_shared", "hams_open"])
+
     def test_explicit_siblings_are_used_when_nothing_sits_beside_the_tree(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)

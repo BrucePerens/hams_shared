@@ -412,8 +412,12 @@ def sibling_roots(root, extra=()):
         other = os.path.realpath(given)
         if os.path.isdir(other) and other not in roots and repo_name(other) not in [repo_name(r) for r in roots]:
             roots.append(other)
-    for candidate in ("hams_com", "hams_open", os.path.join("hams_open", "hams_shared"), "hams_shared"):
-        other = os.path.realpath(os.path.join(parent, candidate))
+    # A canary or combined tree sits alone in its parent, but its `hams_shared` link (fix_worktree_symlinks.py) points into the
+    # main hams_open checkout: that checkout and the one beside it are the siblings.
+    linked = os.path.realpath(os.path.join(root, "hams_shared"))
+    linked_candidates = [linked, os.path.dirname(linked)] if os.path.basename(os.path.dirname(linked)) == "hams_open" else []
+    for candidate in [os.path.join(parent, name) for name in ("hams_com", "hams_open", os.path.join("hams_open", "hams_shared"), "hams_shared")] + linked_candidates:
+        other = os.path.realpath(candidate)
         if os.path.isdir(other) and other not in roots and repo_name(other) != repo_name(root):
             if repo_name(other) not in [repo_name(r) for r in roots]:
                 roots.append(other)
