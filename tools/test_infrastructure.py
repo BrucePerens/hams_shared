@@ -451,14 +451,22 @@ class PdnsPublicConfigTests(_TmpDirTestCase):
         c = self._settings()
         self.assertEqual(c["launch"], "gsqlite3:main,gsqlite3:callbook")
         self.assertEqual(c["gsqlite3-callbook-database"], "/var/lib/powerdns/callbook/callbook.sqlite3")
-        self.assertNotIn("resolver", c)
         self.assertNotIn("recursor", c)
         self.assertNotIn("local-port", c, "port 53 is the default")
-        self.assertNotEqual(c["expand-alias"] if "expand-alias" in c else "no", "yes")
         # hams1 is the primary for prove1 (ns2) only: transfers to its address, no NOTIFY accepted, main backend DNSSEC-capable (hams.com unsigned)
         self.assertEqual((c["primary"], c["secondary"], c["disable-axfr"], c["allow-notify-from"]), ("yes", "no", "no", ""))
         self.assertEqual((c["allow-axfr-ips"], c["also-notify"], c["default-api-rectify"]), ("149.28.221.130", "149.28.221.130", "yes"))
         self.assertEqual((c["gsqlite3-main-dnssec"], c["gsqlite3-callbook-dnssec"]), ("yes", "no"))
+
+    def test_alias_expansion_settings_match_what_runs_on_hams1(self):
+        """The apex hams.com ALIAS to hams.perens.com needs these three (set by hand on hams1 on 2026-11-16, so
+        a provisioning run must render them, not undo them). The resolver is only used for ALIAS lookups; the
+        server still answers no recursion (see test_names_outside_our_zones_are_still_refused...)."""
+        c = self._settings()
+        self.assertEqual(infra.PDNS_ALIAS_RESOLVER, "108.61.10.10")
+        self.assertEqual(c["resolver"], infra.PDNS_ALIAS_RESOLVER)
+        self.assertEqual((c["expand-alias"], c["outgoing-axfr-expand-alias"]), ("yes", "yes"))
+        self.assertNotIn("{", c["resolver"])
 
     def test_amplification_and_exposure_settings(self):
         c = self._settings()

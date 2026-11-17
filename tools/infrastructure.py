@@ -1790,6 +1790,10 @@ TENANT_TIMER_RETIRED = (
 # line of a wrapper script, because a `#!` at the start of a line inside this Python file is read by
 # check_shebang.py as a misplaced shebang. expand_manifest_tokens() replaces both in every string.
 ACCOUNT_HOME_PARENT = "/home"
+# The recursive resolver PowerDNS uses ONLY to expand ALIAS records (the pdns-gsqlite3.conf `resolver` setting;
+# the server answers no recursion to clients). 108.61.10.10 is the hosting provider's resolver that hams1 uses.
+# To change it, change this value and re-render the file (docs/runbooks/HAMS1_POWERDNS_CONFIG_CHANGE_2026-11-12.md).
+PDNS_ALIAS_RESOLVER = "108.61.10.10"
 MANIFEST_TOKENS = {
     "@ACCOUNT_HOME_PARENT@": ACCOUNT_HOME_PARENT,
     "@BASH_SHEBANG@": "#!/bin/bash",
@@ -3576,9 +3580,11 @@ MANIFEST = {
             # is the option only if we ever run more than one DNS server), so this file is
             # what keeps the public listener from being an amplifier, using only PowerDNS's
             # own documented settings (https://doc.powerdns.com/authoritative/settings.html):
-            #   authoritative only: no recursion exists in this server, `resolver` stays unset
-            #     (it is only for ALIAS lookups) and `expand-alias` stays at its default no;
-            #     a name outside our zones gets REFUSED. Zone transfers (primary=yes, disable-axfr=no) go
+            #   authoritative only: no recursion exists in this server. `resolver` (PDNS_ALIAS_RESOLVER,
+            #     near the top of this file) is used ONLY to expand ALIAS records, with `expand-alias` and
+            #     `outgoing-axfr-expand-alias` yes: the apex hams.com ALIAS to hams.perens.com needs them
+            #     (set by hand on hams1 on 2026-11-16, rendered here since); AXFR to prove1 carries the
+            #     expanded A/AAAA. A name outside our zones gets REFUSED. Zone transfers (primary=yes, disable-axfr=no) go
             #     only to prove1 (ns2, 149.28.221.130) through allow-axfr-ips, or to a holder of its TSIG
             #     key; secondary=no and an empty allow-notify-from: hams1 accepts no NOTIFY. Since
             #     2026-11-12 (docs/runbooks/HAMS1_POWERDNS_CONFIG_CHANGE_2026-11-12.md) the main backend
@@ -3626,6 +3632,9 @@ allow-axfr-ips=149.28.221.130
 default-api-rectify=yes
 also-notify=149.28.221.130
 allow-notify-from=
+resolver={PDNS_ALIAS_RESOLVER}
+expand-alias=yes
+outgoing-axfr-expand-alias=yes
 any-to-tcp=yes
 udp-truncation-threshold=1232
 lua-prequery-script=/opt/hams/etc/pdns-prequery.lua
@@ -3637,7 +3646,7 @@ version-string=anonymous
 security-poll-suffix=
 log-dns-queries=no
 loglevel=4
-""",
+""".replace("{PDNS_ALIAS_RESOLVER}", PDNS_ALIAS_RESOLVER),
             "owner": "pdns:pdns",
             "mode": "640",
             "environments": ["prod"],
