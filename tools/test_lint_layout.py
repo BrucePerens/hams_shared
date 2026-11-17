@@ -149,6 +149,9 @@ class BuildTests(LayoutTestCase):
         git(self.ws.com_main, "update-ref", "refs/remotes/origin/main", newer)
         git(self.ws.com_main, "checkout", "-q", "--detach", old)
         git(self.ws.com_main, "branch", "-q", "-D", "main")
+        # The real source is a shallow checkout, whose local clone goes through the pack protocol (heads only).
+        with open(os.path.join(self.ws.com_main, ".git", "shallow"), "w") as handle:
+            handle.write(old + "\n")
         layout = self.ws.build()
         self.addCleanup(lint_layout.remove, layout)
         self.assertTrue(os.path.isfile(os.path.join(layout.hams_com, "c", "more.py")))
