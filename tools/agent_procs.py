@@ -824,6 +824,9 @@ def wait_job(name, timeout=DEFAULT_WAIT_TIMEOUT, interval=POLL_INTERVAL, sleep=t
             state = job_state(rec)
         if state == "exited":
             why = " (it hit its own timeout and was stopped)" if rec.exit_reason == "timeout" else ""
+            if rec.exit_code in (137, 143) and rec.mem_max:  # killed by a signal under a cap: systemd's OOM policy stops the whole scope that way
+                why = (f" (killed by a signal and the job has a memory cap of {rec.mem_max}: if the log ends abruptly it probably "
+                       f"exceeded the cap; rerun with a higher --mem-max. Check `journalctl --user` for the OOM line)")
             return WaitResult(EX_OK if rec.exit_code == 0 else EX_FAILED, f"job {name} exited with code {rec.exit_code}{why}")
         if state == "lost":
             return WaitResult(EX_FAILED, f"job {name} is gone without an exit code (killed?); log: {rec.log}")
