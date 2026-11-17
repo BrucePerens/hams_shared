@@ -462,7 +462,7 @@ def enter_slot(lock, environ=None, base_tmp=None):
     base = base_tmp or environ.get("TMPDIR") or "/tmp"
     # Slot 1 keeps the caller's TMPDIR; a later slot gets `<TMPDIR>/s<K>`. The name is deliberately short: Chrome's profile
     # directory lives under TMPDIR and its singleton socket path must stay under the 107 bytes of a unix socket address
-    # (`<TMPDIR>/hams-lint-slot-1/owl_template_check_x/com.google.Chrome.x/SingletonSocket` was 119 and failed 2026-11-08).
+    # (`<TMPDIR>/hams-lint-slot-1/owl_x/com.google.Chrome.x/SingletonSocket` was 119 and failed 2026-11-08).
     if lock.slot > 1:
         if re.fullmatch(r"s\d+", os.path.basename(base)):
             base = os.path.dirname(base)
