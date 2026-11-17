@@ -59,7 +59,8 @@ logdir = args[args.index("-l") + 1]
 os.makedirs(logdir, exist_ok=True)
 with open(os.environ["FAKE_CALLS"], "a") as calls:
     calls.write(",".join(modules) + "\n")
-time.sleep(float(os.environ.get("FAKE_SLEEP", "0")))
+while os.environ.get("FAKE_GATE") and not os.path.exists(os.environ["FAKE_GATE"]):  # the test opens the gate once the other branches have joined
+    time.sleep(0.02)
 bad = []
 for module in modules:
     for root, dirs, files in os.walk(module):
@@ -241,7 +242,7 @@ class EndToEndTests(unittest.TestCase):
         os.makedirs(self.records)
         self.sdir = os.path.join(self.tmp, "state")
         self.env = dict(os.environ, HAMS_BATCH_TREE_DIR=os.path.join(self.tmp, "trees"), FAKE_CALLS=self.calls,
-                        FAKE_SLEEP="2", HAMS_BATCH_DIR=os.path.join(self.tmp, "b"))
+                        FAKE_GATE=os.path.join(self.tmp, "gate"), HAMS_BATCH_DIR=os.path.join(self.tmp, "b"))
 
     def module_branch(self, name, module, text="ok\n"):
         os.makedirs(os.path.join(self.work, module), exist_ok=True)
@@ -254,18 +255,34 @@ class EndToEndTests(unittest.TestCase):
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
     def finish(self, proc):
-        out, _ = proc.communicate(timeout=120)
+        out, _ = proc.communicate()
         line = [item for item in out.splitlines() if item.startswith("RESULT ")]
         self.assertTrue(line, out)
         return json.loads(line[0][7:])["code"], out
 
-    def wait_for_calls(self, count):
-        deadline = time.time() + 30
-        while time.time() < deadline:
-            if os.path.exists(self.calls) and len(open(self.calls).read().splitlines()) >= count:
-                return
-            time.sleep(0.05)
-        self.fail("the first run never started")
+    def wait_for_calls(self, count, proc):
+        """Block until the fake test runner has been called `count` times (no clock: a runner that never starts ends the
+        run process, which is then a failure)."""
+        while not (os.path.exists(self.calls) and len(open(self.calls).read().splitlines()) >= count):
+            if proc.poll() is not None:
+                self.fail("the run ended before the fake test runner started: " + proc.stdout.read())
+            time.sleep(0.02)
+
+    def wait_forming(self, branches, procs):
+        """Block until `branches` distinct tips are in the forming batch, then let the running fake finish."""
+        path = os.path.join(self.sdir, "state.json")
+        while True:
+            try:
+                forming = json.load(open(path)).get("forming") or {}
+            except (OSError, ValueError):
+                forming = {}
+            if len({m["tip"] for m in forming.get("members", [])}) >= branches:
+                break
+            for proc in procs:
+                if proc.poll() is not None:
+                    self.fail("a run ended before the batch formed: " + proc.stdout.read())
+            time.sleep(0.02)
+        open(os.path.join(self.tmp, "gate"), "w").close()
 
     def test_modules_of_waiting_branches_are_tested_once_and_failures_are_attributed_by_module(self):
         first = self.module_branch("first", "ham_first")
@@ -273,9 +290,10 @@ class EndToEndTests(unittest.TestCase):
         b = self.module_branch("bad-b", "ham_b", "BAD\n")
         c = self.module_branch("good-c", "ham_c")
         p0 = self.start("first", first, "ham_first")
-        self.wait_for_calls(1)
+        self.wait_for_calls(1, p0)
         procs = {name: self.start(name, tip, mod) for name, tip, mod in
                  (("good-a", a, "ham_a"), ("bad-b", b, "ham_b"), ("good-c", c, "ham_c"))}
+        self.wait_forming(3, [p0, *procs.values()])
         code0, out0 = self.finish(p0)
         results = {name: self.finish(proc) for name, proc in procs.items()}
         self.assertEqual(code0, 0, out0)
@@ -294,7 +312,6 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual(os.listdir(trees) if os.path.isdir(trees) else [], [])
 
     def test_a_crash_with_no_implicated_module_splits_and_passes_the_healthy_half(self):
-        self.env["FAKE_SLEEP"] = "1"
         first = self.module_branch("first", "ham_first")
         a = self.module_branch("good-a", "ham_a")
         c = self.module_branch("good-c", "ham_c")
@@ -310,9 +327,10 @@ class EndToEndTests(unittest.TestCase):
         d = git(self.work, "rev-parse", "HEAD")
         git(self.work, "checkout", "-q", "main")
         p0 = self.start("first", first, "ham_first")
-        self.wait_for_calls(1)
+        self.wait_for_calls(1, p0)
         procs = {name: self.start(name, tip, mod) for name, tip, mod in
                  (("good-a", a, "ham_a"), ("good-c", c, "ham_c"), ("crash-d", d, "ham_d"))}
+        self.wait_forming(3, [p0, *procs.values()])
         self.finish(p0)
         results = {name: self.finish(proc) for name, proc in procs.items()}
         self.assertEqual(results["good-a"][0], 0, results["good-a"][1])
@@ -865,7 +883,7 @@ def drive(argv):
                                                            for m in member["scope"]})),
         "-l", os.path.join(os.path.dirname(results), "logs")]
     code = otb.lint_batch.run_member(spec["repo"], "hams_demo", spec["branch"], spec["tip"], "origin/main",
-                                     [spec["modules"]], runner, timeout=60, poll=0.1, sdir=spec["sdir"], kind="test")
+                                     [spec["modules"]], runner, timeout=None, poll=0.1, sdir=spec["sdir"], kind="test")
     print("RESULT " + json.dumps({"code": code}))
 
 
