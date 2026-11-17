@@ -445,6 +445,16 @@ class UnclaimedAnchorTests(unittest.TestCase):
         self.assertEqual(self._unclaimed(), [("my_mod", "unclaimed")])
 
     # Tests [@ANCHOR: COMM_unclaimed_anchors]
+    def test_anchors_on_classes_fields_and_module_comments_are_not_listed(self):
+        self._src(
+            "my_mod/models/thing.py",
+            "# [@ANCHOR: module_level_note]\n\n\n"
+            "class Thing:\n    # [@ANCHOR: thing_class_anchor]\n    x = 1\n\n\n"
+            "def f():\n    # [@ANCHOR: f_anchor]\n    pass\n",
+        )
+        self.assertEqual(self._unclaimed(), [("my_mod", "f_anchor")])
+
+    # Tests [@ANCHOR: COMM_unclaimed_anchors]
     def test_the_location_is_reported_relative_to_the_scanned_directory(self):
         self._src("my_mod/models/thing.py", "def f():\n    # [@ANCHOR: lonely]\n    pass\n")
         _init_git_repo(self.tmp)
