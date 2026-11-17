@@ -51,7 +51,8 @@ with open(os.environ["FAKE_CALLS"], "a") as calls:
 if os.environ.get("FAKE_CWD_LOG"):
     with open(os.environ["FAKE_CWD_LOG"], "a") as cwd_log:
         cwd_log.write(os.path.basename(os.getcwd()) + "\n")
-time.sleep(float(os.environ.get("FAKE_SLEEP", "0")))
+while os.environ.get("FAKE_GATE") and not os.path.exists(os.environ["FAKE_GATE"]):  # the test opens it once the others joined
+    time.sleep(0.02)
 text, rc = "", 0
 for root, dirs, files in os.walk("."):
     dirs[:] = [d for d in dirs if d != ".git"]
@@ -87,8 +88,26 @@ def drive(argv):
         command=lambda tree, results: [sys.executable, spec["fake"], results], prepare=lambda tree: None,
         environ=dict(os.environ), fetch=False)
     code = lint_batch.run_member(spec["repo"], name, spec["branch"], spec["tip"], "origin/main", ["fake"],
-                                 runner, timeout=60, poll=0.1, sdir=spec.get("sdir"), max_running=spec.get("max_running"))
+                                 runner, timeout=None, poll=0.1, sdir=spec.get("sdir"), max_running=spec.get("max_running"))
     print("RESULT " + json.dumps({"code": code}))
+
+
+def wait_until_forming(sdir, branches, procs, gate):
+    """Block until `branches` distinct tips are in the forming batch of the queue in `sdir` (a process of `procs` that
+    ends first is a failure), then create the `gate` file the fake linter is waiting for."""
+    path = os.path.join(sdir, "state.json")
+    while True:
+        try:
+            forming = json.load(open(path)).get("forming") or {}
+        except (OSError, ValueError):
+            forming = {}
+        if len({m["tip"] for m in forming.get("members", [])}) >= branches:
+            break
+        for proc in procs:
+            if proc.poll() is not None:
+                raise AssertionError("a run ended before the batch formed: " + proc.stdout.read())
+        time.sleep(0.02)
+    open(gate, "w").close()
 
 
 class ForeignSharedTests(unittest.TestCase):
@@ -465,7 +484,7 @@ class EndToEndTests(unittest.TestCase):
         os.makedirs(self.stamps)
         self.sdir = os.path.join(self.tmp, "state")
         self.env = dict(os.environ, HAMS_BATCH_TREE_DIR=os.path.join(self.tmp, "trees"), FAKE_CALLS=self.calls,
-                        FAKE_SLEEP="2", HAMS_BATCH_DIR=os.path.join(self.tmp, "b"))
+                        FAKE_GATE=os.path.join(self.tmp, "gate"), HAMS_BATCH_DIR=os.path.join(self.tmp, "b"))
         for name in ("HAMS_LINT_LOCK_HELD", lint_batch.RUNNER_ENV):
             self.env.pop(name, None)
 
@@ -476,18 +495,21 @@ class EndToEndTests(unittest.TestCase):
                                 env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
     def finish(self, proc):
-        out, _ = proc.communicate(timeout=120)
+        out, _ = proc.communicate()
         line = [item for item in out.splitlines() if item.startswith("RESULT ")]
         self.assertTrue(line, out)
         return json.loads(line[0][7:])["code"], out
 
-    def wait_for_calls(self, count):
-        deadline = time.time() + 30
-        while time.time() < deadline:
-            if os.path.exists(self.calls) and len(open(self.calls).read().splitlines()) >= count:
-                return
-            time.sleep(0.05)
-        self.fail("the first run never started")
+    def wait_for_calls(self, count, proc):
+        """Block until the fake linter has been called `count` times (no clock: a run that ended without starting it fails)."""
+        while not (os.path.exists(self.calls) and len(open(self.calls).read().splitlines()) >= count):
+            if proc.poll() is not None:
+                self.fail("the run ended before the fake linter started: " + proc.stdout.read())
+            time.sleep(0.02)
+
+    def wait_forming(self, branches, procs):
+        """Block until `branches` distinct tips are in the forming batch, then open the gate so the running fake finishes."""
+        wait_until_forming(self.sdir, branches, procs, os.path.join(self.tmp, "gate"))
 
     def test_requests_during_a_run_become_one_combined_run_with_per_branch_verdicts(self):
         first = helpers.commit_branch(self.work, "first", {"f1.txt": "ok\n"})
@@ -495,9 +517,10 @@ class EndToEndTests(unittest.TestCase):
         bad_b = helpers.commit_branch(self.work, "bad-b", {"b1.txt": "this is BAD\n"})
         good_c = helpers.commit_branch(self.work, "good-c", {"c1.txt": "ok\n"})
         p0 = self.start("first", first)
-        self.wait_for_calls(1)  # batch 1 is running its (slow) fake linter
+        self.wait_for_calls(1, p0)  # batch 1 is running its (gated) fake linter
         procs = [(name, tip, self.start(name, tip)) for name, tip in
                  (("good-a", good_a), ("bad-b", bad_b), ("good-c", good_c))]
+        self.wait_forming(3, [p0] + [proc for _n, _t, proc in procs])
         code0, out0 = self.finish(p0)
         results = {name: self.finish(proc) for name, _tip, proc in procs}
         self.assertEqual(code0, 0, out0)
@@ -534,16 +557,16 @@ class EndToEndTests(unittest.TestCase):
         self.assertNotIn("batch_lint", helpers.git(self.work, "worktree", "list"))
 
     def test_with_two_batches_allowed_a_second_run_starts_beside_the_first_and_the_third_waits(self):
-        self.env["FAKE_SLEEP"] = "3"
         first = helpers.commit_branch(self.work, "first", {"f1.txt": "ok\n"})
         second = helpers.commit_branch(self.work, "second", {"s1.txt": "ok\n"})
         third = helpers.commit_branch(self.work, "third", {"t1.txt": "ok\n"})
         p1 = self.start("first", first, max_running=2)
-        self.wait_for_calls(1)
+        self.wait_for_calls(1, p1)
         p2 = self.start("second", second, max_running=2)
-        self.wait_for_calls(2)  # batch 2 started while batch 1 is still inside its fake linter
+        self.wait_for_calls(2, p2)  # batch 2 started while batch 1 is still inside its (gated) fake linter
         self.assertIsNone(p1.poll())
         p3 = self.start("third", third, max_running=2)
+        self.wait_forming(1, [p1, p2, p3])  # the third is waiting for a slot
         outs = [self.finish(proc) for proc in (p1, p2, p3)]
         self.assertEqual([code for code, _out in outs], [0, 0, 0], outs)
         self.assertIn("1 of 2 running slots are in use here; starting at once", outs[1][1])
@@ -553,13 +576,13 @@ class EndToEndTests(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(self.stamps, tip)))
 
     def test_conflicting_branch_runs_alone_and_unattributable_failure_splits(self):
-        self.env["FAKE_SLEEP"] = "1"
         base_tip = helpers.commit_branch(self.work, "base", {"z.txt": "z\n"})
         one = helpers.commit_branch(self.work, "one", {"shared.txt": "1\nONE\n3\n4\n5\n6\n7\n"})
         two = helpers.commit_branch(self.work, "two", {"shared.txt": "1\nTWO\n3\n4\n5\n6\n7\n"})
         p0 = self.start("base", base_tip)
-        self.wait_for_calls(1)
+        self.wait_for_calls(1, p0)
         p1, p2 = self.start("one", one), self.start("two", two)
+        self.wait_forming(2, [p0, p1, p2])
         code0, _ = self.finish(p0)
         r1, r2 = self.finish(p1), self.finish(p2)
         self.assertEqual(code0, 0)
@@ -590,7 +613,7 @@ class SharedBranchEndToEndTests(unittest.TestCase):
         self.stamps = os.path.join(self.tmp, "stamps")
         os.makedirs(self.stamps)
         self.env = dict(os.environ, HAMS_BATCH_TREE_DIR=os.path.join(self.tmp, "trees"), FAKE_CALLS=self.calls,
-                        FAKE_CWD_LOG=self.cwd_log, FAKE_SLEEP="2", HAMS_BATCH_DIR=os.path.join(self.tmp, "b"))
+                        FAKE_CWD_LOG=self.cwd_log, FAKE_GATE=os.path.join(self.tmp, "gate"), HAMS_BATCH_DIR=os.path.join(self.tmp, "b"))
         for name in ("HAMS_LINT_LOCK_HELD", lint_batch.RUNNER_ENV):
             self.env.pop(name, None)
 
@@ -616,14 +639,16 @@ class SharedBranchEndToEndTests(unittest.TestCase):
         a_tree, tip_a = self.branch("shared-a", {"a1.txt": "ok\n"})
         b_tree, tip_b = self.branch("shared-b", {"b1.txt": "BAD\n"})
         p0 = self.start(first_tree, "first", first)
-        deadline = time.time() + 30
-        while time.time() < deadline and not (os.path.exists(self.calls) and open(self.calls).read().strip()):
-            time.sleep(0.05)
-        self.assertTrue(os.path.exists(self.calls), "the first run never started")
+        while not (os.path.exists(self.calls) and open(self.calls).read().strip()):
+            if p0.poll() is not None:
+                self.fail("the first run ended before the fake linter started: " + p0.stdout.read())
+            time.sleep(0.02)
         pa, pb = self.start(a_tree, "shared-a", tip_a), self.start(b_tree, "shared-b", tip_b)
+        sdir = batch_queue.state_dir(lint_batch.KIND, batch_queue.repo_key(a_tree), self.env)
+        wait_until_forming(sdir, 2, [p0, pa, pb], os.path.join(self.tmp, "gate"))
         outs = {}
         for name, proc in (("first", p0), ("a", pa), ("b", pb)):
-            out, _ = proc.communicate(timeout=120)
+            out, _ = proc.communicate()
             result = [line for line in out.splitlines() if line.startswith("RESULT ")]
             self.assertTrue(result, out)
             outs[name] = (json.loads(result[0][7:])["code"], out)
