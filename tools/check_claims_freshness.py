@@ -390,7 +390,8 @@ def recorded_hash_matches(recorded, current):
 
 
 def _git_out(root, *args):
-    result = subprocess.run(["git", "-C", root, *args], capture_output=True, text=True)
+    # An old revision of a file may hold bytes that are not UTF-8: decode leniently, never crash the history check.
+    result = subprocess.run(["git", "-C", root, *args], capture_output=True, text=True, errors="replace")
     return result.stdout if result.returncode == 0 else None
 
 
@@ -416,9 +417,14 @@ class FreshnessContext:
         if self._cache is None:
             try:
                 with open(self.cache_path, "r", encoding="utf-8") as f:
-                    self._cache = json.load(f)
+                    loaded = json.load(f)
             except (OSError, ValueError):
-                self._cache = {}
+                loaded = None
+            # A damaged cache (wrong shape) is dropped entry by entry: it only ever makes a run slower.
+            self._cache = {
+                key: value for key, value in (loaded.items() if isinstance(loaded, dict) else ())
+                if isinstance(value, list) and len(value) == 2 and value[0] in ("fresh", "stale") and isinstance(value[1], str)
+            }
         return self._cache
 
     def save(self):
@@ -538,6 +544,12 @@ def claim_hash_problem(fields, claim_path, anchor, info, context):
     )
 
 
+def hashable_not_computable(repo_root):
+    """Relative paths of the `not computable` claims whose anchor can be hashed today (the content of the baseline)."""
+    problems, _retired = scan_claims(repo_root, hashable_baseline=set())
+    return sorted(os.path.relpath(p, repo_root) for p, text in problems if "now hashable" in text)
+
+
 def check_claims(repo_root):
     """Returns a list of (claim_path, problem) for every claims/*.md file whose own recorded
     hash doesn't match the anchor's current code, or whose anchor no longer exists at all.
@@ -547,7 +559,35 @@ def check_claims(repo_root):
     return scan_claims(repo_root)[0]
 
 
-def scan_claims(repo_root, context=None):
+_TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _repo_name(repo_root):
+    base = os.path.basename(os.path.realpath(repo_root))
+    for name in ("hams_shared", "hams_open", "hams_com"):
+        if base.startswith(name):
+            return name
+    return base
+
+
+def hashable_baseline_path(repo_root):
+    """The ratchet file of claims that still say `not computable` for an anchor that can be hashed today."""
+    return os.path.join(_TOOLS_DIR, f"claims_not_computable_baseline_{_repo_name(repo_root)}.json")
+
+
+def load_hashable_baseline(repo_root):
+    try:
+        with open(hashable_baseline_path(repo_root), "r", encoding="utf-8") as f:
+            return set(json.load(f))
+    except (OSError, ValueError):
+        return set()
+
+
+def _is_not_computable(fields):
+    return fields["code_hash"].strip().lower().startswith("not computable")
+
+
+def scan_claims(repo_root, context=None, hashable_baseline=None):
     """Returns `(problems, retired)`: the same (claim_path, problem) list `check_claims` returns,
     plus the paths of every claim deliberately retired (see COMM_claim_retirement). A retired
     claim is not hash-checked -- its anchor is gone on purpose -- but is reported as a non-failing
@@ -556,6 +596,7 @@ def scan_claims(repo_root, context=None):
     retired = []
     pending = []  # (claim_path, fields, anchor) claims that carry a real hash
     context = context or FreshnessContext()
+    uncomputed = []  # (claim_path, anchor) of `not computable` claims: a tooling gap that may have closed since
 
     for claim_path in _git_tracked_files(repo_root, ".md"):
         if f"{os.sep}claims{os.sep}" not in claim_path:
@@ -598,16 +639,23 @@ def scan_claims(repo_root, context=None):
                 problems.append((claim_path, retirement_problem))
             continue
 
-        if fields["code_hash"].strip().lower().startswith("not computable"):
+        if _is_not_computable(fields):
             # A declared tooling gap (a claim written before the per-language normalizers, or an
-            # anchor-less function): not a freshness problem. write_claim.py now records a real
-            # hash for every language it can anchor.
+            # anchor-less function): not a freshness problem while the anchor really cannot be hashed. When it
+            # can be (the normalizers now exist), the claim is never freshness-checked: see below.
+            uncomputed.append((claim_path, fields["anchor"]))
             continue
         pending.append((claim_path, fields, fields["anchor"]))
 
-    if pending:
-        wanted = {va._clean(anchor) for _p, _f, anchor in pending}
+    if pending or uncomputed:
+        wanted = {va._clean(anchor) for _p, _f, anchor in pending} | {va._clean(a) for _p, a in uncomputed}
         index = build_anchor_index(repo_root, wanted)
+        grandfathered = load_hashable_baseline(repo_root) if hashable_baseline is None else hashable_baseline
+        for claim_path, anchor in uncomputed:
+            rel = os.path.relpath(claim_path, repo_root)
+            if va._clean(anchor) in index and rel not in grandfathered:
+                problems.append((claim_path, f"declares 'not computable' but anchor '{anchor}' is now hashable, so its "
+                                 "freshness is never checked: rewrite the claim with write_claim.py after confirming it"))
         for claim_path, fields, anchor in pending:
             info = index.get(va._clean(anchor))
             if info is None:
@@ -836,6 +884,11 @@ def main():
         "claim file under its module's claims/ directory (read-only, always exits 0)",
     )
     parser.add_argument(
+        "--generate-hashable-baseline",
+        action="store_true",
+        help="record the `not computable` claims whose anchor is hashable today as the ratchet baseline (it only ever shrinks)",
+    )
+    parser.add_argument(
         "--claims-store",
         action="append",
         default=[],
@@ -852,6 +905,13 @@ def main():
     if not os.path.isdir(repo_root):
         print(f"[!] ERROR: {args.directory!r} is not a directory (resolved to {repo_root}).")
         return 2
+    if args.generate_hashable_baseline:
+        names = hashable_not_computable(repo_root)
+        with open(hashable_baseline_path(repo_root), "w", encoding="utf-8") as handle:
+            json.dump(names, handle, indent=1)
+            handle.write("\n")
+        print(f"[*] Baseline written: {len(names)} 'not computable' claims with a hashable anchor")
+        return 0
     if args.unclaimed:
         for store in args.claims_store:
             if not os.path.isdir(store):
