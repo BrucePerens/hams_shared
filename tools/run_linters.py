@@ -2254,7 +2254,7 @@ def main():
         [
             python_exec,
             os.path.join(dir_path, "tools", "check_service_account_acl.py"),
-            dir_path,
+            repo_root if layout is not None else dir_path,  # a hams_shared tree has no modules: lint the layout's repos
         ],
     )
 
@@ -2393,7 +2393,7 @@ def main():
             ),
         ],
     )
-    if os.path.basename(main_checkout_root) == "hams_open":
+    if layout is not None:  # only a hams_shared tree: dir_path is then hams_shared, the repo this baseline records
         _add(
             "check_doc_references_shared",
             [
@@ -2537,7 +2537,7 @@ def main():
         [
         python_exec,
         os.path.join(dir_path, "tools", "check_hoot_runner_coverage.py"),
-        dir_path,
+        repo_root if layout is not None else dir_path,  # a hams_shared tree has no modules: lint the layout's repos
         sibling_dir,
     ],
     )

@@ -4609,6 +4609,7 @@ WantedBy=timers.target
   "files": [
     {{"name": "hams_crypto_secret", "path": "/var/lib/odoo/hams_crypto.secret", "optional": true}}
   ],
+  "config_set": true,
   "tenant_spec_dir": "/opt/hams/etc/tenants.d",
   "tenant_data_root": "/var/lib/hams-tenants",
   "databases": ["hams_prod"],

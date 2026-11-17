@@ -330,11 +330,13 @@ class TraceCacheEndToEndTests(unittest.TestCase):
 
     # Tests [@ANCHOR: lint_trace_cache:run_traced]
     def test_a_traced_run_returns_when_the_main_process_ends_not_when_its_leftovers_do(self):
-        started = time.monotonic()
+        # The leftover loops until a release file exists, which the test creates only after the traced run has returned: if
+        # run_traced waited for it, the run would hang (the 120 s limit is only a hang guard, not an assertion on elapsed time).
+        release = os.path.join(self.tmp, "release")
         code = subprocess.run([PY, ltc.__file__, "run", os.path.join(self.tmp, "t.txt"), "--", "bash", "-c",
-                               "sleep 20 >/dev/null 2>&1 & exit 3"]).returncode
+                               "(while [ ! -e %s ]; do sleep 0.1; done) >/dev/null 2>&1 & exit 3" % release], timeout=120).returncode
+        open(release, "w").close()
         self.assertEqual(code, 3)
-        self.assertLess(time.monotonic() - started, 10)
         self.assertEqual(subprocess.run([PY, ltc.__file__, "run", os.path.join(self.tmp, "k.txt"), "--", "bash", "-c", "kill -9 $$"]).returncode,
                          137)
 

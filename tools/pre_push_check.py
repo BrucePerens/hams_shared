@@ -78,6 +78,10 @@ def check_branch(repo, sha, tools_dir, seconds=PUSH_CHECK_SECONDS, say=print):
         if merged.returncode != 0:
             say("pre-push: merging %s into origin/main conflicts; merge origin/main into your branch before the PR. Push allowed." % sha[:10])
             return True
+        problem = merge_pr.ensure_shared_submodule(repo, tree, main)  # a hams_open pointer-bump branch leaves hams_shared empty here
+        if problem:
+            say("pre-push: could not check out the hams_shared submodule (%s); push allowed. merge_pr.py will run the checks." % problem)
+            return True
         files = git(["diff", "--name-only", "origin/main...HEAD"], cwd=tree).stdout.split()
         try:
             failure = merge_pr.first_failure(merge_pr.check_plan(repo, files, tree), deadline_runner(merge_pr.run, deadline), merge_pr.scope_needles(files, tree))

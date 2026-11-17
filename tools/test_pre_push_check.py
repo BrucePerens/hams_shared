@@ -37,6 +37,46 @@ class PrePushCheckTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
 
 
+class CheckBranchSubmoduleTests(unittest.TestCase):
+    def test_a_failed_submodule_checkout_allows_the_push_and_a_good_one_runs_the_checks_in_a_populated_tree(self):
+        import sys
+        import types
+        job = tempfile.mkdtemp()
+        self.addCleanup(subprocess.run, ["rm", "-rf", job])
+        tree = os.path.join(job, "hams_open")
+        subprocess.run(["git", "init", "-q", tree], check=True)
+        calls = []
+        problem = ["boom"]
+        fake_wt = types.ModuleType("new_agent_worktree")
+        fake_wt.create = lambda *a, **k: {"main_checkout": tree, "worktree": tree, "branch": "b", "job": "j", "job_dir": job}
+        fake_wt.state_dir = lambda: job
+        fake_mp = types.ModuleType("merge_pr")
+        fake_mp.ensure_shared_submodule = lambda repo, t, m: calls.append(repo) or problem[0]
+        fake_mp.run = lambda *a, **k: None
+        fake_mp.check_plan = lambda *a: []
+        fake_mp.first_failure = lambda *a, **k: None
+        fake_mp.scope_needles = lambda *a: frozenset()
+        saved = {name: sys.modules.get(name) for name in ("merge_pr", "new_agent_worktree")}
+        sys.modules.update(merge_pr=fake_mp, new_agent_worktree=fake_wt)
+        self.addCleanup(lambda: [sys.modules.__setitem__(n, m) if m else sys.modules.pop(n, None) for n, m in saved.items()])
+
+        def make_repo():  # check_branch removes the job directory when it is done
+            subprocess.run(["git", "init", "-q", tree], check=True)
+            subprocess.run(["git", "-C", tree, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x"], check=True)
+            return subprocess.run(["git", "-C", tree, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+
+        said = []
+        sha = make_repo()
+        self.assertTrue(ppc.check_branch("hams_open", sha, job, say=said.append))
+        self.assertEqual(calls, ["hams_open"])
+        self.assertIn("submodule", said[0])
+        problem[0] = ""
+        said.clear()
+        sha = make_repo()
+        self.assertTrue(ppc.check_branch("hams_open", sha, job, say=said.append))
+        self.assertEqual(said, [])
+
+
 class PrePushHookEnvironmentTests(unittest.TestCase):
     def test_the_pre_push_hook_runs_its_checks_without_git_dir(self):
         hook = os.path.join(os.path.dirname(os.path.abspath(__file__)), "git-hooks", "pre-push")

@@ -347,11 +347,11 @@ Purpose: the disk directory for lint and test scratch (`HAMS_LINT_SCRATCH`, else
 
 ### `[@ANCHOR: lint_cache:scratch_mkdtemp]` `scratch_mkdtemp(prefix, environ=None)`
 
-Purpose: `tempfile.mkdtemp` inside `scratch_root` (the cold cargo build directories of `--no-cache` runs).
+Purpose: `tempfile.mkdtemp(prefix=prefix)` created inside `scratch_root(environ)` instead of the tmpfs /tmp, so the big throwaway directories (the cold cargo build directories of `--no-cache` runs) land on disk and under the lint cache's budget. When `scratch_root` returns None it falls back to the system temp directory. The caller owns the returned directory and removes it.
 
 ### `[@ANCHOR: lint_cache:tmp_entries]` `tmp_entries(tmp=None)`
 
-Purpose: the names directly under /tmp; the "before" picture for `tmp_growth_report`. Returns a set (empty when unreadable).
+Purpose: lists the names directly under /tmp (or the `tmp` directory given) and returns them as a set. `run_linters.py` takes it before a run and hands it to `tmp_growth_report` afterwards, so only entries that appeared during the run are weighed and blamed. Returns an empty set when the directory cannot be read, so a missing or unreadable /tmp never stops a lint run.
 
 ### `[@ANCHOR: lint_cache:tmp_growth_report]` `tmp_growth_report(before, tmp=None, limit_bytes=524288000)`
 
@@ -3712,7 +3712,7 @@ Purpose: the `wait` subcommand: exactly one of `--pid [--start-time]`, `--job`, 
 
 ### `[@ANCHOR: agent_procs:default_mem_max]` `default_mem_max(command)`
 
-Purpose: the memory cap `run` uses when `--mem-max` is not given. Argument: `command`, the argv list (or None). Returns `CARGO_MEM_MAX` (`24G`) when any word's basename is `cargo` or `rustc`, and `LINT_MEM_MAX` (`24G`) for `run_linters.py` (a full lint run hit 6G and was SIGTERMed, exit 143) (so `nice -n 10 env X=1 cargo test` and `/home/u/.cargo/bin/cargo` count), else `DEFAULT_MEM_MAX` (`6G`, Odoo tests and everything else). Pure; no I/O. Test: `test_agent_procs.py`.
+Purpose: the memory cap `run` uses when `--mem-max` is not given. Argument: `command`, the argv list (or None). Returns `CARGO_MEM_MAX` (`24G`) when any word's basename is `cargo` or `rustc`, and `LINT_MEM_MAX` (`24G`) for `run_linters.py` (a full lint run hit 6G and was SIGTERMed, exit 143) (so `nice -n 10 env X=1 cargo test` and `/opt/u/.cargo/bin/cargo` count), else `DEFAULT_MEM_MAX` (`6G`, Odoo tests and everything else). Pure; no I/O. Test: `test_agent_procs.py`.
 
 ### `[@ANCHOR: agent_procs:default_timeout]` `default_timeout(command)`
 

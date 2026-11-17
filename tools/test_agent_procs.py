@@ -776,7 +776,7 @@ class WaitSelectorTests(ProcTestCase):
         return done, time.monotonic() - began
 
     def test_one_match_waits_until_it_ends(self):
-        self.sleeper("toksel1", 2)
+        self.sleeper("toksel1", 10)  # long: a loaded box can start the wait CLI seconds late
         done, took = self.wait_sel("--cmd-contains", "toksel1", "--timeout", "30")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertGreater(took, 1.0)
@@ -796,7 +796,7 @@ class WaitSelectorTests(ProcTestCase):
 
     def test_all_waits_for_every_match(self):
         self.sleeper("toksel3", 1.5)
-        self.sleeper("toksel3", 3)
+        self.sleeper("toksel3", 10)
         done, took = self.wait_sel("--cmd-contains", "toksel3", "--all", "--timeout", "30")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertGreater(took, 2.0, "must wait for the longer one too")
@@ -1171,7 +1171,7 @@ class LimitTests(ProcTestCase):
         self.assertEqual(ap.default_mem_max(["python3", "test.py"]), "6G")
         self.assertEqual(ap.default_mem_max(None), "6G")
         self.assertEqual(ap.default_mem_max(["nice", "-n", "10", "env", "A=1", "cargo", "test"]), "24G")
-        self.assertEqual(ap.default_mem_max(["/home/u/.cargo/bin/cargo", "build"]), "24G")
+        self.assertEqual(ap.default_mem_max(["/opt/u/.cargo/bin/cargo", "build"]), "24G")
         self.assertEqual(ap.default_mem_max(["rustc", "x.rs"]), "24G")
         self.assertEqual(ap.default_mem_max(["echo", "cargo-deny"]), "6G")
         cli("run", "cg", "--", "cargo", "--version", env=self.env)

@@ -248,6 +248,9 @@ def artifact_problems(artifact, trees, cargo_target_dir, environ=None):
 
 
 # [@ANCHOR: gate_snapshot:build_artifact]
+CARGO_BUILD_JOBS = "8"
+
+
 def build_artifact(artifact, trees, cargo_target_dir, run=None, out=print):
     """Builds one artifact and writes its stamp. `run(command, cwd, env)` executes a command and returns its exit status
     (default: `subprocess.call` under `nice -n 10`). The shared library is built by `build_cloudflared_ffi.py --force
@@ -263,6 +266,7 @@ def build_artifact(artifact, trees, cargo_target_dir, run=None, out=print):
     else:
         command, cwd = ["cargo", "build", "--features", "test-hooks", "--locked"], os.path.join(trees.com, RELAY_CRATE)
         env["CARGO_TARGET_DIR"] = cargo_target_dir
+        env.setdefault("CARGO_BUILD_JOBS", CARGO_BUILD_JOBS)  # cargo's default is one rustc per core (32): the round 131 OOM
     out("gate_snapshot: building %s: %s" % (artifact.name, " ".join(command)))
     if run(command, cwd, env) != 0:
         raise SnapshotError("building %s failed (command: %s)" % (artifact.name, " ".join(command)))
