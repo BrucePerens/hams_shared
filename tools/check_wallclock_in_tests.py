@@ -47,10 +47,15 @@ _PY_CLOCK_ATTRS = {"time", "monotonic", "perf_counter", "time_ns", "monotonic_ns
 _PY_CLOCK_NAMES = {"monotonic", "perf_counter", "time_ns", "monotonic_ns", "perf_counter_ns"}
 
 
+_BARE_CLOCK_NAMES = set()  # names bound by `from time import time [as x]` in the file being checked
+
+
 def _is_clock_call(node):
     if not isinstance(node, ast.Call):
         return False
     func = node.func
+    if isinstance(func, ast.Name) and func.id in _BARE_CLOCK_NAMES:
+        return True
     if isinstance(func, ast.Attribute) and func.attr in _PY_CLOCK_ATTRS:
         if func.attr == "time":
             return isinstance(func.value, ast.Name) and func.value.id == "time"
@@ -163,6 +168,10 @@ def check_python(source):
         tree = ast.parse(source)
     except SyntaxError:
         return []
+    _BARE_CLOCK_NAMES.clear()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.ImportFrom) and n.module == "time":
+            _BARE_CLOCK_NAMES.update(a.asname or a.name for a in n.names if a.name in _PY_CLOCK_ATTRS)
     if not any(_is_clock_call(n) for n in ast.walk(tree)):
         return []
     scopes = [tree] + [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
@@ -210,7 +219,7 @@ def check_js(source):
     clock_re = re.compile(_JS_CLOCK)
 
     def sub_re_for(clock_vars):
-        names = "|".join(map(re.escape, clock_vars)) if clock_vars else r"(?!x)x"
+        names = r"(?<![\w$.])(?:%s)(?![\w$])" % "|".join(map(re.escape, clock_vars)) if clock_vars else r"(?!x)x"
         reading = "(?:%s|%s)" % (_JS_CLOCK, names)
         return re.compile(r"%s\s*-\s*%s" % (reading, reading))
 
