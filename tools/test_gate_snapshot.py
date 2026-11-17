@@ -603,7 +603,7 @@ class PruneAndCommandTests(SnapshotTestBase):
         gate = [line for line in out if "snapshot ready" in line][0].split(" in ")[1].split(" (")[0]
         self.assertEqual(gs.main(["commands", gate], out.append), 0)
         self.assertTrue(out[-1].startswith("cd "))
-        with unittest.unittest.mock.patch.dict(os.environ, {gs.OPEN_TREE_ENV: os.path.join(gate, "hams_open")}):
+        with unittest.mock.patch.dict(os.environ, {gs.OPEN_TREE_ENV: os.path.join(gate, "hams_open")}):
             self.assertEqual(gs.main(["verify", gate], out.append), 0)
             self.ws.advance("hams_open", "open")
             out.clear()
@@ -669,7 +669,7 @@ class MutationHardeningTests(SnapshotTestBase):
     # Tests [@ANCHOR: gate_snapshot:create_snapshot]
     def test_the_cargo_target_comes_from_the_environment_and_balancing_follows_the_shard_file(self):
         target = os.path.join(self.tmp.name, "env-cargo")
-        with unittest.unittest.mock.patch.dict(os.environ, {"CARGO_TARGET_DIR": target}):
+        with unittest.mock.patch.dict(os.environ, {"CARGO_TARGET_DIR": target}):
             manifest = gs.create_snapshot(self.ws.root, os.path.join(self.tmp.name, "gates"), 2, out=self.out.append,
                                           hostname="devbox", run=fake_run)
         self.assertEqual(manifest["cargo_target_dir"], target)
@@ -702,9 +702,9 @@ class MutationHardeningTests(SnapshotTestBase):
         manifest = self.create()
         trees = gs.Trees(**manifest["trees"])
         relay = gs.ARTIFACTS[1]
-        with unittest.unittest.mock.patch.dict(os.environ, {gs.RELAY_BIN_ENV: "/somewhere/else"}):
+        with unittest.mock.patch.dict(os.environ, {gs.RELAY_BIN_ENV: "/somewhere/else"}):
             self.assertTrue(any(gs.RELAY_BIN_ENV in p for p in gs.artifact_problems(relay, trees, self.cargo)))
-        with unittest.unittest.mock.patch.dict(os.environ, {gs.RELAY_BIN_ENV: ""}):
+        with unittest.mock.patch.dict(os.environ, {gs.RELAY_BIN_ENV: ""}):
             self.assertEqual(gs.artifact_problems(relay, trees, self.cargo), [])
 
     # Tests [@ANCHOR: gate_snapshot:artifact_problems]
