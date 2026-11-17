@@ -69,6 +69,9 @@ CARGO_MEM_MAX = "24G"
 # A full `run_linters.py` run reached the 6G cap (2026-11-16: exit 143 after 614 s, scope peak 6G) and can outlast 1800 s.
 LINT_MEM_MAX = "24G"
 LINT_TIMEOUT = 5400
+# merge_pr.py runs run_linters, clippy and cargo fmt in its own process tree: under the 6G default the systemd scope's OOM policy stops the whole
+# tree with SIGTERM (exit 143, an empty log: merge_pr prints nothing until it ends), seen on hams_com #8849 2026-11-16.
+LINT_DRIVERS = ("run_linters.py", "merge_pr.py")
 KILL_GRACE = 10
 AGENT_WORK_ROOT = "/storage/agent_work"
 DEFAULT_MIN_AGE = 900
@@ -1066,7 +1069,7 @@ def default_mem_max(command):
     for word in command or ():
         if os.path.basename(str(word)) in ("cargo", "rustc"):
             return CARGO_MEM_MAX
-        if os.path.basename(str(word)) == "run_linters.py":
+        if os.path.basename(str(word)) in LINT_DRIVERS:
             return LINT_MEM_MAX
     return DEFAULT_MEM_MAX
 
@@ -1076,7 +1079,7 @@ def default_timeout(command):
     """The timeout when `--timeout` is not given: `LINT_TIMEOUT` (5400 s) when a word of `command` is, or ends in a path to,
     `run_linters.py`; otherwise `DEFAULT_TIMEOUT` (1800 s)."""
     for word in command or ():
-        if os.path.basename(str(word)) == "run_linters.py":
+        if os.path.basename(str(word)) in LINT_DRIVERS:
             return LINT_TIMEOUT
     return DEFAULT_TIMEOUT
 

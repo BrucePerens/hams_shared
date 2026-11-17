@@ -1165,6 +1165,8 @@ class LimitTests(ProcTestCase):
         self.assertEqual(ap.default_mem_max(cmd), "24G")
         self.assertEqual(ap.default_timeout(["python3", "test.py"]), 1800)
         self.assertEqual(ap.default_timeout(None), 1800)
+        merge = ["python3", "devbox_tools/merge_pr.py", "hams_com", "1"]  # runs the whole lint in its tree: same limits as run_linters.py
+        self.assertEqual((ap.default_timeout(merge), ap.default_mem_max(merge)), (5400, "24G"))
 
     # Tests [@ANCHOR: agent_procs:default_mem_max]
     def test_cargo_and_rustc_commands_get_the_higher_default_cap(self):
