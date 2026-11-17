@@ -295,3 +295,16 @@ if __name__ == "__main__":
 # Class anchors (ADR 0113) exercised by the tests above.
 # Tests [@ANCHOR: parking_ctl:parking_ctl_odoo_client_class]
 # Tests [@ANCHOR: parking_ctl:parking_ctl_input_error_class]
+
+
+class ParseBoolTests(unittest.TestCase):
+    def test_truthy_and_falsy_words_map_to_the_matching_bool_case_insensitively(self):
+        for text in ("1", "true", "YES", "On"):
+            self.assertIs(ctl.parse_bool(text), True, text)
+        for text in ("0", "False", "no", "OFF"):
+            self.assertIs(ctl.parse_bool(text), False, text)
+
+    def test_anything_else_is_an_input_error_naming_the_value(self):
+        with self.assertRaisesRegex(ctl.InputError, "maybe"):
+            ctl.parse_bool("maybe")
+
