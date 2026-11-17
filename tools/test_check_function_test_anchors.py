@@ -52,6 +52,19 @@ class DirectFunctionsTests(unittest.TestCase):
         self.assertEqual([q for q, _n in found], ["foo"])
 
 
+class ConditionalDefinitionTests(unittest.TestCase):
+    def test_a_function_defined_under_if_try_or_with_is_found(self):
+        tree = ast.parse(
+            "if X:\n    def a(): pass\nelse:\n    def b(): pass\n"
+            "try:\n    import q\nexcept ImportError:\n    def c(): pass\n"
+            "class K:\n    if Y:\n        def d(self): pass\n")
+        self.assertEqual(sorted(q for q, _n in cfta._direct_functions(tree.body, [])), ["K.d", "a", "b", "c"])
+
+    def test_the_main_guard_block_is_script_glue_and_is_not_walked(self):
+        tree = ast.parse('if __name__ == "__main__":\n    def go(): pass\n')
+        self.assertEqual(list(cfta._direct_functions(tree.body, [])), [])
+
+
 class ScanFileTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -85,6 +98,18 @@ class ScanFileTests(unittest.TestCase):
         _write(path, "def broken(:\n    pass\n")
         results = cfta.scan_file(path, self.tmp)
         self.assertEqual(results, [])
+
+    def test_an_unparseable_or_unreadable_file_is_reported_not_silently_skipped(self):
+        broken = os.path.join(self.tmp, "broken.py")
+        _write(broken, "def broken(:\n    pass\n")
+        binary = os.path.join(self.tmp, "binary.py")
+        with open(binary, "wb") as f:
+            f.write(b"def f():\n    \xff\xfe\n")
+        problems = []
+        cfta.scan_file(broken, self.tmp, problems)
+        cfta.scan_file(binary, self.tmp, problems)
+        self.assertEqual(len(problems), 2)
+        self.assertIn("broken.py", problems[0])
 
     def test_an_anchor_on_a_different_function_does_not_count(self):
         path = os.path.join(self.tmp, "foo.py")
@@ -353,6 +378,14 @@ class MainIntegrationTests(unittest.TestCase):
         result = self._run()
         self.assertEqual(result.returncode, 1)
         self.assertIn("foo.py::bar", result.stdout)
+
+    def test_a_file_that_cannot_be_parsed_fails_the_run(self):
+        _write(os.path.join(self.tmp, "broken.py"), "def broken(:\n    pass\n")
+        _write(os.path.join(self.tmp, "ok.py"), "# [@ANCHOR: ok_fn]\ndef ok():\n    pass\n")
+        _init_git_repo(self.tmp)
+        result = self._run()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("broken.py", result.stdout)
 
     def test_generating_a_baseline_then_checking_again_passes(self):
         _write(os.path.join(self.tmp, "foo.py"), "def bar():\n    pass\n")
