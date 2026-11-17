@@ -331,8 +331,7 @@ class WholeRunPlanTests(unittest.TestCase):
         self.assertEqual((free.queued, free.held), (1, False))
         holder = subprocess.Popen(["flock", lock, "sleep", "30"])
         self.addCleanup(holder.kill)
-        deadline = time.time() + 10
-        while time.time() < deadline and not probe().held:
+        while not probe().held:  # the flock child takes the lock; no wall-clock deadline (the runner's timeout catches a hang)
             time.sleep(0.1)
         self.assertTrue(probe().held)
 

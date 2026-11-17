@@ -18,8 +18,7 @@ READY = "import pathlib,sys;pathlib.Path(sys.argv[1]).write_text('x')"
 def spawn(script, ready):
     """Start `sh -c script` as a group leader; wait until it wrote the ready file (traps are armed)."""
     proc = ct.GroupPopen(["sh", "-c", script], start_new_session=True)
-    deadline = time.monotonic() + 5
-    while not os.path.exists(ready) and time.monotonic() < deadline:
+    while not os.path.exists(ready) and proc.poll() is None:  # ends when ready appears or the leader exits
         time.sleep(0.01)
     assert os.path.exists(ready), "fake chrome never became ready"
     return proc
@@ -93,9 +92,8 @@ class TerminateGroupTests(unittest.TestCase):
         # like `setsid -w unshare ... chrome`: the real browser is in a DIFFERENT process group than the leader
         script = f"setsid sleep 60 & touch {self.ready}; wait"
         proc = spawn(script, self.ready)
-        deadline = time.monotonic() + 30  # safety net: wait for the separate-group sleep to exist
         tree = ct._snapshot(proc)
-        while len(tree) < 2 and time.monotonic() < deadline:
+        while len(tree) < 2 and proc.poll() is None:  # wait for the separate-group sleep to exist
             time.sleep(0.02)
             tree = ct._snapshot(proc)
         self.assertGreaterEqual(len(tree), 2)

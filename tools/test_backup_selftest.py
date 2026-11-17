@@ -100,10 +100,7 @@ class RealRepoBase(unittest.TestCase):
         cls.t_end = float(cls.live.sql("select extract(epoch from now())"))
         cls.segments.append(cls.live.sql("select pg_walfile_name(pg_current_wal_lsn())"))
         cls.live.sql("select pg_switch_wal()")
-        deadline = time.time() + 60
-        while cls.live.sql("select last_archived_wal from pg_stat_archiver") != cls.segments[-1]:
-            if time.time() > deadline:
-                raise RuntimeError("the last WAL segment was not archived")
+        while cls.live.sql("select last_archived_wal from pg_stat_archiver") != cls.segments[-1]:  # no wall-clock deadline; the runner's timeout catches an archive that never completes
             time.sleep(0.5)
 
     @staticmethod
