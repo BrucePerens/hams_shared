@@ -55,6 +55,10 @@ done
 # merge_pr discipline (2026-11-16): refuse a direct push of code to main (only to-do notes may go direct), and on any other
 # branch run merge_pr's cheap checks within about 3 minutes (a slow check only warns). Logic and limits: tools/pre_push_check.py.
 # Skipped, with a warning, when the helper cannot be found (a worktree before fix_worktree_symlinks.py).
+# Git runs a hook with GIT_DIR (in a linked worktree: the worktree's own git dir) in the environment. The checks below run tests that
+# `git init` / `git commit` in temp directories; with GIT_DIR inherited they acted on THIS repository instead: commits "init"/"seed" landed
+# on the pushed branch and `git init` wrote core.bare=true into the shared .git/config (2026-11-16, broke merge_pr.py). Drop the variables.
+unset $(git rev-parse --local-env-vars)
 root=$(git rev-parse --show-toplevel)
 common=$(cd "$root" && cd "$(git rev-parse --git-common-dir)" && pwd)
 helper=""
