@@ -48,6 +48,8 @@ _PY_CLOCK_NAMES = {"monotonic", "perf_counter", "time_ns", "monotonic_ns", "perf
 
 
 _BARE_CLOCK_NAMES = set()  # names bound by `from time import time [as x]` in the file being checked
+_TIME_MODULE_NAMES = {"time"}  # names the time module is bound to (`import time as t`) in the file being checked
+_DATETIME_NAMES = {"datetime", "dt", "Datetime"}  # names the datetime class is bound to (`from datetime import datetime as D`)
 
 
 def _is_clock_call(node):
@@ -58,9 +60,9 @@ def _is_clock_call(node):
         return True
     if isinstance(func, ast.Attribute) and func.attr in _PY_CLOCK_ATTRS:
         if func.attr == "time":
-            return isinstance(func.value, ast.Name) and func.value.id == "time"
+            return isinstance(func.value, ast.Name) and func.value.id in _TIME_MODULE_NAMES
         if func.attr in ("now", "utcnow"):  # not `clock.now()` of a virtual clock
-            return ast.unparse(func.value).split(".")[-1] in ("datetime", "dt", "Datetime")
+            return ast.unparse(func.value).split(".")[-1] in _DATETIME_NAMES
         return True
     return isinstance(func, ast.Name) and func.id in _PY_CLOCK_NAMES
 
@@ -123,6 +125,20 @@ def _lower_bound_only(node, elapsed_vars, clock_vars):
     return seen
 
 
+def _assign_pairs(target, value):
+    """[([key], value)] for one assignment target: `a, b = x(), y()` pairs each name with its own value (any other
+    unpacking gives every name the whole value), so `t0, n = time.time(), 1` still makes `t0` a reading."""
+    if not isinstance(target, (ast.Tuple, ast.List)):
+        return [([_key(target)], value)]
+    if isinstance(value, (ast.Tuple, ast.List)) and len(value.elts) == len(target.elts) \
+            and not any(isinstance(e, ast.Starred) for e in (*target.elts, *value.elts)):
+        pairs = []
+        for sub_target, sub_value in zip(target.elts, value.elts):
+            pairs.extend(_assign_pairs(sub_target, sub_value))
+        return pairs
+    return [pair for element in target.elts for pair in _assign_pairs(element, value)]
+
+
 def _py_scope_findings(scope):
     nodes = list(_scope_nodes(scope))
     in_loop = {id(n) for loop in nodes if isinstance(loop, ast.While) for n in ast.walk(loop)}
@@ -130,7 +146,8 @@ def _py_scope_findings(scope):
     assigns = []
     for node in nodes:
         if isinstance(node, ast.Assign):
-            assigns.append(([_key(t) for t in node.targets], node.value))
+            for target in node.targets:
+                assigns.extend(_assign_pairs(target, node.value))
         elif isinstance(node, (ast.AnnAssign, ast.AugAssign)) and node.value is not None:
             assigns.append(([_key(node.target)], node.value))
         elif isinstance(node, ast.NamedExpr):
@@ -169,9 +186,17 @@ def check_python(source):
     except SyntaxError:
         return []
     _BARE_CLOCK_NAMES.clear()
+    _TIME_MODULE_NAMES.clear()
+    _TIME_MODULE_NAMES.add("time")
+    _DATETIME_NAMES.clear()
+    _DATETIME_NAMES.update(("datetime", "dt", "Datetime"))
     for n in ast.walk(tree):
         if isinstance(n, ast.ImportFrom) and n.module == "time":
             _BARE_CLOCK_NAMES.update(a.asname or a.name for a in n.names if a.name in _PY_CLOCK_ATTRS)
+        elif isinstance(n, ast.ImportFrom) and n.module == "datetime":
+            _DATETIME_NAMES.update(a.asname or a.name for a in n.names if a.name == "datetime")
+        elif isinstance(n, ast.Import):
+            _TIME_MODULE_NAMES.update(a.asname for a in n.names if a.name == "time" and a.asname)
     if not any(_is_clock_call(n) for n in ast.walk(tree)):
         return []
     scopes = [tree] + [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
