@@ -24,6 +24,7 @@
  "ham.event.discovery": "public reference data (not a member's own record)",
  "ham.event.series": "club-owned record (the club, not the member, is the data owner); the member's own club rows are handled in ham_club_management",
  "ham.gdpr.export.token": "single-use export token, short-lived, never personal content",
+ "ham.invite.request": "a non-member's waitlist request: not reachable by export or erasure by design; purged by its own daily cron 180 days after the request is answered (ham_onboarding _cron_purge_answered)",
  "ham.member.prompt.event": "audit rows of a prompt: deleted with the prompt on erasure (ondelete cascade, ham_onboarding)",
  "ham.operator.contact.internal": "kept by decision (Bruce 2026-10-11: name, address and callsign are kept)",
  "ham.pota.park": "public reference data (not a member's own record)",
