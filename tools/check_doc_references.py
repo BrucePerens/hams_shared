@@ -379,11 +379,17 @@ def repo_name(path):
     return base
 
 
-def sibling_roots(root):
-    """The repository itself first, then the other two repositories next to it (hams_shared lives inside hams_open)."""
+def sibling_roots(root, extra=()):
+    """The repository itself first, then the other two repositories next to it (hams_shared lives inside hams_open).
+    `extra`: repository directories given explicitly (a hams_shared tree linted in a layout or as a canary has no siblings
+    beside it); they come before the ones found next to `root`."""
     root = os.path.realpath(root)
     parent = os.path.dirname(root)
     roots = [root]
+    for given in extra:
+        other = os.path.realpath(given)
+        if os.path.isdir(other) and other not in roots and repo_name(other) not in [repo_name(r) for r in roots]:
+            roots.append(other)
     for candidate in ("hams_com", "hams_open", os.path.join("hams_open", "hams_shared"), "hams_shared"):
         other = os.path.realpath(os.path.join(parent, candidate))
         if os.path.isdir(other) and other not in roots and repo_name(other) != repo_name(root):
@@ -392,9 +398,9 @@ def sibling_roots(root):
     return roots
 
 
-def scan(root):
+def scan(root, extra=()):
     """All findings of one repository: list of (relative file, line, kind, reference)."""
-    roots = sibling_roots(root)
+    roots = sibling_roots(root, extra)
     root = roots[0]
     files = []
     for each in roots:
@@ -429,6 +435,7 @@ def save_baseline(path, keys):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("directory", nargs="?", default=".")
+    parser.add_argument("--sibling", action="append", default=[], help="another repository directory to resolve references in (repeatable)")
     parser.add_argument("--baseline", help="baseline JSON file (default: alongside this script)")
     parser.add_argument("--generate-baseline", action="store_true", help="record the current findings as the baseline")
     parser.add_argument("--list", action="store_true", help="print every finding, not only the new ones")
@@ -438,7 +445,7 @@ def main(argv=None):
         os.path.dirname(os.path.abspath(__file__)), f"doc_references_baseline_{repo_name(root)}.json"
     )
     check_target.require_scanned(len(markdown_files(root)), root, "check_doc_references", "Markdown files")
-    findings = scan(root)
+    findings = scan(root, args.sibling)
     keys = {key_of(f) for f in findings}
     if args.generate_baseline:
         save_baseline(baseline_path, keys)
