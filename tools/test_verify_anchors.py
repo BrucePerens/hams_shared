@@ -985,6 +985,23 @@ class AddSiblingRepoTargetTests(unittest.TestCase):
         self.assertIn("ANTI-PATTERN", warning)
 
 
+class MissingSiblingFailsFastTests(unittest.TestCase):
+    """Scanning a hams_com checkout that has no hams_open next to it must stop with a clear message (exit 2), not report
+    hundreds of anchors as missing."""
+
+    def test_hams_com_without_hams_open_exits_2_with_message(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        com = os.path.join(tmp, "hams_com")
+        os.makedirs(os.path.join(com, ".git"))
+        _write(os.path.join(com, "mod_a", "__manifest__.py"), "{}\n")
+        result = subprocess.run(
+            [sys.executable, _SCRIPT, com], capture_output=True, text=True, timeout=_timeout(30)
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("sibling repo hams_open was not found", result.stdout + result.stderr)
+
+
 class MainIntegrationTests(unittest.TestCase):
     """Hermetic subprocess runs against real temp-directory fixtures only --
     verify_anchors.py currently fails against the real repo tree (a
