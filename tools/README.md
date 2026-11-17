@@ -347,11 +347,11 @@ Purpose: the disk directory for lint and test scratch (`HAMS_LINT_SCRATCH`, else
 
 ### `[@ANCHOR: lint_cache:scratch_mkdtemp]` `scratch_mkdtemp(prefix, environ=None)`
 
-Purpose: `tempfile.mkdtemp` inside `scratch_root` (the cold cargo build directories of `--no-cache` runs).
+Purpose: `tempfile.mkdtemp(prefix=prefix)` created inside `scratch_root(environ)` instead of the tmpfs /tmp, so the big throwaway directories (the cold cargo build directories of `--no-cache` runs) land on disk and under the lint cache's budget. When `scratch_root` returns None it falls back to the system temp directory. The caller owns the returned directory and removes it.
 
 ### `[@ANCHOR: lint_cache:tmp_entries]` `tmp_entries(tmp=None)`
 
-Purpose: the names directly under /tmp; the "before" picture for `tmp_growth_report`. Returns a set (empty when unreadable).
+Purpose: lists the names directly under /tmp (or the `tmp` directory given) and returns them as a set. `run_linters.py` takes it before a run and hands it to `tmp_growth_report` afterwards, so only entries that appeared during the run are weighed and blamed. Returns an empty set when the directory cannot be read, so a missing or unreadable /tmp never stops a lint run.
 
 ### `[@ANCHOR: lint_cache:tmp_growth_report]` `tmp_growth_report(before, tmp=None, limit_bytes=524288000)`
 
