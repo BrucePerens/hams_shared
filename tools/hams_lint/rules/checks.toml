@@ -45,13 +45,15 @@ order = "walk"
 read = "lines_strict"
 on_error = "warn"
 [check.files]
-suffixes = [".csv", ".css", ".html", ".js", ".json", ".md", ".py", ".sh", ".txt", ".xml", "Makefile"]
+suffixes = [".csv", ".css", ".html", ".js", ".json", ".md", ".py", ".rs", ".scss", ".service", ".sh", ".toml", ".txt",
+    ".xml", ".yaml", ".yml", "Makefile"]
 skip_dirs = [".git", "node_modules", "venv", "env", ".venv", "__pycache__", ".agents", "target", "radae", "agents",
     "scratch", ".mypy_cache", "archive", ".claude", "ics_training", "ham_auxcomm_training",
     "night_shift_history_archive", "night_shift_history", "site-packages"]
 skip_rel_dirs = ["daemons/cloudflared/vendor", "docs/handoff", "docs/reviews/relay_self_update_proof_evidence"]
 untracked = true
-exts = [".py", ".js", ".xml", ".csv", ".md", ".json", ".txt", ".sh", ".html", ".css"]
+exts = [".py", ".js", ".xml", ".csv", ".md", ".json", ".txt", ".sh", ".html", ".css", ".scss", ".rs", ".toml", ".yml",
+    ".yaml", ".service"]
 names = ["Makefile"]
 skip_names = ["course_*.json", "orphaned-worktree-*.md", "night_shift_history.md", "check_absolute_paths.py",
     "test_check_absolute_paths.py"]
