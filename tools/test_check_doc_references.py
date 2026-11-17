@@ -88,6 +88,28 @@ class PathTests(unittest.TestCase):
         self.assertEqual(self.tree.check("```\ncat tools/gone.py\n```\n"), [])
 
 
+    def test_a_fence_is_closed_only_by_its_own_marker(self):
+        text = "~~~\n```\n`gone/inside.py`\n~~~\n`gone/after.py`\n"
+        self.assertEqual(self.tree.check(text), [("path", "gone/after.py")])
+        text = "````\n```\n`gone/inside.py`\n````\n`gone/after.py`\n"
+        self.assertEqual(self.tree.check(text), [("path", "gone/after.py")])
+
+    def test_reference_style_link_definitions_and_html_attributes_are_checked(self):
+        self.assertEqual(self.tree.check("[o][1]\n\n[1]: other.md\n[2]: <missing.md> \"title\"\n"), [("path", "missing.md")])
+        self.assertEqual(self.tree.check('<img src="gone.png"> <a href="other.md#second-part">x</a> <a href="https://x.y/z">y</a>\n'),
+                         [("path", "gone.png")])
+
+    def test_a_markdown_file_with_a_non_utf8_name_is_still_scanned(self):
+        tree = Tree(self, {"docs/ok.md": "# ok\n"})
+        raw = os.path.join(os.fsencode(tree.root), b"docs", b"caf\xe9.md")
+        with open(raw, "w", encoding="utf-8") as handle:
+            handle.write("`gone/path.py`\n")
+        subprocess.run(["git", "init", "-q"], cwd=tree.root, check=True)
+        subprocess.run(["git", "add", "-A"], cwd=tree.root, check=True)
+        names = [rel for _path, rel in cdr.markdown_files(tree.root)]
+        self.assertEqual(len(names), 2)
+
+
 class FlagTests(unittest.TestCase):
     def setUp(self):
         self.tree = Tree(self, BASE)

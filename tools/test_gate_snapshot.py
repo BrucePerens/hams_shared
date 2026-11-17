@@ -543,6 +543,17 @@ class ArtifactTests(SnapshotTestBase):
 
 
 class PruneAndCommandTests(SnapshotTestBase):
+    # Tests [@ANCHOR: gate_snapshot:create_trees]
+    def test_created_worktrees_are_locked_so_a_git_worktree_prune_keeps_them(self):
+        tree = self.create()["trees"]["com"]
+        repo = self.ws.path("hams_com")
+        self.assertIn("locked", git(repo, "worktree", "list", "--porcelain"))
+        gitfile = os.path.join(tree, ".git")
+        os.rename(gitfile, gitfile + ".moved")
+        git(repo, "worktree", "prune")
+        os.rename(gitfile + ".moved", gitfile)
+        self.assertEqual(git(tree, "rev-parse", "--is-inside-work-tree"), "true")
+
     # Tests [@ANCHOR: gate_snapshot:prune_snapshots]
     def test_prune_removes_old_gate_trees_through_git_and_nothing_else(self):
         first = self.create()["trees"]["parent"]

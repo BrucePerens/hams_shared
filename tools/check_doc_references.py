@@ -70,9 +70,25 @@ HEADING_RE = re.compile(r"^ {0,3}#{1,6}\s+(.*?)\s*#*\s*$")
 SPAN_RE = re.compile(r"(`+)(.+?)\1")
 FLAG_RE = re.compile(r"(?<![\w-])(--[A-Za-z][\w-]*)")
 SCRIPT_RE = re.compile(r"(?<![\w./-])((?:[\w.\-]+/)*[\w.\-]+\.py)(?=\s|$|`)(.*)")
-FENCE_RE = re.compile(r"^\s*(```+|~~~+)")
+FENCE_RE = re.compile(r"^\s*(```+|~~~+)(.*)$")
+REFERENCE_DEFINITION_RE = re.compile(r"^ {0,3}\[(?![\^@])[^\]]+\]:\s*<?([^\s>]+)>?")
+HTML_LINK_RE = re.compile(r"""<(?:a|img|source|video|audio)\b[^>]*?\b(?:href|src)\s*=\s*["']([^"'\s<>]+)["']""", re.I)
 SKIP_FUNCTIONS = set(dir(builtins)) | set(getattr(sys, "stdlib_module_names", ()))
 PARAM_LINE_WORDS = ("config parameter", "config_parameter", "system parameter", "ir.config", "set_param", "get_param")
+
+
+def fence_state(line, state):
+    """The open fence after `line`: None, or (marker character, length). A fence is closed only by a bare line of its own
+    marker character at least as long as the opening one (CommonMark), so a ``` line inside a ~~~ block is just text."""
+    match = FENCE_RE.match(line)
+    if not match:
+        return state
+    marker = match.group(1)
+    if state is None:
+        return None if marker[0] == "`" and "`" in match.group(2) else (marker[0], len(marker))
+    if marker[0] == state[0] and len(marker) >= state[1] and not match.group(2).strip():
+        return None
+    return state
 
 
 def is_excluded(rel):
@@ -85,8 +101,7 @@ def tracked_files(root):
     done = subprocess.run(["git", "-C", root, "ls-files", "-z"], capture_output=True, check=False)
     if done.returncode != 0 and os.path.exists(os.path.join(root, ".git")):
         sys.exit(f"check_doc_references: git ls-files failed in {root}: {done.stderr.decode('utf-8', 'replace').strip()}")
-    out = done.stdout.decode("utf-8", "replace")
-    return [os.path.join(root, name) for name in out.split("\0") if name]
+    return [os.path.join(root, os.fsdecode(name)) for name in done.stdout.split(b"\0") if name]
 
 
 # [@ANCHOR: check_doc_references:check_doc_references_knowledge_class]
@@ -225,11 +240,10 @@ def slug(heading):
 def heading_slugs(text):
     seen = {}
     slugs = set()
-    in_fence = False
+    fence = None
     for line in text.splitlines():
-        if FENCE_RE.match(line):
-            in_fence = not in_fence
-        match = None if in_fence else HEADING_RE.match(line)
+        was_open, fence = fence is not None, fence_state(line, fence)
+        match = None if was_open or fence is not None else HEADING_RE.match(line)
         if match:
             base = slug(match.group(1))
             count = seen.get(base, 0)
@@ -290,17 +304,21 @@ def check_markdown(text, doc_abs, know):
     doc_dir = os.path.dirname(doc_abs)
     own_slugs = heading_slugs(text)
     findings = set()
-    in_fence = False
+    fence = None
     for number, line in enumerate(text.splitlines(), 1):
-        if FENCE_RE.match(line):
-            in_fence = not in_fence
+        if FENCE_RE.match(line) and (fence is not None or fence_state(line, fence) is not None):
+            fence = fence_state(line, fence)
             continue
+        in_fence = fence is not None
         for script, flag in check_script_flags(line, doc_dir, know):
             findings.add((number, "flag", f"{script} {flag}"))
         if in_fence:
             continue
         for match in LINK_RE.finditer(line):
             findings.update(check_link(match.group(1), number, doc_abs, doc_dir, own_slugs, know))
+        for pattern, prose in ((REFERENCE_DEFINITION_RE, line), (HTML_LINK_RE, SPAN_RE.sub("", line))):  # not markup shown in code spans
+            for match in pattern.finditer(prose):
+                findings.update(check_link(match.group(1), number, doc_abs, doc_dir, own_slugs, know))
         spans = [m.group(2) for m in SPAN_RE.finditer(line)]
         param_line = any(word in line.lower() for word in PARAM_LINE_WORDS)
         for span in spans:

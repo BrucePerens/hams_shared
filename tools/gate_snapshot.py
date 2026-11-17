@@ -121,7 +121,8 @@ def gate_dir_name(com_commit, open_commit):
 def create_trees(workspace, parent, com_commit, open_commit, shared_commit):
     """Makes `<parent>/gate_*/{hams_com,hams_open,hams_open/hams_shared}` as detached git worktrees at the given commits
     and returns `Trees`. The hams_com tree's `hams_shared` link then resolves into the hams_open tree. An existing directory
-    is verified, not rebuilt: it must already be at these commits, else `SnapshotError` (use `prune`). Raises `SnapshotError`
+    is verified, not rebuilt (each worktree is `git worktree lock`ed, so no `git worktree prune`, hygiene or cleanup script can drop
+    its admin directory while a round runs; round 134 lost one that way: `git ls-files` failed in the tree): it must already be at these commits, else `SnapshotError` (use `prune`). Raises `SnapshotError`
     when a commit is missing from its repository."""
     gate = os.path.join(parent, gate_dir_name(com_commit, open_commit))
     com_main, open_main = os.path.join(workspace, "hams_com"), os.path.join(workspace, "hams_open")
@@ -137,10 +138,12 @@ def create_trees(workspace, parent, com_commit, open_commit, shared_commit):
         if os.path.exists(os.path.join(target, ".git")):
             continue
         _git(source, "worktree", "add", "--detach", "-f", target, commit)
+        _git(source, "worktree", "lock", "--reason", "gate snapshot", target)
     if not os.path.exists(os.path.join(shared, ".git")):
         if os.path.isdir(shared) and not os.listdir(shared):
             os.rmdir(shared)  # hams_open's checkout leaves the gitlink as an empty directory
         _git(shared_main, "worktree", "add", "--detach", "-f", shared, shared_commit)
+        _git(shared_main, "worktree", "lock", "--reason", "gate snapshot", shared)
     link = os.path.join(com, "hams_shared")
     if os.path.realpath(link) != os.path.realpath(shared):
         raise SnapshotError("%s resolves to %s, not to %s" % (link, os.path.realpath(link), shared))
@@ -597,7 +600,7 @@ def prune_snapshots(parent, keep=1, out=print):
             if os.path.exists(os.path.join(path, ".git")):
                 owner = _git(path, "rev-parse", "--git-common-dir", check=False)
                 if owner:
-                    subprocess.run(["git", "--git-dir", os.path.abspath(os.path.join(path, owner)), "worktree", "remove", "--force", path],
+                    subprocess.run(["git", "--git-dir", os.path.abspath(os.path.join(path, owner)), "worktree", "remove", "--force", "--force", path],
                                    capture_output=True)
         shutil.rmtree(gate, ignore_errors=True)
         removed.append(gate)
