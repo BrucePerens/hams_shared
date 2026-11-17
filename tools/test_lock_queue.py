@@ -401,16 +401,31 @@ class TestAcquire(_TmpDirCase):
         )
         p = subprocess.Popen([sys.executable, "-c", code])
         try:
-            for _ in range(200):
-                if lq.live_tickets(self.qdir, clean=False):
-                    break
+            deadline = time.monotonic() + 120  # interpreter start-up can take long on a loaded host
+            while not lq.live_tickets(self.qdir, clean=False) and p.poll() is None and time.monotonic() < deadline:
                 time.sleep(0.05)
             self.assertEqual(len(lq.live_tickets(self.qdir, clean=False)), 1)
             p.send_signal(signal.SIGTERM)
-            self.assertEqual(p.wait(10), 128 + signal.SIGTERM)
+            self.assertEqual(p.wait(120), 128 + signal.SIGTERM)
         finally:
             if p.poll() is None:
                 p.kill()
+        self.assertEqual(os.listdir(self.qdir), [])
+
+    def test_sigterm_right_after_the_ticket_is_taken_still_removes_it(self):
+        """The signal arrives the instant the ticket exists (before the first poll): the handler must already be in place."""
+        code = (
+            "import signal, sys; sys.path.insert(0, %r); import lock_queue as lq\n"
+            "real = lq.take_ticket\n"
+            "def take(*a, **k):\n"
+            "    name = real(*a, **k)\n"
+            "    signal.raise_signal(signal.SIGTERM)\n"
+            "    return name\n"
+            "lq.take_ticket = take\n"
+            "lq.acquire(%r, lambda: False, poll=0.05, out=lambda *_: None)\n" % (_HERE, self.qdir)
+        )
+        p = subprocess.run([sys.executable, "-c", code], timeout=120)
+        self.assertEqual(p.returncode, 128 + signal.SIGTERM)
         self.assertEqual(os.listdir(self.qdir), [])
 
     def test_sigkill_leaves_a_ticket_that_the_next_waiter_ignores(self):

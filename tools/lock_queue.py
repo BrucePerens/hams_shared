@@ -431,6 +431,11 @@ class _Interrupted(BaseException):
     pass
 
 
+# Held while a ticket is taken, so a SIGTERM/SIGHUP never lands between the ticket file existing and `ticket`
+# being assigned (the file would outlive the process); it is delivered right after, inside acquire's try.
+_TERM_SIGNALS = {signal.SIGTERM, signal.SIGHUP}
+
+
 # [@ANCHOR: lock_queue:acquire]
 def acquire(qdir, try_lock, info="", ticket=None, timeout=None, poll=DEFAULT_POLL_SECONDS,
             report_every=DEFAULT_REPORT_SECONDS, on_head=None, sleep=time.sleep,
@@ -445,11 +450,8 @@ def acquire(qdir, try_lock, info="", ticket=None, timeout=None, poll=DEFAULT_POL
 
     Returns (status, ticket): status is ACQUIRED (ticket kept, see the module docstring), TIMEOUT
     or GATE_FAILED; the ticket is released for the latter two and on any exception or signal."""
-    adopted = bool(ticket) and any(t["name"] == ticket for t in live_tickets(qdir, clean=False))
-    if not adopted:
-        ticket = take_ticket(qdir, info=info, now=now)
     old_handlers = {}
-    if handle_signals:
+    if handle_signals:  # before the ticket exists: a SIGTERM that finds a ticket must always find the handler
         def _raise(signum, _frame):
             raise _Interrupted(signum)
         for sig in (signal.SIGTERM, signal.SIGHUP):
@@ -457,15 +459,26 @@ def acquire(qdir, try_lock, info="", ticket=None, timeout=None, poll=DEFAULT_POL
                 old_handlers[sig] = signal.signal(sig, _raise)
             except (ValueError, OSError):
                 pass  # not the main thread
-    started = now()
-    next_report = started
-    gated = adopted or on_head is None
     done = False
     try:
+        adopted = bool(ticket) and any(t["name"] == ticket for t in live_tickets(qdir, clean=False))
+        if not adopted:
+            held = signal.pthread_sigmask(signal.SIG_BLOCK, _TERM_SIGNALS)  # see _TERM_SIGNALS
+            try:
+                ticket = take_ticket(qdir, info=info, now=now)
+            finally:
+                signal.pthread_sigmask(signal.SIG_SETMASK, held)
+        started = now()
+        next_report = started
+        gated = adopted or on_head is None
         while True:
             tickets = live_tickets(qdir)
             if not any(t["name"] == ticket for t in tickets):
-                ticket = take_ticket(qdir, info=info, now=now)  # lost our file: rejoin at the back
+                held = signal.pthread_sigmask(signal.SIG_BLOCK, _TERM_SIGNALS)
+                try:
+                    ticket = take_ticket(qdir, info=info, now=now)  # lost our file: rejoin at the back
+                finally:
+                    signal.pthread_sigmask(signal.SIG_SETMASK, held)
                 continue
             if may_try(qdir, tickets, ticket, slots):
                 if not gated:
