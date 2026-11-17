@@ -36,6 +36,7 @@ Tests [@ANCHOR: batch_queue:format_verdicts]
 """
 
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -730,6 +731,87 @@ class AttributionTests(unittest.TestCase):
         self.assertIn("PASSED", lines[1])
         self.assertIn("<- you", lines[2])
         self.assertIn("1 finding", lines[2])
+
+
+class MutationPinTests(unittest.TestCase):
+    """Cases a mutation run (2026-11-17) showed the other tests did not pin."""
+
+    def test_with_field_names_the_first_twelve_characters_of_each_tip(self):
+        self.assertEqual(bq.with_field(["a" * 40, "b" * 40]), " with=" + "a" * 12 + "," + "b" * 12)
+        self.assertEqual(bq.with_field([]), "")
+
+    def test_describe_running_counts_distinct_branches_and_shows_the_age(self):
+        running = {"id": 7, "started": 100.0, "members": [{"tip": "a"}, {"tip": "a"}, {"tip": "b"}]}
+        self.assertEqual(bq._describe_running(running, lambda: 400.0), "batch 7 running for 5 min (2 branches)")
+        one = {"id": 8, "started": 100.0, "members": [{"tip": "a"}, {"tip": "a"}]}
+        self.assertEqual(bq._describe_running(one, lambda: 130.0), "batch 8 running for 30 s (1 branch)")
+        unknown = {"id": 9, "started": None, "members": [{"tip": "a"}]}
+        self.assertEqual(bq._describe_running(unknown, lambda: 130.0), "batch 9 running for ? (1 branch)")
+
+    def test_locked_creates_the_directory_and_a_world_writable_lock_file(self):
+        old = os.umask(0)
+        self.addCleanup(os.umask, old)
+        with tempfile.TemporaryDirectory() as tmp:
+            sdir = os.path.join(tmp, "a", "b")
+            with bq.locked(sdir) as state:
+                state["next_id"] = 4
+            self.assertEqual(os.stat(os.path.join(sdir, "state.lock")).st_mode & 0o777, 0o666)
+            with bq.locked(sdir) as state:
+                self.assertEqual(state["next_id"], 4)
+
+    def test_locked_discards_a_state_of_another_version_and_a_non_dict_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for content in ('{"version": %d, "next_id": 9}' % (bq.STATE_VERSION + 1), "[1, 2]"):
+                with open(os.path.join(tmp, "state.json"), "w") as handle:
+                    handle.write(content)
+                with bq.locked(tmp) as state:
+                    self.assertEqual(state, bq.empty_state())
+
+    def test_repo_key_of_a_separate_git_dir_named_modules_is_its_parent_checkout_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            checkout = os.path.join(tmp, "checkout")
+            gitdir = os.path.join(tmp, "modules", "elsewhere")
+            os.makedirs(checkout)
+            os.makedirs(os.path.dirname(gitdir))
+            subprocess.run(["git", "init", "-q", "--separate-git-dir", gitdir, checkout], check=True, capture_output=True)
+            # the git directory is not under `.git/modules`, so the identity is the directory that holds it
+            self.assertEqual(bq.repo_key(checkout), os.path.realpath(os.path.join(tmp, "modules")))
+
+    def test_remove_tree_removes_the_parent_without_sudo_when_it_can(self):
+        calls = []
+
+        def run(argv, **kwargs):
+            calls.append(argv)
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = os.path.join(tmp, "p")
+            os.makedirs(os.path.join(parent, "repo", "sub"))
+            bq.remove_tree("/r", os.path.join(parent, "repo"), run=run)
+            self.assertFalse(os.path.exists(parent))
+        self.assertEqual([c[0] for c in calls], ["git", "git"])
+        self.assertEqual(calls[0][-4:], ["worktree", "remove", "--force", os.path.join(parent, "repo")])
+        self.assertEqual(calls[1][-2:], ["worktree", "prune"])
+
+    def test_remove_tree_falls_back_to_sudo_for_files_it_cannot_delete(self):
+        calls = []
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = os.path.join(tmp, "p")
+            stuck = os.path.join(parent, "repo", "stuck")
+            os.makedirs(stuck)
+            with open(os.path.join(stuck, "f"), "w") as handle:
+                handle.write("x")
+            os.chmod(stuck, 0o500)  # its file cannot be unlinked
+
+            def run(argv, **kwargs):
+                calls.append(argv)
+                if argv[0] == "sudo":
+                    os.chmod(stuck, 0o700)
+                    shutil.rmtree(parent)
+                return subprocess.CompletedProcess(argv, 0, "", "")
+            self.addCleanup(lambda: os.path.exists(stuck) and os.chmod(stuck, 0o700))
+            bq.remove_tree("/r", os.path.join(parent, "repo"), run=run)
+            self.assertIn(["sudo", "-n", "rm", "-rf", parent], calls)
+            self.assertFalse(os.path.exists(parent))
 
 
 if __name__ == "__main__":

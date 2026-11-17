@@ -1149,6 +1149,82 @@ class ParseNameProperties(unittest.TestCase):
             self.assertIsNone(lq._parse_name(name), name)
 
 
+class TestMutationPins(_SlotHolderMixin, _TmpDirCase):
+    """Cases a mutation run (2026-11-17) showed the other tests did not pin."""
+
+    def test_ensure_dir_makes_and_repairs_a_world_writable_sticky_directory(self):
+        old = os.umask(0o077)
+        self.addCleanup(os.umask, old)
+        fresh = os.path.join(self._tmp.name, "fresh")
+        lq._ensure_dir(fresh)
+        self.assertEqual(os.stat(fresh).st_mode & 0o7777, 0o1777)
+        narrow = os.path.join(self._tmp.name, "narrow")
+        os.mkdir(narrow, 0o700)
+        lq._ensure_dir(narrow)
+        self.assertEqual(os.stat(narrow).st_mode & 0o7777, 0o1777)
+
+    def test_a_ticket_for_a_pid_with_no_start_time_is_refused(self):
+        pid, _ = _dead_pid_and_start()
+        with self.assertRaisesRegex(RuntimeError, "^cannot read the start time of pid %d$" % pid):
+            lq.take_ticket(self.qdir, pid=pid)
+        self.assertFalse(os.path.exists(self.qdir) and [n for n in os.listdir(self.qdir) if n[0].isdigit()])
+
+    def test_stray_files_are_ignored_when_numbering_and_listing(self):
+        lq._ensure_dir(self.qdir)
+        for junk in ("README", "12-x-y", "holder-x"):
+            with open(os.path.join(self.qdir, junk), "w") as handle:
+                handle.write("x")
+        name = lq.take_ticket(self.qdir)
+        self.assertEqual(name.split("-")[0], "0000000001")
+        self.assertEqual([t["name"] for t in lq.live_tickets(self.qdir)], [name])
+        self.assertTrue(os.path.exists(os.path.join(self.qdir, "README")))  # strays are not cleaned away
+
+    def test_write_holder_without_a_start_time_writes_nothing(self):
+        pid, _ = _dead_pid_and_start()
+        self.assertIsNone(lq.write_holder(self.qdir, "x", pid=pid))
+        self.assertFalse(os.path.exists(self.qdir))
+
+    def test_set_holder_phase_rewrites_the_record_and_keeps_since(self):
+        name = lq.write_holder(self.qdir, "run", now=lambda: 10.0, slot=2, ticket="t1", phase="preflight")
+        self.assertIs(True, lq.set_holder_phase(self.qdir, "running", now=lambda: 55.0))
+        record = lq._read_payload(os.path.join(self.qdir, name))
+        self.assertEqual(record, {"pid": os.getpid(), "start": lq.proc_start_time(os.getpid()), "since": 10.0,
+                                  "info": "run", "slot": 2, "ticket": "t1", "phase": "running", "phase_since": 55.0})
+        self.assertEqual([n for n in os.listdir(self.qdir) if n.startswith(".tmp")], [])
+        self.assertEqual(os.listdir(self.qdir), [name])
+
+    def test_set_holder_phase_without_a_record_or_start_time_writes_nothing(self):
+        lq._ensure_dir(self.qdir)
+        self.assertIs(False, lq.set_holder_phase(self.qdir, "running"))
+        self.assertEqual(os.listdir(self.qdir), [])
+        pid, _ = _dead_pid_and_start()
+        self.assertIs(False, lq.set_holder_phase(self.qdir, "running", pid=pid))
+        self.assertEqual(os.listdir(self.qdir), [])
+
+    def test_set_holder_phase_on_an_unwritable_directory_is_false_and_leaves_the_record(self):
+        name = lq.write_holder(self.qdir, "run", now=lambda: 10.0, phase="preflight")
+        os.chmod(self.qdir, 0o500)
+        self.addCleanup(os.chmod, self.qdir, 0o700)
+        if os.access(self.qdir, os.W_OK):
+            self.skipTest("directory permissions are not enforced for this user")
+        self.assertIs(False, lq.set_holder_phase(self.qdir, "running"))
+        self.assertEqual(lq._read_payload(os.path.join(self.qdir, name))["phase"], "preflight")
+        self.assertEqual(os.listdir(self.qdir), [name])
+
+    def test_one_slot_ignores_a_holder_that_is_not_in_the_queue(self):
+        self.write(1, info="someone")
+        only = lq.take_ticket(self.qdir)
+        self.assertTrue(lq.may_try(self.qdir, lq.live_tickets(self.qdir, clean=False), only, slots=1))
+
+    def test_the_slot_a_process_holds_under_another_ticket_name_is_not_busy_for_its_own_ticket(self):
+        parent = self.write(1)  # a record without a ticket: the run was adopted by a re-exec'd child
+        other_ticket = lq.take_ticket(self.qdir)
+        self.write(2, ticket=other_ticket)
+        mine = lq.take_ticket(self.qdir, pid=parent.pid, start=lq.proc_start_time(parent.pid))
+        tickets = lq.live_tickets(self.qdir, clean=False)
+        self.assertTrue(lq.may_try(self.qdir, tickets, mine, slots=2))
+
+
 if __name__ == "__main__":
     unittest.main()
 
