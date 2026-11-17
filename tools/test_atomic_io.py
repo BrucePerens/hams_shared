@@ -28,6 +28,17 @@ class AtomicWriteTests(unittest.TestCase):
                 atomic_io.atomic_write(os.path.join(directory, "a"), "x")
             self.assertEqual(fsync.call_count, 2)
 
+    def test_failure_at_the_rename_keeps_the_old_file_and_leaves_no_temp_file(self):
+        # Tests [@ANCHOR: atomic_io:atomic_write]
+        with tempfile.TemporaryDirectory() as directory:
+            target = os.path.join(directory, "state.json")
+            atomic_io.atomic_write(target, "old")
+            with unittest.mock.patch("os.replace", side_effect=OSError("boom")):
+                with self.assertRaises(OSError):
+                    atomic_io.atomic_write(target, "new")
+            self.assertEqual(open(target).read(), "old")
+            self.assertEqual(os.listdir(directory), ["state.json"])
+
     @unittest.skipIf(os.geteuid() == 0, "root ignores directory permissions")
     def test_failure_before_rename_keeps_old_file(self):
         # Tests [@ANCHOR: atomic_io:atomic_write]
