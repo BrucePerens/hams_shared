@@ -40,13 +40,22 @@ class PublishTests(unittest.TestCase):
     # (a wrong/expired publish key, the endpoint down, a server error) -- any non-2xx response
     # crashed with a raw, unhandled urllib.error.HTTPError instead of a clear, actionable
     # SystemExit matching find_release_assets' own already-established error-reporting style.
-    def test_a_successful_publish_does_not_raise(self):
+    def test_a_successful_publish_posts_the_asset_to_the_publish_endpoint(self):
         fake_resp = mock.MagicMock()
         fake_resp.read.return_value = json.dumps({"result": {"status": "success"}}).encode()
         fake_resp.__enter__ = mock.Mock(return_value=fake_resp)
         fake_resp.__exit__ = mock.Mock(return_value=False)
-        with mock.patch.object(mirror.urllib.request, "urlopen", return_value=fake_resp):
+        with mock.patch.object(mirror.urllib.request, "urlopen", return_value=fake_resp) as urlopen:
             mirror.publish("https://hams.com", "key", "pat", "linux", "v1.0.0", b"data", "pat.tar.gz", "https://x")
+        request = urlopen.call_args[0][0]
+        self.assertEqual(request.full_url, "https://hams.com/api/relay_bridge/tool/publish")
+        self.assertEqual(request.get_method(), "POST")
+        self.assertEqual(request.get_header("Content-type"), "application/json")
+        params = json.loads(request.data)["params"]
+        self.assertEqual(params, {
+            "api_key": "key", "tool": "pat", "platform": "linux", "tool_version": "v1.0.0",
+            "binary_base64": "ZGF0YQ==", "filename": "pat.tar.gz", "source_url": "https://x",
+        })
 
     def test_an_http_error_during_publish_raises_a_clear_system_exit_not_a_raw_traceback(self):
         # Confirmed to fail against the pre-fix source: the old code let HTTPError propagate
