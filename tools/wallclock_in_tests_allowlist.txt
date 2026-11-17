@@ -1,3 +1,4 @@
 # Files where asserting on elapsed wall-clock time is legitimate (tools/check_wallclock_in_tests.py).
 # One entry per line: <repo>/<path relative to the repo root>  # reason. A file listed here is not scanned.
 # Keep this short. Prefer process_time(), a counter, an injected clock or tokio::time::pause.
+hams_open/daemons/cloudflared/component-tests/test_termination.py  # exercises real cloudflared graceful-shutdown timing against a real child process; the elapsed time is the behaviour under test and cannot be faked

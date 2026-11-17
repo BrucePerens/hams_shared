@@ -1,13 +1,1 @@
-{
- "hams_com/daemons/hams_local_relay/src/bridge_supervisor.rs": 1,
- "hams_com/daemons/hams_local_relay/src/discovery.rs": 2,
- "hams_com/daemons/hams_local_relay/src/hamlib/kx3_bench_tests.rs": 2,
- "hams_com/daemons/hams_local_relay/src/multiplexer/auto_tune.rs": 1,
- "hams_com/daemons/hams_local_relay/src/sdr_tx_audio.rs": 2,
- "hams_com/daemons/hams_local_relay/src/shared_receiver/frontend_process.rs": 1,
- "hams_com/daemons/hams_local_relay/src/shared_receiver/radiod_backend.rs": 1,
- "hams_com/daemons/hams_local_relay/src/upnp_igd.rs": 1,
- "hams_com/daemons/hams_local_relay/src/winlink.rs": 1,
- "hams_open/daemons/cloudflared/component-tests/test_termination.py": 1,
- "hams_open/hams_shared/tools/test_lint_trace_cache.py": 1
-}
+{}
