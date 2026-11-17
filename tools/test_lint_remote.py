@@ -816,6 +816,15 @@ class EndToEndTests(unittest.TestCase):
         self.assertIn("hams_com@%s+dirty" % lr.head_sha(self.com)[:12], "\n".join(self.lines))
 
     def test_a_machine_whose_run_lock_is_stuck_does_not_hang_the_run_it_falls_back(self):
+        # one lock slot, whatever the enclosing lint run exported: with HAMS_LINT_SLOTS/_BURST_SLOTS set (a changed-file lint run on a multi-slot
+        # machine) the holder took one slot and the "remote" run took another, ran, and the test saw "ok" instead of "infra"
+        patcher = mock.patch.dict(os.environ)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        for name in ("HAMS_LINT_SLOT", "HAMS_LINT_LOCK_HELD", "HAMS_LINT_SLOTS_FILE"):
+            os.environ.pop(name, None)
+        os.environ["HAMS_LINT_SLOTS"] = "1"
+        os.environ["HAMS_LINT_BURST_SLOTS"] = "0"
         holder = subprocess.Popen(
             [sys.executable, "-c",
              "import sys, time; sys.path.insert(0, %r); import lint_lock; "
@@ -827,11 +836,6 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual(holder.stdout.readline().strip(), "held")
         os.environ["HAMS_LINT_REMOTE_WAIT"] = "2"
         self.addCleanup(os.environ.pop, "HAMS_LINT_REMOTE_WAIT", None)
-        # when this suite itself runs under a lint run, the "remote" run would inherit the parent's lock marker
-        patcher = mock.patch.dict(os.environ)
-        patcher.start()
-        self.addCleanup(patcher.stop)
-        os.environ.pop("HAMS_LINT_LOCK_HELD", None)
         status, problems, _ = self.run_remote(self.bundle(("say", ["/usr/bin/python3", "-c", "print(1)"])))
         self.assertEqual(status, "infra", "\n".join(self.lines))
         self.assertTrue(any("gave up waiting for the lint run lock" in line for line in self.lines), self.lines)
