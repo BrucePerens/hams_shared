@@ -171,7 +171,7 @@ class V2ClaimsTests(RepoCase):
         self.assertIn("orphaned", problems[0][1])
 
     def test_not_computable_claims_are_still_accepted(self):
-        _write(self.source("rs"), SOURCES["rs"][0])
+        # The anchor has no source here, so it really cannot be hashed; a hashable anchor is a finding (check_claims_freshness).
         _write(
             os.path.join(self.tmp, "claims", "foo.md"),
             "---\nanchor: t:x\ncode_hash: not computable -- Rust claims-hashing tooling doesn't exist yet\n---\n",
