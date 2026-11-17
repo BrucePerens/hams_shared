@@ -220,7 +220,20 @@ class SafeRemoveTests(_TmpDirTestCase):
         self.assertFalse(os.path.exists(path))
 
     def test_a_missing_file_is_a_silent_no_op(self):
-        infra.safe_remove(os.path.join(self.tmp, "nope.txt"))  # must not raise
+        keep = os.path.join(self.tmp, "keep.txt")
+        with open(keep, "w") as f:
+            f.write("x")
+        self.assertIsNone(infra.safe_remove(os.path.join(self.tmp, "nope.txt")))
+        self.assertEqual(os.listdir(self.tmp), ["keep.txt"])
+
+    def test_a_directory_is_left_alone_and_the_oserror_is_swallowed(self):
+        directory = os.path.join(self.tmp, "d")
+        os.mkdir(directory)
+        with self.assertLogs(infra._logger, "DEBUG") as logs:
+            self.assertIsNone(infra.safe_remove(directory))
+        self.assertTrue(os.path.isdir(directory))
+        self.assertEqual(len(logs.records), 1)
+        self.assertTrue(logs.output[0].endswith("OSError removing file: " + str(logs.records[0].args[0])))
 
 
 class ApplyPermissionsTests(_TmpDirTestCase):
@@ -2688,12 +2701,14 @@ class RefuseUnsafeTestDbDropTests(unittest.TestCase):
         # non-test provisioning run silently survives into a later
         # is_test=True run. Without this guard, provision_environment's
         # test-mode branch would run `dropdb --if-exists hams_prod`.
-        with self.assertRaisesRegex(RuntimeError, "hams_prod"):
+        with self.assertRaisesRegex(RuntimeError, "^Refusing to drop database 'hams_prod' during test-mode provisioning: .*explicit, different DB_NAME"):
             infra._refuse_if_unsafe_test_db_drop("hams_prod")
 
     def test_does_not_raise_for_an_ordinary_test_db_name(self):
-        infra._refuse_if_unsafe_test_db_drop("hams_test")  # must not raise
-        infra._refuse_if_unsafe_test_db_drop("some_custom_test_db")  # must not raise
+        self.assertIsNone(infra._refuse_if_unsafe_test_db_drop("hams_test"))
+        self.assertIsNone(infra._refuse_if_unsafe_test_db_drop("some_custom_test_db"))
+        # only the exact name is refused, not a name that merely contains it
+        self.assertIsNone(infra._refuse_if_unsafe_test_db_drop("hams_prod_copy"))
 
 
 class InitializeOdooDatabaseInjectionTests(_SafePatchTestCase):

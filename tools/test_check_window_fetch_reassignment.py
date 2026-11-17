@@ -5,6 +5,8 @@
 Unit tests for check_window_fetch_reassignment.py.
 """
 
+import contextlib
+import io
 import os
 import shutil
 import tempfile
@@ -123,8 +125,14 @@ class CheckWindowFetchReassignmentTests(unittest.TestCase):
         os.makedirs(self.tmp, exist_ok=True)
         with open(path, "wb") as f:
             f.write(b"\xff\xfe\x00window.fetch = 1;")
-        # Must not raise.
-        chk.check_window_fetch_reassignment(self.tmp)
+        _write(os.path.join(self.tmp, "good.test.js"), "window.fetch = x;\n")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            violations = chk.check_window_fetch_reassignment(self.tmp)
+        # the bad file is skipped with a warning naming it; the readable one is still scanned
+        self.assertEqual(len(violations), 1)
+        self.assertTrue(violations[0].startswith("good.test.js:1 "))
+        self.assertEqual(buf.getvalue(), "Warning: could not read " + path + ": 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte\n")
 
     def test_a_broken_symlink_is_skipped_without_crashing(self):
         # Real bug found 2026-09-10: a broken symlink (target doesn't exist) named *.test.js
