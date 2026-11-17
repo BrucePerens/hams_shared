@@ -58,6 +58,33 @@ class PythonTests(unittest.TestCase):
                 assert time.time() - s == pytest.approx(0.2, abs=0.1)
             """)), 1)
 
+    def test_aliased_time_module_is_flagged(self):
+        self.assertEqual(_py("""
+            import time as t
+            def test_x():
+                started = t.time()
+                run()
+                assert t.time() - started < 2
+            """), [6])
+
+    def test_aliased_datetime_class_is_flagged(self):
+        self.assertEqual(_py("""
+            from datetime import datetime as D
+            def test_x():
+                started = D.now()
+                run()
+                assert (D.now() - started).total_seconds() < 2
+            """), [6])
+
+    def test_reading_unpacked_next_to_another_value_is_flagged(self):
+        self.assertEqual(_py("""
+            import time
+            def test_x():
+                started, count = time.time(), 3
+                run(count)
+                assert time.time() - started < 2
+            """), [6])
+
     def test_process_time_is_allowed(self):
         self.assertEqual(_py("""
             import time
