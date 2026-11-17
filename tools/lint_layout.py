@@ -83,7 +83,11 @@ def _clone_at(source, dest, sha):
     clone = subprocess.run(["git", "clone", "-q", "--shared", "--no-checkout", top, dest], capture_output=True, text=True, timeout=600)
     if clone.returncode != 0:
         raise LayoutError("git clone of %s failed: %s" % (top, clone.stderr.strip()[:300]))
-    _checked(dest, "checkout", "-q", "--detach", sha)
+    if _git(dest, "checkout", "-q", "--detach", sha).returncode != 0:
+        # `sha` is the source's remote-tracking origin/main, which the clone does not copy: when the source checkout sits
+        # detached on an older commit nothing reachable from its heads holds it, so fetch it by id (the objects are local).
+        _checked(dest, "fetch", "-q", "origin", sha)
+        _checked(dest, "checkout", "-q", "--detach", sha)
 
 
 def _overlay_uncommitted(source, dest):

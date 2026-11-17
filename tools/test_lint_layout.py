@@ -141,6 +141,18 @@ class BuildTests(LayoutTestCase):
             self.assertEqual(handle.read(), "VALUE = 2\n")
         self.assertFalse(os.path.exists(os.path.join(copy, "docs", "readme.md")))
 
+    def test_a_base_only_reachable_from_a_remote_tracking_ref_is_still_checked_out(self):
+        old = git(self.ws.com_main, "rev-parse", "HEAD")
+        write(self.ws.com_main, "c/more.py", "X = 1\n")
+        commit_all(self.ws.com_main, "second")
+        newer = git(self.ws.com_main, "rev-parse", "HEAD")
+        git(self.ws.com_main, "update-ref", "refs/remotes/origin/main", newer)
+        git(self.ws.com_main, "checkout", "-q", "--detach", old)
+        git(self.ws.com_main, "branch", "-q", "-D", "main")
+        layout = self.ws.build()
+        self.addCleanup(lint_layout.remove, layout)
+        self.assertTrue(os.path.isfile(os.path.join(layout.hams_com, "c", "more.py")))
+
     def test_the_main_checkouts_and_the_worktree_are_not_changed(self):
         write(self.ws.shared_tree, "docs/new.md", "new\n")
         commit_all(self.ws.shared_tree, "branch change")
