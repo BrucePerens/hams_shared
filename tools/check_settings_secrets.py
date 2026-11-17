@@ -61,11 +61,25 @@ def _is_secret(name, parameter):
     return any(SECRET_NAME.search(text) and not NOT_SECRET.search(text) for text in (name, parameter or ""))
 
 
+def _module_string_collections(tree):
+    """`{NAME: [str, ...]}` for module-level `NAME = ("a", "b")` tuples, lists and sets of string constants, so a
+    `for name in SECRET_FIELDS:` loop in get_values counts as masking each of them."""
+    found = {}
+    for stmt in tree.body:
+        if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name) \
+                and isinstance(stmt.value, (ast.Tuple, ast.List, ast.Set)):
+            values = [n.value for n in stmt.value.elts if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+            if values:
+                found[stmt.targets[0].id] = values
+    return found
+
+
 def scan_source(source, path="<source>"):
     """`[(key, line)]` for each unmasked secret-looking settings field in `source`; key is `path:Class.field`."""
     tree = ast.parse(source)
     lines = source.splitlines()
     found = []
+    module_names = _module_string_collections(tree)
     for cls in ast.walk(tree):
         if not isinstance(cls, ast.ClassDef) or not _extends_settings(cls):
             continue
@@ -73,6 +87,9 @@ def scan_source(source, path="<source>"):
         for stmt in cls.body:
             if isinstance(stmt, ast.FunctionDef) and stmt.name == "get_values":
                 masked.update(_constants(stmt))
+                for node in ast.walk(stmt):
+                    if isinstance(node, ast.Name):
+                        masked.update(module_names.get(node.id, ()))
                 masked.update(n.arg for n in ast.walk(stmt) if isinstance(n, ast.keyword) and n.arg)
         for stmt in cls.body:
             if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)
