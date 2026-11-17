@@ -31,6 +31,14 @@ class ScanTests(unittest.TestCase):
         source = HEAD + "    shop_secret = fields.Char()\n    def get_values(self):\n        res = super().get_values()\n        res['shop_secret'] = ''\n        return res\n"
         self.assertEqual(keys(source), [])
 
+    def test_a_field_in_a_module_tuple_that_get_values_loops_over_is_masked(self):
+        source = "SECRETS = ('shop_secret',)\n" + HEAD + "    shop_secret = fields.Char()\n    def get_values(self):\n        res = super().get_values()\n        for name in SECRETS:\n            res[name] = ''\n        return res\n"
+        self.assertEqual(keys(source), [])
+
+    def test_a_module_tuple_that_get_values_does_not_use_masks_nothing(self):
+        source = "SECRETS = ('shop_secret',)\n" + HEAD + "    shop_secret = fields.Char()\n    def get_values(self):\n        return super().get_values()\n"
+        self.assertEqual(keys(source), ["S.shop_secret"])
+
     def test_a_get_values_that_does_not_name_the_field_does_not_mask_it(self):
         source = HEAD + "    shop_secret = fields.Char()\n    def get_values(self):\n        return super().get_values()\n"
         self.assertEqual(keys(source), ["S.shop_secret"])
