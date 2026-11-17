@@ -746,6 +746,24 @@ def build_claim_index(repo_root, store_roots=()):
     return keys
 
 
+def _claimable_anchor_names(content, path):
+    """The cleaned anchor names in `content` that sit on a hashable item (for Python a function
+    span, see `function_hashes_from_text`), or None when the file cannot be analysed (a syntax or
+    tokenizer error) and every anchor must stay listed. An anchor on a class, a field or a
+    module-level comment has no span to hash, so a claim (ADR 0091: one anchored function)
+    cannot be written for it."""
+    language = cn.language_for_path(path)
+    if language is None:
+        return None
+    try:
+        if language == "python":
+            ast.parse(content, filename=path)
+            return set(function_hashes_from_text(content, path))
+        return set(cn.anchored_hashes(content, language))
+    except (SyntaxError, cn.NormalizeError):
+        return None
+
+
 # [@ANCHOR: check_claims_freshness:COMM_unclaimed_anchors]
 def find_unclaimed_anchors(repo_root, store_roots=()):
     """Returns `[(module, anchor_name, "rel/path:line")]`, sorted, for every implementation anchor
@@ -759,6 +777,8 @@ def find_unclaimed_anchors(repo_root, store_roots=()):
     Known over-report: a "cluster" claim that documents several functions in its prose but names
     only one in `anchor:` (e.g. hams_local_relay's `cw_rate_estimator_accessors_cluster.md`)
     covers just that one anchor here -- there is no machine-readable field for the others.
+    Anchors on a class, field or module-level comment are not listed: they have no function span
+    to hash, and ADR 0091 defines a claim as documenting one anchored function.
     Directories `verify_anchors.py` itself skips (`tools/`, `scripts/`, `docs/`) are skipped too."""
     claimed = build_claim_index(repo_root, store_roots)
     unclaimed = []
@@ -773,8 +793,11 @@ def find_unclaimed_anchors(repo_root, store_roots=()):
                 content = f.read()
         except (OSError, UnicodeDecodeError):
             continue
+        claimable = _claimable_anchor_names(content, full_path)
         for module, name, line_num in implementation_anchors_in_file(full_path, content, repo_root):
             base = va._clean(name)
+            if claimable is not None and base not in claimable and f"{module}:{base}" not in claimable:
+                continue
             if (module, base) in claimed or (None, base) in claimed:
                 continue
             unclaimed.append((module, name, f"{rel}:{line_num}"))
