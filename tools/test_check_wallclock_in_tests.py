@@ -122,7 +122,20 @@ class PythonTests(unittest.TestCase):
             """), [])
 
 
+class PythonBareImportTests(unittest.TestCase):
+    def test_from_time_import_time_difference_is_flagged(self):
+        self.assertEqual(_py("""
+            from time import time as now
+            def test_x(self):
+                t0 = now()
+                assert now() - t0 < 1
+            """), [5])
+
+
 class JsTests(unittest.TestCase):
+    def test_clock_variable_name_does_not_match_inside_other_identifiers(self):
+        self.assertEqual(chk.check_js("const t = Date.now();\nexpect(count - total).toBe(0);\n"), [])
+
     def test_date_now_delta_is_flagged(self):
         self.assertEqual(chk.check_js("const t0 = Date.now();\nawait run();\nexpect(Date.now() - t0).toBeLessThan(2000);\n"), [3])
 
