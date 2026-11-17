@@ -177,7 +177,7 @@ These ADRs are in this directory and are cited by other documents; they have no 
 
 ## Consolidated numbers
 
-ADR numbers 0001 to 0072 (and 0099) are cited throughout the code and docs, but their own files no longer exist: the early ADRs were consolidated into the MASTER ADRs above (each MASTER file's status line lists what it absorbed, and its sections keep the number in parentheses where the text came from that ADR). A citation such as `ADR-0002` therefore means the section of that MASTER file. Written from the MASTER status lines; the original per-number files are not reconstructed.
+ADR numbers 0001 to 0072 (and 0099) are cited throughout the code and docs, but their own files no longer exist: the early ADRs were consolidated into the MASTER ADRs above (each MASTER file's status line lists what it absorbed, and its sections keep the number in parentheses where the text came from that ADR). A citation such as `ADR-` followed by one of those numbers therefore means the section of that MASTER file. Written from the MASTER status lines; the original per-number files are not reconstructed.
 
 | ADR | Now in |
 |---|---|
