@@ -20,7 +20,8 @@ class PrePushCheckTests(unittest.TestCase):
     def test_the_runner_gives_up_when_the_time_is_spent(self):
         calls = []
 
-        def run(argv, cwd=None, timeout=0):
+        def run(argv, cwd=None, timeout=0, wall=None):
+            self.assertEqual(wall, timeout)  # the budget is a wall-clock limit as well as an idle one
             calls.append(timeout)
             return subprocess.CompletedProcess(argv, 124 if argv[0] == "slow" else 0, "", "")
 
