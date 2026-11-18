@@ -421,7 +421,9 @@ class VerifyTests(SnapshotTestBase):
     # Tests [@ANCHOR: gate_snapshot:verify_snapshot]
     def test_an_edited_tree_a_moved_head_and_an_unknown_shard_module_are_refused(self):
         write(os.path.join(self.trees["com"], "mod_com", "__manifest__.py"), "{'edited': 1}\n")
-        self.assertTrue(any("uncommitted changes" in p for p in self.problems()))
+        dirty = [p for p in self.problems() if "uncommitted changes" in p]
+        self.assertTrue(dirty)
+        self.assertIn("mod_com/__manifest__.py", dirty[0])
         git(self.trees["com"], "checkout", "-q", "--", ".")
         git(self.trees["com"], "commit", "-q", "--allow-empty", "-m", "moved")
         self.assertTrue(any("is at" in p for p in self.problems()))

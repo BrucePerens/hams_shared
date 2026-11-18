@@ -410,7 +410,7 @@ def _clippy_command(crate_dir):
     for rel, flags in ALL_TARGETS_CRATES.items():
         if os.path.normpath(crate_dir).endswith(os.sep + rel):
             extra = ["--all-targets"] + flags
-    return ["cargo", "clippy"] + extra + ["--", "-W", "clippy::all"]
+    return ["cargo", "clippy", "--locked"] + extra + ["--", "-W", "clippy::all"]
 
 
 # [@ANCHOR: tools:check_cargo_clippy_run]
