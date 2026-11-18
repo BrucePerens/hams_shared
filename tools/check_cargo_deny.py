@@ -102,6 +102,11 @@ def find_lockfile_only_crates(repo_root):
     return sorted(found)
 
 
+def _locked(crate_dir):
+    """['--locked'] when the crate has a Cargo.lock (cargo refuses to create one under --locked). Pure."""
+    return ["--locked"] if os.path.isfile(os.path.join(crate_dir, "Cargo.lock")) else []
+
+
 def main():
     if len(sys.argv) < 2:
         print("Usage: check_cargo_deny.py <repo_root>")
@@ -110,7 +115,7 @@ def main():
     target = check_target.require_directory(sys.argv[1], "check_cargo_deny")
     # --locked: a stale Cargo.lock fails the check instead of being rewritten in the tree (it dirtied the gate snapshot, round 143).
     crate_dirs = [
-        (repo_root, crate_dir, ["cargo", "deny", "--locked", "check"])
+        (repo_root, crate_dir, ["cargo", "deny"] + _locked(crate_dir) + ["check"])
         for repo_root in _resolve_repo_roots(target)
         for crate_dir in find_deny_crates(repo_root)
     ] + [

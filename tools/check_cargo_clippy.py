@@ -410,17 +410,25 @@ def _clippy_command(crate_dir):
     for rel, flags in ALL_TARGETS_CRATES.items():
         if os.path.normpath(crate_dir).endswith(os.sep + rel):
             extra = ["--all-targets"] + flags
-    return ["cargo", "clippy", "--locked"] + extra + ["--", "-W", "clippy::all"]
+    # --locked only where a Cargo.lock exists: for a lock-less crate cargo refuses to create one under --locked.
+    locked = ["--locked"] if os.path.isfile(os.path.join(crate_dir, "Cargo.lock")) else []
+    return ["cargo", "clippy"] + locked + extra + ["--", "-W", "clippy::all"]
 
 
 # [@ANCHOR: tools:check_cargo_clippy_run]
 def _run_clippy(crate_dir):
-    return subprocess.run(
-        _clippy_command(crate_dir),
-        capture_output=True,
-        text=True,
-        cwd=crate_dir,
-    )
+    lock = os.path.join(crate_dir, "Cargo.lock")
+    had_lock = os.path.isfile(lock)
+    try:
+        return subprocess.run(
+            _clippy_command(crate_dir),
+            capture_output=True,
+            text=True,
+            cwd=crate_dir,
+        )
+    finally:
+        if not had_lock and os.path.isfile(lock):
+            os.remove(lock)  # a lock-less crate gets a throwaway lock; do not dirty the snapshot
 
 
 def _in_work_checkouts(crate_dirs, work_roots):
