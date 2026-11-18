@@ -47,6 +47,7 @@ STEPS_THAT_CANNOT_READ_PYTHON = {
     "check_xml_attribute_position_comment",
     "check_owl_templates",
     "check_scss_math_functions",
+    "check_view_xpath_conflicts",
     "check_window_fetch_reassignment",
     "check_js_syntax",
     "check_js_test_hook_gating",
