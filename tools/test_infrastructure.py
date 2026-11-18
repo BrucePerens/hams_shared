@@ -4498,6 +4498,17 @@ class SigningKeyMigrationHookTests(_TmpDirTestCase):
         self.assertEqual(os.listdir(self.new_dir), [])
         self.assertEqual(len(infra.get_hook_failures()), 1)
 
+    def test_a_stale_migrating_file_from_a_killed_run_does_not_block_the_move(self):
+        raw = self._write_old_key()
+        with open(self.new_path + ".migrating", "wb") as f:
+            f.write(b"partial")
+        self._run_hook()
+        self.assertFalse(os.path.exists(self.old_path))
+        with open(self.new_path, "rb") as f:
+            self.assertEqual(f.read(), raw)
+        self.assertEqual(os.listdir(self.new_dir), [self.KEY_NAME])
+        self.assertEqual(infra.get_hook_failures(), [])
+
     @unittest.skipIf(os.geteuid() == 0, "root can chown to any uid")
     def test_failed_chown_keeps_the_old_key_and_leaves_no_partial_copy(self):
         self._write_old_key()
