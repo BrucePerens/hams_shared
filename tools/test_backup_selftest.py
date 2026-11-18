@@ -70,6 +70,39 @@ class Cluster:
         subprocess.run([f"{PG_BIN}/pg_ctl", "-D", self.data, "-m", "immediate", "-w", "stop"], capture_output=True)
 
 
+class ClassSetupFailureCleanupTests(unittest.TestCase):
+    """A shared-cluster class whose setUpClass fails half way still stops its cluster and removes its directory (round 143: tearDownClass is
+    not called then, and the postgres and its 200 MB stayed in /tmp)."""
+
+    def test_a_failure_after_the_cluster_started_stops_it_and_removes_the_directory(self):
+        need_postgres_and_pgbackrest()
+        made = {}
+        real_cluster = Cluster
+
+        def recording_cluster(*args, **kwargs):
+            made["cluster"] = real_cluster(*args, **kwargs)
+            return made["cluster"]
+
+        class Failing(RealRepoBase):
+            def test_x(self):
+                pass
+
+        real_sh = sh
+
+        def failing_sh(argv, **kw):
+            if argv[0] == "pgbackrest":
+                raise RuntimeError("stanza-create failed")
+            return real_sh(argv, **kw)
+
+        with unittest.mock.patch(f"{__name__}.Cluster", recording_cluster), unittest.mock.patch(f"{__name__}.sh", failing_sh):
+            with self.assertRaises(RuntimeError):
+                Failing.setUpClass()
+            Failing.doClassCleanups()
+        cluster = made["cluster"]
+        self.assertFalse(os.path.exists(os.path.join(cluster.data, "postmaster.pid")))
+        self.assertFalse(os.path.exists(Failing.base))
+
+
 class RealRepoBase(unittest.TestCase):
     """One live cluster and one pgBackRest repository with a full backup and some later WAL, shared by the tests; each test
     works on its own copy of the repository, so a corrupted copy never leaks into the next test."""
@@ -78,12 +111,14 @@ class RealRepoBase(unittest.TestCase):
     def setUpClass(cls):
         need_postgres_and_pgbackrest()
         cls.base = tempfile.mkdtemp(prefix="bst-")
+        cls.addClassCleanup(shutil.rmtree, cls.base, True)  # class clean-ups run even when this method fails half way (tearDownClass would not)
         cls.conf = os.path.join(cls.base, "pgbackrest.conf")
         cls.repo = os.path.join(cls.base, "repo")
         os.mkdir(cls.repo)
         cls.live_dir = os.path.join(cls.base, "live")
         cls.write_conf(cls.conf, cls.repo, cls.live_dir, None)
         cls.live = Cluster(cls.base, "live", archive_command=f"pgbackrest --config={cls.conf} --stanza=selftest archive-push %p")
+        cls.addClassCleanup(cls.live.stop)  # runs before the rmtree above
         cls.write_conf(cls.conf, cls.repo, cls.live_dir, cls.live)
         sh(["pgbackrest", f"--config={cls.conf}", "--stanza=selftest", "stanza-create"])
         cls.live.sql("create database appdb")
@@ -114,11 +149,6 @@ class RealRepoBase(unittest.TestCase):
         os.makedirs(os.path.dirname(path) + "/lock", exist_ok=True)
         with open(path, "w") as f:
             f.write(text)
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.live.stop()
-        shutil.rmtree(cls.base, ignore_errors=True)
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="bsw-")
@@ -643,6 +673,7 @@ class StorageProfileTests(unittest.TestCase):
         base = os.path.join(self.tmp, "cc")
         os.mkdir(base)
         cluster = Cluster(base, "c")
+        self.addCleanup(cluster.stop)
         cluster.sql("create table t as select g from generate_series(1,2000) g")
         relpath = cluster.sql("select pg_relation_filepath('t')")
         cluster.stop()
