@@ -51,6 +51,9 @@ class CheckBranchSubmoduleTests(unittest.TestCase):
         fake_wt = types.ModuleType("new_agent_worktree")
         fake_wt.create = lambda *a, **k: {"main_checkout": tree, "worktree": tree, "branch": "b", "job": "j", "job_dir": job}
         fake_wt.state_dir = lambda: job
+        fake_wt.WorktreeError = RuntimeError
+        fake_wt.default_root = lambda: job
+        fake_wt.check_space = lambda root: None
         fake_mp = types.ModuleType("merge_pr")
         fake_mp.ensure_shared_submodule = lambda repo, t, m: calls.append(repo) or problem[0]
         fake_mp.run = lambda *a, **k: None
