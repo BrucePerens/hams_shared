@@ -78,6 +78,34 @@ class CheckBranchSubmoduleTests(unittest.TestCase):
         self.assertEqual(said, [])
 
 
+class CheckBranchWorktreeErrorTests(unittest.TestCase):
+    def test_a_worktree_error_allows_the_push_with_a_warning_and_the_job_name_is_unique_per_run(self):
+        import sys
+        import types
+        names = []
+
+        class WorktreeError(RuntimeError):
+            pass
+
+        def create(repo, branch, **kwargs):
+            names.append(branch)
+            raise WorktreeError("only 3 GB free")
+
+        fake_wt = types.ModuleType("new_agent_worktree")
+        fake_wt.WorktreeError = WorktreeError
+        fake_wt.create = create
+        fake_mp = types.ModuleType("merge_pr")
+        saved = {name: sys.modules.get(name) for name in ("merge_pr", "new_agent_worktree")}
+        sys.modules.update(merge_pr=fake_mp, new_agent_worktree=fake_wt)
+        self.addCleanup(lambda: [sys.modules.__setitem__(n, m) if m else sys.modules.pop(n, None) for n, m in saved.items()])
+        said = []
+        self.assertTrue(ppc.check_branch("hams_com", "abc", tempfile.gettempdir(), say=said.append))
+        self.assertEqual(len(said), 1)
+        self.assertIn("only 3 GB free", said[0])
+        self.assertIn("push allowed", said[0])
+        self.assertTrue(names[0].startswith("prepush-%d-" % os.getpid()))  # not just the pid: a stale prepush-<pid> directory cannot collide
+
+
 class PrePushHookEnvironmentTests(unittest.TestCase):
     def test_the_pre_push_hook_runs_its_checks_without_git_dir(self):
         hook = os.path.join(os.path.dirname(os.path.abspath(__file__)), "git-hooks", "pre-push")
