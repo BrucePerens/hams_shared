@@ -19,9 +19,17 @@ A Markdown file that shrinks because sections were MOVED is not flagged when eve
 list item and fenced block, whitespace collapsed) is present verbatim in the new content of the Markdown files of the same change
 (`check_no_rule_lost.moved_verbatim`, 2026-11-09: instruction files are trimmed by moving task-specific sections into on-demand
 documents). A single reworded or dropped unit makes it an ordinary shrink again.
+
+A to-do file (night_shift_todo/**.md) that shrinks because bullets were removed is not flagged when the removal is recorded as
+fixed (`_trim_recorded`, 2026-11-17, the relay-hunt35 case: a partial fix finished two acceptance bullets and the note was
+trimmed). Rule: every removed line is a `- ` bullet, and each removed bullet shares at least 3 distinctive words (6 or more
+letters, case-folded; all of them if it has fewer) with a night_shift_history/*.md entry staged in the same commit. Only the
+staged history entry is used, because the commit message does not exist yet when pre-commit runs. Any removed non-bullet line,
+or a bullet the history does not mention, makes it an ordinary shrink again.
 """
 
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -136,6 +144,31 @@ def _moved_not_lost(filepath, changed_files, staged, repo_root):
         sys.path.pop(0)
 
 
+def _words(text):
+    return {w.lower() for w in re.findall(r"[A-Za-z]{6,}", text)}
+
+
+def _trim_recorded(filepath, repo_root):
+    """True when `filepath` is a to-do file whose staged diff only removes bullets, each recorded in a staged history entry."""
+    if not (filepath.startswith("night_shift_todo/") and filepath.endswith(".md")):
+        return False
+    diff = _git_out(["diff", "--cached", "-U0", "--", filepath], repo_root).decode("utf-8", "replace")
+    removed = [l[1:] for l in diff.splitlines() if l.startswith("-") and not l.startswith("---")]
+    removed = [l for l in removed if l.strip()]
+    if not removed or not all(l.startswith("- ") for l in removed):
+        return False
+    added = _git_out(["diff", "--cached", "--name-only", "--diff-filter=AM", "-z", "--", "night_shift_history"], repo_root)
+    history = set()
+    for name in added.decode().split("\0"):
+        if name.endswith(".md"):
+            history |= _words(_git_out(["show", f":{name}"], repo_root).decode("utf-8", "replace"))
+    for line in removed:
+        keys = _words(line)
+        if not keys or len(keys & history) < min(3, len(keys)):
+            return False
+    return True
+
+
 def main():
     staged = "--staged" in sys.argv[1:]
     try:
@@ -223,6 +256,9 @@ def main():
             if reduction_ratio > 0.05 and filepath.endswith(".md") and _moved_not_lost(filepath, modified_files, staged, repo_root):
                 print(f"✓ {filepath} shrank by {reduction_ratio:.1%}, but every heading, paragraph, list item and code block of the old")
                 print("  text is present verbatim in this change (check_no_rule_lost.moved_verbatim): moved, not dropped.")
+                continue
+            if reduction_ratio > 0.05 and staged and _trim_recorded(filepath, repo_root):
+                print(f"✓ {filepath} shrank by {reduction_ratio:.1%}, but only to-do bullets were removed and a staged history entry records them as fixed.")
                 continue
             if reduction_ratio > 0.05:
                 print(f"❌ SUMMATION BIAS DETECTED in {filepath}")
