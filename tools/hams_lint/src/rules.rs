@@ -300,7 +300,6 @@ pub fn load(text: &str) -> Result<Vec<Check>, String> {
         let skip_file_if = compile(&spec.skip_file_if, "skip_file_if", &spec.name)?;
         // The fingerprint keys the result cache: any change to the check's definition or to the engine
         // invalidates every cached result of that check.
-        let mut h = Sha256::new();
         let fingerprint = fingerprint_of(&format!("{spec:?}"), &ENGINE_SOURCES);
         out.push(Check {
             spec,
