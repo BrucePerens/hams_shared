@@ -3212,3 +3212,28 @@ if __name__ == "__main__":
 # Tests [@ANCHOR: test:test_virtual_clock_thread_class]
 # Tests [@ANCHOR: test:test__post_fork_safe_log_class]
 # Tests [@ANCHOR: test:test_oomwatchdog_class]
+
+
+class GitHookEnvScrubTests(unittest.TestCase):
+    """A run started from a git hook inherits GIT_DIR; a test's `git init` + `git config user.name Test` in a temp dir then
+    wrote into the hook's real repository (2026-11-16 to 18: agent commits authored "Test <test@example.com>")."""
+
+    def test_scrub_keeps_a_temp_repos_config_out_of_the_inherited_repository(self):
+        real = tempfile.mkdtemp()
+        scratch = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(real, ignore_errors=True))
+        self.addCleanup(lambda: shutil.rmtree(scratch, ignore_errors=True))
+        subprocess.run(["git", "init", "-q", real], check=True)
+        env = dict(os.environ, GIT_DIR=os.path.join(real, ".git"), GIT_WORK_TREE=real, GIT_INDEX_FILE=os.path.join(real, ".git", "index"))
+        code = (
+            "import importlib.util, os, subprocess, sys\n"
+            f"spec = importlib.util.spec_from_file_location('t', {_test_runner.__file__!r})\n"
+            "m = importlib.util.module_from_spec(spec); sys.modules['t'] = m; spec.loader.exec_module(m)\n"
+            "m.scrub_git_hook_env()\n"
+            f"os.chdir({scratch!r})\n"
+            "subprocess.run(['git', 'init', '-q'], check=True)\n"
+            "subprocess.run(['git', 'config', 'user.name', 'Test'], check=True)\n"
+        )
+        subprocess.run([sys.executable, "-c", code], env=env, check=True)
+        out = subprocess.run(["git", "-C", real, "config", "--local", "--get", "user.name"], capture_output=True, text=True)
+        self.assertEqual(out.stdout.strip(), "", "the inherited repository's config was written")

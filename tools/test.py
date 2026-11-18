@@ -4592,11 +4592,22 @@ def run_preflight_in_slot(args, lock_file_path, held_slot, slots, preflight=None
 
 
 # [@ANCHOR: test:main]
+def scrub_git_hook_env():
+    """Drops the repository-selecting GIT_* variables a git hook passes down (GIT_DIR, GIT_INDEX_FILE, ...).
+
+    Tests run `git init` and `git config user.name Test` in temp directories; with GIT_DIR inherited those acted on the hook's own
+    repository (2026-11-16 to 18: agent commits authored "Test <test@example.com>")."""
+    out = subprocess.run(["git", "rev-parse", "--local-env-vars"], capture_output=True, text=True, check=False).stdout
+    for name in out.split():
+        os.environ.pop(name, None)
+
+
 def main():
     global _single_instance_lock, _CHROME_PROFILE_GLOBS, _HOLDER_PHASE
     # First thing, before any lock, namespace, daemon or database work. rebuild_db() repeats the check
     # with the database list once PostgreSQL is reachable.
     refuse_to_run_on_production_host()
+    scrub_git_hook_env()
     # Reject a bad command line before anything else: not after the lock queue or a long build.
     early_args = parse_runner_args()
     if not (early_args.internal_ns_init or early_args.preflight_done):
