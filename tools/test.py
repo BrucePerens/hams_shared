@@ -60,6 +60,7 @@ import odoo_test_batch
 import offline_browser_ns
 import runner_cleanup
 import runner_slots
+import scratch_janitor
 import ram_dirs
 
 import argparse
@@ -4739,6 +4740,14 @@ def main():
         if not root_phase and not preflight_done:
             run_preflight_in_slot(early_args, lock_file_path, held_slot, slots)
             preflight_done = True
+        if not root_phase:
+            # A run that was killed never reaches its clean-up: its slot's own TMPDIR keeps the scratch of its tests. Remove what is
+            # old and that no live process references (the slot's own directory only; /tmp itself is never swept).
+            try:
+                own_tmpdir = runner_slots.slot_resources(held_slot, slots, False, os.environ.get("TMPDIR")).tmpdir
+            except runner_slots.SlotConfigError:
+                own_tmpdir = None
+            scratch_janitor.sweep_stale_scratch(own_tmpdir)
         if slots > 1 and not root_phase:
             # Under the slot lock, before anything is built: remove what runs that are gone left behind.
             try:
