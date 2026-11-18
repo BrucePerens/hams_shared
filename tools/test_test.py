@@ -2307,6 +2307,11 @@ class CiLoadGateWaitTests(unittest.TestCase):
     wait loop itself is testable. Time is injected, so none of these sleep."""
 
     def setUp(self):
+        # These tests set the gate variables directly; restore the environment afterwards so a later test
+        # (or a child process it starts) does not inherit a bogus HAMS_CI_LOAD_GATE_RATIO in reversed order.
+        saved_environ = patch.dict(os.environ)
+        saved_environ.start()
+        self.addCleanup(saved_environ.stop)
         for var in (
             "HAMS_SKIP_CI_LOAD_GATE",
             "HAMS_CI_LOAD_GATE_RATIO",
