@@ -227,7 +227,7 @@ class LockOnlyCrateTests(unittest.TestCase):
             with self.assertRaises(SystemExit) as ctx:
                 chk.main()
         self.assertEqual(ctx.exception.code, 1)
-        self.assertEqual(mock_run.call_args_list[1].args[0], ["cargo", "deny", "check", "advisories"])
+        self.assertEqual(mock_run.call_args_list[1].args[0], ["cargo", "deny", "--locked", "check", "advisories"])
 
 
 class TimeoutTests(unittest.TestCase):
