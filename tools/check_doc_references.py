@@ -482,11 +482,16 @@ def main(argv=None):
         if args.list or key_of(finding) not in baseline:
             print(f"{finding[0]}:{finding[1]}: {finding[2]}: {finding[3]}")
     new = sorted(keys - baseline)
-    print(f"[*] check_doc_references: {len(keys)} broken references ({len(keys) - len(new)} in the baseline, {len(new)} new)")
+    stale = sorted(baseline - keys)
+    print(f"[*] check_doc_references: {len(keys)} broken references ({len(keys) - len(new)} in the baseline, {len(new)} new, {len(stale)} stale)")
+    for key in stale:
+        print(f"stale baseline entry: {key}")
+    if stale:
+        print(f"[-] FAILED: the baseline lists references that no longer occur. Run `check_doc_references.py {args.directory} --generate-baseline` and commit the result.")
     if new:
         print("[-] FAILED: the new references above do not exist. Fix the document (or, if the thing is meant to exist, add it).")
         return 1
-    return 0
+    return 1 if stale else 0
 
 
 if __name__ == "__main__":
