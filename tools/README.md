@@ -3724,7 +3724,7 @@ Purpose: the `wait` subcommand: exactly one of `--pid [--start-time]`, `--job`, 
 
 ### `[@ANCHOR: agent_procs:default_mem_max]` `default_mem_max(command)`
 
-Purpose: the memory cap `run` uses when `--mem-max` is not given. Argument: `command`, the argv list (or None). Returns `CARGO_MEM_MAX` (`24G`) when any word's basename is `cargo` or `rustc`, and `LINT_MEM_MAX` (`24G`) for `run_linters.py` (a full lint run hit 6G and was SIGTERMed, exit 143) (so `nice -n 10 env X=1 cargo test` and `/opt/u/.cargo/bin/cargo` count), else `DEFAULT_MEM_MAX` (`6G`, Odoo tests and everything else). Pure; no I/O. Test: `test_agent_procs.py`.
+Purpose: the memory cap `run` uses when `--mem-max` is not given. Argument: `command`, the argv list (or None). Returns `CARGO_MEM_MAX` (`24G`) when any word's basename is `cargo` or `rustc`, and `LINT_MEM_MAX` (`32G`) for `run_linters.py`, `merge_pr.py` and `git push` (its pre-push hook runs lint and cargo; 31 scopes were OOM-killed at 6G/12G on 2026-11-18); words are also scanned inside `bash -c` strings and `.sh` script arguments (so `nice -n 10 env X=1 cargo test` and `/opt/u/.cargo/bin/cargo` count), else `DEFAULT_MEM_MAX` (`6G`, Odoo tests and everything else). Pure; no I/O. Test: `test_agent_procs.py`.
 
 ### `[@ANCHOR: agent_procs:default_timeout]` `default_timeout(command)`
 
@@ -3732,7 +3732,7 @@ Purpose: the timeout `run` uses when `--timeout` is not given. Argument: `comman
 
 ### `[@ANCHOR: agent_procs:cmd_run]` `cmd_run(args, out=sys.stdout)`
 
-Purpose: the `run` subcommand: `run NAME [--tag AGENT] [--cwd DIR] [--timeout S] [--mem-max SIZE] [--nice N] -- COMMAND...`. Defaults: timeout 1800 s (5400 s for `run_linters.py`, see `default_timeout`), memory cap 6G (24G when a word of the command is `cargo`, `rustc` or `run_linters.py`, see `default_mem_max`: the large relay crate's builds and tests were killed at 6G); `--timeout 0` / `--mem-max none` opt out and print a loud WARNING; without `systemd-run --user` the cap is `ulimit -v` and the output says so. A timeout stops the whole process group (exit 124, `exit_reason` `timeout` in the record) and the command dies when its wrapper dies. `jobs` shows `timeout=` and `mem=`. Prints the job's pid, process group, log path and the wait and stop commands. Returns 0.
+Purpose: the `run` subcommand: `run NAME [--tag AGENT] [--cwd DIR] [--timeout S] [--mem-max SIZE] [--nice N] -- COMMAND...`. Defaults: timeout 1800 s (5400 s for `run_linters.py`, see `default_timeout`), memory cap 6G (24G for `cargo`/`rustc`, 32G for `run_linters.py`, `merge_pr.py` or `git push`, see `default_mem_max`: the large relay crate's builds and tests were killed at 6G); `--timeout 0` / `--mem-max none` opt out and print a loud WARNING; without `systemd-run --user` the cap is `ulimit -v` and the output says so. A timeout stops the whole process group (exit 124, `exit_reason` `timeout` in the record) and the command dies when its wrapper dies. `jobs` shows `timeout=` and `mem=`. Prints the job's pid, process group, log path and the wait and stop commands. Returns 0.
 
 | Argument | Type | Meaning |
 |---|---|---|
