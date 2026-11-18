@@ -88,26 +88,27 @@ def select_crates(crate_dirs, changed):
     trigger = next((path for path in outside if path.endswith(".rs") or _is_global_trigger(path)), None)
     if trigger is not None:
         return list(crate_dirs), []
-    memo = {}
+    deps_memo = {}
 
-    def closure(directory):
-        """Every directory `directory` depends on, itself included; None when a manifest cannot be read."""
-        if directory in memo:
-            return memo[directory]
-        memo[directory] = {directory}  # a cycle ends here
-        deps = path_dependencies(directory) if os.path.isfile(os.path.join(directory, "Cargo.toml")) else []
-        if deps is None:
-            memo[directory] = None
-            return None
-        result = {directory}
-        for dep in deps:
-            inner = closure(dep)
-            if inner is None:
-                memo[directory] = None
+    def dependencies(directory):
+        """The path dependencies of `directory` (read once); None when its manifest cannot be read."""
+        if directory not in deps_memo:
+            deps_memo[directory] = path_dependencies(directory) if os.path.isfile(os.path.join(directory, "Cargo.toml")) else []
+        return deps_memo[directory]
+
+    def closure(start):
+        """Every directory `start` depends on, itself included; None when a manifest cannot be read. Each start walks its own graph, so a
+        dependency cycle (a dev-dependency can close one) never leaves a partial result for another crate to reuse."""
+        reach, queue = {start}, [start]
+        while queue:
+            deps = dependencies(queue.pop())
+            if deps is None:
                 return None
-            result |= inner
-        memo[directory] = result
-        return result
+            for dep in deps:
+                if dep not in reach:
+                    reach.add(dep)
+                    queue.append(dep)
+        return reach
 
     selected, skipped = [], []
     for given, crate in zip(crate_dirs, crates):

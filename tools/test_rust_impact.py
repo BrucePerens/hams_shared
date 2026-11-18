@@ -91,6 +91,16 @@ class SelectionTests(Tree):
         selected, _ = rust_impact.select_crates([a, b], [self.path("a", "src", "main.rs")])
         self.assertEqual(selected, [a, b])
 
+    def test_a_crate_in_a_dependency_cycle_still_reaches_what_the_other_one_depends_on(self):
+        # b -> a -> c and a -> b: the reach of b must include c, however the cycle was entered.
+        c = self.crate("c")
+        a = self.crate("a", deps=["b", "c"])
+        b = self.crate("b", deps=["a"])
+        selected, skipped = rust_impact.select_crates([a, b], [self.path("c", "data.txt")])
+        self.assertEqual(selected, [a, b])
+        self.assertEqual(skipped, [])
+        self.assertTrue(c)
+
 
 class DependencyTests(Tree):
     def test_every_table_that_can_hold_a_path_is_read(self):
