@@ -203,6 +203,25 @@ fn compile(pattern: &str, what: &str, check: &str) -> Result<Option<Regex>, Stri
 
 pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// The engine's own algorithm sources: part of every fingerprint, so editing an algorithm can never
+/// leave a cached result computed by the older code valid.
+const ENGINE_SOURCES: [&str; 3] = [
+    include_str!("algos.rs"),
+    include_str!("text.rs"),
+    include_str!("rules.rs"),
+];
+
+fn fingerprint_of(spec_debug: &str, sources: &[&str]) -> String {
+    let mut h = Sha256::new();
+    h.update(ENGINE_VERSION.as_bytes());
+    for s in sources {
+        h.update((s.len() as u64).to_le_bytes());
+        h.update(s.as_bytes());
+    }
+    h.update(spec_debug.as_bytes());
+    hex(&h.finalize())
+}
+
 pub fn load(text: &str) -> Result<Vec<Check>, String> {
     let file: RuleFile = toml::from_str(text).map_err(|e| format!("rule file: {e}"))?;
     if file.version != 1 {
@@ -282,9 +301,7 @@ pub fn load(text: &str) -> Result<Vec<Check>, String> {
         // The fingerprint keys the result cache: any change to the check's definition or to the engine
         // invalidates every cached result of that check.
         let mut h = Sha256::new();
-        h.update(ENGINE_VERSION.as_bytes());
-        h.update(format!("{spec:?}").as_bytes());
-        let fingerprint = hex(&h.finalize());
+        let fingerprint = fingerprint_of(&format!("{spec:?}"), &ENGINE_SOURCES);
         out.push(Check {
             spec,
             fingerprint,
@@ -474,6 +491,14 @@ mod tests {
     // Tests [@ANCHOR: hams_lint:rules_file_result_struct]
     // Tests [@ANCHOR: hams_lint:rules_line_rule_struct]
     // Tests [@ANCHOR: hams_lint:rules_check_struct]
+
+    #[test]
+    fn fingerprint_changes_when_algorithm_source_changes() {
+        let a = fingerprint_of("spec", &["fn algo() { 1 }", "text", "rules"]);
+        let b = fingerprint_of("spec", &["fn algo() { 2 }", "text", "rules"]);
+        assert_ne!(a, b, "an algos.rs edit must change the fingerprint");
+        assert_eq!(a, fingerprint_of("spec", &["fn algo() { 1 }", "text", "rules"]));
+    }
 
     #[test]
     fn allowlisted_file_must_match_its_count_exactly() {
