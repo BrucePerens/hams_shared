@@ -94,6 +94,14 @@ class CheckBranchWorktreeErrorTests(unittest.TestCase):
         fake_wt = types.ModuleType("new_agent_worktree")
         fake_wt.WorktreeError = WorktreeError
         fake_wt.create = create
+        fake_wt.default_root = lambda: "/x"
+        space = [0]
+
+        def check_space(root):
+            if space[0]:
+                raise WorktreeError("only %d GB free on the filesystem of %s" % (space[0], root))
+
+        fake_wt.check_space = check_space
         fake_mp = types.ModuleType("merge_pr")
         saved = {name: sys.modules.get(name) for name in ("merge_pr", "new_agent_worktree")}
         sys.modules.update(merge_pr=fake_mp, new_agent_worktree=fake_wt)
@@ -104,6 +112,10 @@ class CheckBranchWorktreeErrorTests(unittest.TestCase):
         self.assertIn("only 3 GB free", said[0])
         self.assertIn("push allowed", said[0])
         self.assertTrue(names[0].startswith("prepush-%d-" % os.getpid()))  # not just the pid: a stale prepush-<pid> directory cannot collide
+        space[0], names[:], said[:] = 7, [], []
+        self.assertTrue(ppc.check_branch("hams_com", "abc", tempfile.gettempdir(), say=said.append))  # a full disk: warned, allowed, no worktree made
+        self.assertIn("only 7 GB free", said[0])
+        self.assertEqual(names, [])
 
 
 class PrePushHookEnvironmentTests(unittest.TestCase):

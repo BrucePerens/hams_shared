@@ -73,6 +73,7 @@ def check_branch(repo, sha, tools_dir, seconds=PUSH_CHECK_SECONDS, say=print):
     deadline = time.monotonic() + seconds
     name = "prepush-%d-%d" % (os.getpid(), time.time())  # a job directory left by a killed hook whose pid came back must not block this push
     try:
+        new_agent_worktree.check_space(new_agent_worktree.default_root())
         record = new_agent_worktree.create(repo, name, root=None, run_fixer=True)
     except new_agent_worktree.WorktreeError as err:
         say("pre-push: could not make the check worktree (%s); push allowed. merge_pr.py will run the checks." % err)
