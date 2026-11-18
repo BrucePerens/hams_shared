@@ -2113,6 +2113,43 @@ class CreateOdooRoleIfMissingTests(_SafePatchTestCase):
         mock_run_cmd_func.assert_not_called()
 
 
+class ProvisionSecretBrokerTests(_SafePatchTestCase):
+    # Verified by [@ANCHOR: infrastructure:_provision_secret_broker]
+    def setUp(self):
+        super().setUp()
+        infra.reset_hook_failures()
+        self.addCleanup(infra.reset_hook_failures)
+
+    def test_it_runs_the_broker_provisioning_script_for_the_odoo_account(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as root:
+            script = os.path.join(root, "zero_sudo/daemon/secret_broker/provision.py")
+            os.makedirs(os.path.dirname(script))
+            open(script, "w").close()
+            run = MagicMock()
+            infra._provision_secret_broker(run, {"HAMS_COMMUNITY_DIR": root})
+        cmd = run.call_args.args[0]
+        self.assertEqual(cmd[:2], ["python3", script])
+        self.assertIn("--odoo-unit", cmd)
+        self.assertEqual(cmd[cmd.index("--web-user") + 1], "odoo")
+        self.assertNotIn("--enable", cmd)
+
+    def test_a_missing_script_or_directory_is_skipped(self):
+        run = MagicMock()
+        infra._provision_secret_broker(run, {})
+        infra._provision_secret_broker(run, {"HAMS_COMMUNITY_DIR": "/nonexistent-community-dir"})
+        run.assert_not_called()
+
+    def test_a_failure_is_recorded_and_not_raised(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as root:
+            script = os.path.join(root, "zero_sudo/daemon/secret_broker/provision.py")
+            os.makedirs(os.path.dirname(script))
+            open(script, "w").close()
+            infra._provision_secret_broker(MagicMock(side_effect=RuntimeError("boom")), {"HAMS_COMMUNITY_DIR": root})
+        self.assertEqual([n for n, _ in infra.get_hook_failures()], ["secret_broker"])
+
+
 class ProvisionSecretSchemaTests(_SafePatchTestCase):
     # Verified by [@ANCHOR: infrastructure:_provision_secret_schema]
     def setUp(self):
