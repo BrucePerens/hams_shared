@@ -1676,8 +1676,9 @@ one outlived its run and a crashed or killed run left them for good. Now:
 
 ### `[@ANCHOR: scratch_janitor:process_texts]` `process_texts(proc_root="/proc")`
 
-Purpose: one text per live process (working directory + command line + environment), the "is this path in use" evidence for `sweep_stale_scratch`. Processes
-that cannot be read are skipped. Reads only; never signals.
+Purpose: one text per live process (working directory + command line + environment), the "is this path in use" evidence for `sweep_stale_scratch`.
+Arguments: `proc_root` is the process-table directory (default `/proc`; tests pass a fake tree). Returns: a list of strings, empty when nothing is readable.
+Errors: a process that cannot be read (exited meanwhile, permission denied) is skipped, never raised. Special concerns: reads only; never signals.
 
 ### `[@ANCHOR: scratch_janitor:sweep_stale_scratch]` `sweep_stale_scratch(directory, max_age_hours=12, texts=None, now=None, say=print)`
 
