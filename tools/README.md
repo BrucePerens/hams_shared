@@ -1674,6 +1674,17 @@ one outlived its run and a crashed or killed run left them for good. Now:
   verdict; they are never removed), the `postgres` roles `odoo` and the invoking user (created if missing, shared by every run), and the
   lock and queue files. Its mounts, processes, Redis, RabbitMQ, filestore and `/var/lib/odoo/tmp` contents go with the namespace.
 
+### `[@ANCHOR: scratch_janitor:process_texts]` `process_texts(proc_root="/proc")`
+
+Purpose: one text per live process (working directory + command line + environment), the "is this path in use" evidence for `sweep_stale_scratch`. Processes
+that cannot be read are skipped. Reads only; never signals.
+
+### `[@ANCHOR: scratch_janitor:sweep_stale_scratch]` `sweep_stale_scratch(directory, max_age_hours=12, texts=None, now=None, say=print)`
+
+Purpose: the start-of-run janitor for a slot's own TMPDIR (test.py calls it once per run, under the slot lock). Removes top-level entries of `directory` that are older
+than `max_age_hours` and that no live process references (literal substring test, so a running `postgres -D <entry>/live` keeps its directory). Leaves `slot-N` entries,
+never follows a symbolic link, ignores a missing/relative directory and shared roots (`/tmp`, `/var/tmp`, `/dev/shm`). Returns the removed paths.
+
 ### `[@ANCHOR: runner_cleanup:database_marker]` `database_marker(slot, kept)`
 
 Purpose: the comment `rebuild_db()` puts on a database it creates in slot mode: `hams_test_runner:v1 slot=2 kept=0`. `slot` is an int (1 to 15),
