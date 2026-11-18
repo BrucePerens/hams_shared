@@ -266,6 +266,24 @@ class MainTests(unittest.TestCase):
                 handle.write("Also `gone_too.py`.\n")
             self.assertEqual(cdr.main(args), 1)
 
+    def test_a_baseline_entry_that_no_longer_occurs_fails_until_regenerated(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = os.path.join(os.path.realpath(tmp), "hams_com")
+            os.makedirs(os.path.join(repo, "docs"))
+            doc = os.path.join(repo, "docs", "a.md")
+            with open(doc, "w", encoding="utf-8") as handle:
+                handle.write("See `gone.py`.\n")
+            subprocess.run(["git", "-C", repo, "init", "-q"], check=True)
+            subprocess.run(["git", "-C", repo, "add", "."], check=True)
+            baseline = os.path.join(tmp, "baseline.json")
+            args = [repo, "--baseline", baseline]
+            self.assertEqual(cdr.main(args + ["--generate-baseline"]), 0)
+            with open(doc, "w", encoding="utf-8") as handle:
+                handle.write("Fixed.\n")
+            self.assertEqual(cdr.main(args), 1)
+            self.assertEqual(cdr.main(args + ["--generate-baseline"]), 0)
+            self.assertEqual(cdr.main(args), 0)
+
 
 if __name__ == "__main__":
     unittest.main()
