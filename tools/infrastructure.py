@@ -45,10 +45,12 @@ _logger = logging.getLogger(__name__)
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     """Refuses every redirect: urllib copies all request headers, a bearer token included, to wherever a 3xx answer points."""
 
+    # [@ANCHOR: infrastructure:NoRedirect_redirect_request]
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
 
 
+# [@ANCHOR: infrastructure:pg_version_sort_key]
 def _pg_version_sort_key(path):
     """
     Extracts the numeric PostgreSQL major-version directory component from a
@@ -84,6 +86,7 @@ def get_pg_bin(name):
     return res
 
 
+# [@ANCHOR: infrastructure:get_os_identifier]
 def get_os_identifier():
     try:
         with open("/etc/os-release") as f:
@@ -95,6 +98,7 @@ def get_os_identifier():
     return "ubuntu"
 
 
+# [@ANCHOR: infrastructure:get_os_codename]
 def get_os_codename():
     try:
         with open("/etc/os-release") as f:
@@ -106,6 +110,7 @@ def get_os_codename():
     return "jammy"
 
 
+# [@ANCHOR: infrastructure:micro_privilege]
 @contextlib.contextmanager
 def micro_privilege(username):
     """
@@ -145,6 +150,7 @@ def micro_privilege(username):
         os.setgroups(orig_groups)
 
 
+# [@ANCHOR: infrastructure:ensure_local_hostname]
 def _ensure_local_hostname(text, env_vars):
     """Fill `{LOCAL_HOSTNAME}` for a manifest entry that uses it (the /etc/hosts template).
 
@@ -157,6 +163,7 @@ def _ensure_local_hostname(text, env_vars):
         env_vars["LOCAL_HOSTNAME"] = socket.gethostname()
 
 
+# [@ANCHOR: infrastructure:format_env]
 def format_env(text, env_vars):
     """Substitute `{VAR}`-style placeholders in `text` from `env_vars`.
 
@@ -188,6 +195,7 @@ def format_env(text, env_vars):
     return text.format(**(env_vars or {}))
 
 
+# [@ANCHOR: infrastructure:safe_remove]
 def safe_remove(path):
     if os.path.exists(path):
         try:
@@ -196,6 +204,7 @@ def safe_remove(path):
             _logger.debug("OSError removing file: %s", e)
 
 
+# [@ANCHOR: infrastructure:apply_permissions]
 def apply_permissions(path, owner_str, mode_int, recursive=False):
     """chown and chmod `path`. With `recursive`, everything below `path` is also re-owned (not
     re-moded; symlinks are re-owned themselves and never followed), so that files an earlier run
@@ -247,6 +256,7 @@ def apply_permissions(path, owner_str, mode_int, recursive=False):
 _hook_failures = []
 
 
+# [@ANCHOR: infrastructure:reset_hook_failures]
 def reset_hook_failures():
     """Clears the run-scoped list of recorded non-fatal hook failures.
     Call this once at the start of a provisioning run (provision_environment
@@ -255,6 +265,7 @@ def reset_hook_failures():
     _hook_failures.clear()
 
 
+# [@ANCHOR: infrastructure:record_hook_failure]
 def record_hook_failure(name, exc):
     """Records a non-fatal failure for the end-of-run summary rendered by
     render_hook_failure_summary(). `name` identifies the failed step (a
@@ -266,11 +277,13 @@ def record_hook_failure(name, exc):
     _hook_failures.append((name, str(exc)))
 
 
+# [@ANCHOR: infrastructure:get_hook_failures]
 def get_hook_failures():
     """Returns a shallow copy of the failures recorded so far this run."""
     return list(_hook_failures)
 
 
+# [@ANCHOR: infrastructure:render_hook_failure_summary]
 def render_hook_failure_summary():
     """Builds the prominent end-of-run banner listing every hook failure
     recorded via record_hook_failure() since the last reset_hook_failures()
@@ -291,6 +304,7 @@ def render_hook_failure_summary():
     return "\n".join(lines)
 
 
+# [@ANCHOR: infrastructure:print_hook_failure_summary]
 def print_hook_failure_summary():
     """Prints render_hook_failure_summary()'s banner via _logger.error (so
     it survives logging configs that suppress INFO) if there were any
@@ -322,15 +336,18 @@ class ProvisionPlan:
     def __init__(self):
         self.actions = []
 
+    # [@ANCHOR: infrastructure:ProvisionPlan_record]
     def record(self, kind, detail):
         self.actions.append((kind, detail))
         print(f"PLAN {kind}: {detail}", flush=True)
 
 
+# [@ANCHOR: infrastructure:planning]
 def _planning():
     return _PLAN is not None
 
 
+# [@ANCHOR: infrastructure:plan]
 def _plan(kind, detail):
     """Records `kind: detail` and returns True while a plan is active (the caller then skips the
     real action); returns False, recording nothing, during a real run."""
@@ -367,6 +384,7 @@ def redact_command(cmd):
     return out
 
 
+# [@ANCHOR: infrastructure:file_state]
 def _file_state(path, new_content):
     """'new', 'changed' or 'unchanged' for writing new_content (str) to path."""
     if not os.path.exists(path):
@@ -378,6 +396,7 @@ def _file_state(path, new_content):
         return "changed"
 
 
+# [@ANCHOR: infrastructure:download_file]
 def download_file(url, path, mode, env_vars, expected_sha256=None):
     """Fetches `url` to `path` through the provisioning download cache (provision_cache.py).
 
@@ -409,6 +428,7 @@ def download_file(url, path, mode, env_vars, expected_sha256=None):
     provision_cache.install(result, path, mode)
 
 
+# [@ANCHOR: infrastructure:hook_generate_ssl]
 def hook_generate_ssl(env_vars, dest_dir, path, run_cmd_func):
     domain = env_vars.get("DOMAIN", "localhost")
     ssl_dir = path
@@ -439,6 +459,7 @@ def hook_generate_ssl(env_vars, dest_dir, path, run_cmd_func):
             record_hook_failure("hook_generate_ssl", e)
 
 
+# [@ANCHOR: infrastructure:hook_clear_pycache]
 def hook_clear_pycache(env_vars, dest_dir, path, run_cmd_func):
     pycache = path
     daemons = (
@@ -456,6 +477,7 @@ def hook_clear_pycache(env_vars, dest_dir, path, run_cmd_func):
         compileall.compile_dir(daemons, quiet=1)
 
 
+# [@ANCHOR: infrastructure:install_apt_keyring]
 def _install_apt_keyring(label, url, out, path, run_cmd_func):
     """Dearmors the downloaded key at `path` into the keyring `out`.
 
@@ -481,6 +503,7 @@ def _install_apt_keyring(label, url, out, path, run_cmd_func):
     safe_remove(path)
 
 
+# [@ANCHOR: infrastructure:hook_install_odoo_key]
 def hook_install_odoo_key(env_vars, dest_dir, path, run_cmd_func):
     out = (
         os.path.join(dest_dir, "usr/share/keyrings/odoo-archive-keyring.gpg")
@@ -490,6 +513,7 @@ def hook_install_odoo_key(env_vars, dest_dir, path, run_cmd_func):
     _install_apt_keyring("Odoo", "https://nightly.odoo.com/odoo.key", out, path, run_cmd_func)
 
 
+# [@ANCHOR: infrastructure:hook_install_pg_key]
 def hook_install_pg_key(env_vars, dest_dir, path, run_cmd_func):
     out = (
         os.path.join(dest_dir, "usr/share/keyrings/postgresql-keyring.gpg")
@@ -510,6 +534,7 @@ _KOPIA_ARCH_SUFFIX_BY_DEB_ARCH = {
 }
 
 
+# [@ANCHOR: infrastructure:kopia_release_arch]
 def _kopia_release_arch(env_vars):
     """
     Resolves this machine's real CPU architecture to kopia's own GitHub
@@ -554,6 +579,7 @@ def _kopia_release_arch(env_vars):
     return suffix
 
 
+# [@ANCHOR: infrastructure:hook_install_kopia_binary]
 def hook_install_kopia_binary(env_vars, dest_dir, path, run_cmd_func):
     try:
         kopia_arch = env_vars.get("KOPIA_ARCH") or _kopia_release_arch(env_vars)
@@ -577,6 +603,7 @@ def hook_install_kopia_binary(env_vars, dest_dir, path, run_cmd_func):
     safe_remove(path)
 
 
+# [@ANCHOR: infrastructure:hook_install_wkhtmltopdf]
 def hook_install_wkhtmltopdf(env_vars, dest_dir, path, run_cmd_func):
     """Installs the real, patched-Qt wkhtmltopdf build Odoo's own PDF reports need
     (report.render_qweb_pdf, e.g. Event: Registration Confirmation's attached ticket PDF -- a real
@@ -635,6 +662,7 @@ def hook_create_pdns_sqlite_schema(env_vars, dest_dir, path, run_cmd_func, db_na
         record_hook_failure(hook_name, e)
 
 
+# [@ANCHOR: infrastructure:hook_create_callbook_sqlite_schema]
 def hook_create_callbook_sqlite_schema(env_vars, dest_dir, path, run_cmd_func):
     """The one PowerDNS that owns port 53 loads the callbook zone's database as its second
     backend, so the file must exist with the PowerDNS schema before pdns.service starts: a
@@ -743,6 +771,7 @@ RUST_DAEMON_CRATES = [
 ]
 
 
+# [@ANCHOR: infrastructure:hook_build_rust_daemons]
 def hook_build_rust_daemons(env_vars, dest_dir, path, run_cmd_func):
     if env_vars.get("HAMS_SKIP_RUST_DAEMON_BUILD") == "1":
         # test.py sets this for a run whose modules never reference a daemon crate (see its
@@ -792,6 +821,7 @@ CFFI_ELF_MACHINES = {62: "x86_64", 183: "aarch64", 40: "armv7l", 243: "riscv64"}
 CFFI_PLATFORM_ALIASES = {"amd64": "x86_64", "arm64": "aarch64", "armv8l": "armv7l"}
 
 
+# [@ANCHOR: infrastructure:cloudflared_ffi_default_dir]
 def cloudflared_ffi_default_dir():
     """hams_open/daemons/cloudflared-ffi, found from this file's real location
     (hams_open/hams_shared/tools/)."""
@@ -808,11 +838,13 @@ def cloudflared_ffi_default_dir():
     return found
 
 
+# [@ANCHOR: infrastructure:cffi_host_machine]
 def cffi_host_machine():
     machine = platform.machine().lower()
     return CFFI_PLATFORM_ALIASES.get(machine, machine)
 
 
+# [@ANCHOR: infrastructure:cffi_elf_machine]
 def cffi_elf_machine(path):
     """The CPU an ELF shared object was built for ("x86_64", "aarch64", ...), or None when the
     file is not a little-endian 64-bit-or-32-bit ELF object."""
@@ -826,6 +858,7 @@ def cffi_elf_machine(path):
     return CFFI_ELF_MACHINES.get(struct.unpack("<H", head[18:20])[0], "unknown")
 
 
+# [@ANCHOR: infrastructure:cffi_library_status]
 def cffi_library_status(ffi_dir):
     """(ok, reason). ok means the library exists, was built for this CPU and is not older than
     its Go source; reason says what is wrong otherwise."""
@@ -845,12 +878,14 @@ def cffi_library_status(ffi_dir):
     return True, ""
 
 
+# [@ANCHOR: infrastructure:cffi_go_version]
 def cffi_go_version(go):
     out = subprocess.run([go, "version"], capture_output=True, text=True, check=False).stdout
     match = re.search(r"go(\d+)\.(\d+)", out)
     return (int(match.group(1)), int(match.group(2))) if match else (0, 0)
 
 
+# [@ANCHOR: infrastructure:cffi_required_go]
 def cffi_required_go(ffi_dir):
     """The `go` directive of the module's go.mod, as (major, minor)."""
     with open(os.path.join(ffi_dir, "go.mod"), encoding="utf-8") as f:
@@ -858,6 +893,7 @@ def cffi_required_go(ffi_dir):
     return (int(match.group(1)), int(match.group(2))) if match else (0, 0)
 
 
+# [@ANCHOR: infrastructure:cffi_find_go]
 def cffi_find_go(ffi_dir):
     """The first installed Go that satisfies go.mod, or None."""
     need = cffi_required_go(ffi_dir)
@@ -867,6 +903,7 @@ def cffi_find_go(ffi_dir):
     return None
 
 
+# [@ANCHOR: infrastructure:cffi_build_env]
 def cffi_build_env(base_env, cache_dir, tmp_dir):
     """Environment for `go build`. Everything the build writes goes below the caller's directories:
     GOCACHE and GOPATH under `cache_dir`, and the go command's and the C compiler's scratch files in
@@ -888,6 +925,7 @@ def cffi_build_env(base_env, cache_dir, tmp_dir):
     return env
 
 
+# [@ANCHOR: infrastructure:cffi_build]
 def cffi_build(ffi_dir, run=subprocess.run):
     """Builds the library into ffi_dir (and the header beside it). Raises RuntimeError with the
     fix when a prerequisite is missing; the library is replaced only after a successful build."""
@@ -1003,6 +1041,7 @@ def _migrate_signing_key(old_path, new_path, owner_str):
     return True
 
 
+# [@ANCHOR: infrastructure:run_signing_key_migration]
 def _run_signing_key_migration(hook_name, key_filename, owner_str, dest_dir, path):
     old_path = os.path.join("/var/lib/odoo", key_filename)
     if dest_dir:
@@ -1016,6 +1055,7 @@ def _run_signing_key_migration(hook_name, key_filename, owner_str, dest_dir, pat
         record_hook_failure(hook_name, e)
 
 
+# [@ANCHOR: infrastructure:hook_migrate_subcarrier_signing_key]
 def hook_migrate_subcarrier_signing_key(env_vars, dest_dir, path, run_cmd_func):
     _run_signing_key_migration(
         "hook_migrate_subcarrier_signing_key",
@@ -1197,6 +1237,7 @@ EXCEPTION_REPORT_EXCLUDED_UNITS = {
 }
 
 
+# [@ANCHOR: infrastructure:restarts_itself]
 def _restarts_itself(content):
     """True when a unit file sets Restart= to anything but "no" (always, on-failure, on-abnormal, ...)."""
     for line in (content or "").splitlines():
@@ -1206,6 +1247,7 @@ def _restarts_itself(content):
     return False
 
 
+# [@ANCHOR: infrastructure:exception_report_dropin_entries]
 def exception_report_dropin_entries(manifest):
     """The MANIFEST static_files entries (one OnFailure drop-in each, plus an ExecStopPost crash drop-in for a
     self-restarting one) for every production service in
@@ -1256,6 +1298,7 @@ ONESHOT_RUN_TIMEOUT_OVERRIDES = {
 }
 
 
+# [@ANCHOR: infrastructure:unit_directives]
 def _unit_directives(content):
     """The unit text without comment lines, as {key: value} (first occurrence wins; enough for Type= and TimeoutStartSec=)."""
     found = {}
@@ -1269,6 +1312,7 @@ def _unit_directives(content):
     return found
 
 
+# [@ANCHOR: infrastructure:oneshot_run_timeout_dropin_entries]
 def oneshot_run_timeout_dropin_entries(manifest):
     """The MANIFEST static_files entries (one drop-in each) bounding every Type=oneshot service that sets no TimeoutStartSec."""
     entries = []
@@ -1345,6 +1389,7 @@ ROTATED_KEY_RELOAD_POLICY = {
 _KEY_DIRECTORY = "/opt/hams/etc/keys/"
 
 
+# [@ANCHOR: infrastructure:uncommented_lines]
 def _uncommented_lines(content):
     """The non-blank, non-comment lines of a unit or script text, stripped."""
     return [
@@ -1383,12 +1428,14 @@ def long_running_key_holders(manifest):
     return holders
 
 
+# [@ANCHOR: infrastructure:is_server_unit]
 def _is_server_unit(entry):
     """True for a unit file of the hams.com server (the prod or test environment). A unit of another host,
     such as the FCC sync on pi500-1, which has its own User=, is not part of the account ratchets."""
     return bool({"prod", "test"} & set(entry.get("environments", ["prod", "test"])))
 
 
+# [@ANCHOR: infrastructure:systemd_units_running_as]
 def systemd_units_running_as(manifest, user):
     """Return the base names of the manifest's systemd .service files whose User= is `user`."""
     names = set()
@@ -1753,6 +1800,7 @@ SANDBOX_BASELINE_EXEMPTIONS = {
 }
 
 
+# [@ANCHOR: infrastructure:systemd_unit_sandbox_gaps]
 def systemd_unit_sandbox_gaps(manifest, unit_name):
     """The SANDBOX_BASELINE directives the MANIFEST unit file `unit_name` lacks: absent, or set to a value that does not
     satisfy the baseline. A directive written with an empty value counts as present (the empty CapabilityBoundingSet= drops
@@ -1778,6 +1826,7 @@ def systemd_unit_sandbox_gaps(manifest, unit_name):
     raise KeyError(unit_name)
 
 
+# [@ANCHOR: infrastructure:systemd_unit_directive_values]
 def systemd_unit_directive_values(manifest, unit_name, directive):
     """Every value of `directive` in the [Service] text of the MANIFEST unit file `unit_name`, one
     entry per whitespace-separated word for the path-list directives, in file order."""
@@ -1819,6 +1868,7 @@ MANIFEST_TOKENS = {
 }
 
 
+# [@ANCHOR: infrastructure:expand_manifest_tokens]
 def expand_manifest_tokens(node):
     """Returns `node` (a str, or dicts and lists of them) with every MANIFEST_TOKENS key replaced;
     dicts and lists are changed in place."""
@@ -11106,6 +11156,7 @@ MANIFEST["static_files"].extend(exception_report_dropin_entries(MANIFEST))
 MANIFEST["static_files"].extend(oneshot_run_timeout_dropin_entries(MANIFEST))
 
 
+# [@ANCHOR: infrastructure:scaffold_test_environment]
 def scaffold_test_environment(args_db, provision_dirs=True):
     for k, v in MANIFEST["env_defaults"].items():
         os.environ.setdefault(k, v)
@@ -11134,6 +11185,7 @@ def scaffold_test_environment(args_db, provision_dirs=True):
             raise
 
 
+# [@ANCHOR: infrastructure:get_mount_paths]
 def get_mount_paths(environment, mount_type):
     return [
         d["path"]
@@ -11143,6 +11195,7 @@ def get_mount_paths(environment, mount_type):
     ]
 
 
+# [@ANCHOR: infrastructure:provision_system_accounts]
 def provision_system_accounts(run_cmd_func, environment="prod", dest_dir="", only_host_class=None):
     for acc in MANIFEST.get("system_accounts", []):
         if environment not in acc.get("environments", ["prod", "test"]):
@@ -11195,6 +11248,7 @@ def provision_system_accounts(run_cmd_func, environment="prod", dest_dir="", onl
                 _logger.debug("User %s not found, skipping group addition.", extra_user)
 
 
+# [@ANCHOR: infrastructure:execute_hooks]
 def execute_hooks(environment, run_cmd_func, env_vars=None, dest_dir=""):
     if dest_dir and dest_dir.endswith("/"):
         dest_dir = dest_dir[:-1]
@@ -11269,6 +11323,7 @@ def _apply_directory_acl(spec, path, environment, run_cmd_func):
             subprocess.run(command, check=True)
 
 
+# [@ANCHOR: infrastructure:plan_recursive_ownership]
 def _plan_recursive_ownership(path, owner_str):
     """Records how many entries below `path` a recursive chown to owner_str would change."""
     try:
@@ -11290,6 +11345,7 @@ def _plan_recursive_ownership(path, owner_str):
         _plan("chown -R", f"{path}: {differing} entries -> {owner_str}")
 
 
+# [@ANCHOR: infrastructure:plan_ownership]
 def _plan_ownership(path, owner_str, mode_int):
     """Records a chown/chmod of an existing path only when it would actually change something."""
     try:
@@ -11384,6 +11440,7 @@ def write_env_files(base_etc_dir, env_vars, run_cmd_func, dest_dir=""):
         apply_permissions(filepath, "root:root", 0o400)
 
 
+# [@ANCHOR: infrastructure:provision_custom_addons]
 def provision_custom_addons(run_cmd_func, env_vars, environment="prod", dest_dir=""):
     if environment not in ["prod", "test"]:
         return
@@ -11462,6 +11519,7 @@ def render_static_content(file_spec, env_vars):
 _APT_ONLY_PATH_PREFIXES = ("/usr/share/keyrings/", "/etc/apt/")
 
 
+# [@ANCHOR: infrastructure:is_apt_only]
 def is_apt_only(file_spec):
     """True for a static_files entry only the apt phase uses: marked `"apt_only": True`, or whose destination
     (or `skip_if_installed` target, for a key that a hook dearmors into a keyring) is under
@@ -11474,6 +11532,7 @@ def is_apt_only(file_spec):
     )
 
 
+# [@ANCHOR: infrastructure:pinned_sha256]
 def _pinned_sha256(file_spec, env_vars):
     """The entry's published SHA-256: `sha256` (one value), or `sha256_by_arch` keyed by KOPIA_ARCH /
     DEB_TARGET_ARCH_CPU. None when upstream publishes none (trust on first use then applies)."""
@@ -11489,11 +11548,13 @@ SUDOERS_DIR = "/etc/sudoers.d"
 VISUDO = "/usr/sbin/visudo"
 
 
+# [@ANCHOR: infrastructure:is_sudoers_file]
 def _is_sudoers_file(file_spec):
     return (file_spec["path"].startswith(SUDOERS_DIR + "/") and not file_spec.get("src")
             and not file_spec.get("url"))
 
 
+# [@ANCHOR: infrastructure:missing_sudo_commands]
 def _missing_sudo_commands(content, dest_dir, provided=()):
     """The commands the sudoers `content` grants that exist neither on disk (under `dest_dir`) nor in
     `provided` (MANIFEST paths this run has already written or planned)."""
@@ -11504,6 +11565,7 @@ def _missing_sudo_commands(content, dest_dir, provided=()):
     ]
 
 
+# [@ANCHOR: infrastructure:visudo_check]
 def _visudo_check(path):
     """(returncode, output) of `visudo -cf path`, or None when visudo is not installed (no sudo on the
     host, so nothing reads /etc/sudoers.d)."""
@@ -11703,6 +11765,7 @@ def _sha256_of(path):
     return digest.hexdigest()
 
 
+# [@ANCHOR: infrastructure:model_file_verifies]
 def _model_file_verifies(path, spec):
     """True when `path` exists with exactly the pinned size and SHA-256."""
     try:
@@ -11711,6 +11774,7 @@ def _model_file_verifies(path, spec):
         return False
 
 
+# [@ANCHOR: infrastructure:fetch_model_to]
 def _fetch_model_to(url, part_path, expected_size):
     """Streams `url` to `part_path`, refusing to read past `expected_size` bytes. Raises on any failure."""
     ua = "HamsComProvisioning/1.0 (+https://hams.com)"
@@ -11727,6 +11791,7 @@ def _fetch_model_to(url, part_path, expected_size):
             out.write(chunk)
 
 
+# [@ANCHOR: infrastructure:fetch_model_via_cache]
 def _fetch_model_via_cache(spec, part_path):
     """Places the model file `spec` at `part_path` from the provisioning download cache (provision_cache.py),
     downloading it into the cache first when it is not there. The SHA-256 pin makes a cached copy valid
@@ -11796,6 +11861,7 @@ def _ufw_active():
     return res.returncode == 0 and "Status: active" in res.stdout
 
 
+# [@ANCHOR: infrastructure:ufw_rule_present]
 def _ufw_rule_present(args):
     """True when `ufw status` already lists the allow rule `args` (the `port/proto` form)."""
     try:
@@ -11917,6 +11983,7 @@ def provision_systemd_override(
 ODOO_RPC_SOCKET_GROUP = "hamsd"
 
 
+# [@ANCHOR: infrastructure:provision_odoo_systemd_override]
 def provision_odoo_systemd_override(run_cmd_func, env_vars, is_test, dest_dir=""):
     """Writes odoo.service's drop-in once, for the environment this host is. provision_environment used to call
     provision_systemd_override for "prod" and then for "test" with the same unit, so on a production host the test
@@ -12140,6 +12207,7 @@ NON_BLOCKING_START_SERVICES = {
 }
 
 
+# [@ANCHOR: infrastructure:service_start_command]
 def _service_start_command(svc):
     """The actual `systemctl start` command line for `svc`: `--no-block` for
     anything in NON_BLOCKING_START_SERVICES (see that constant's own comment),
@@ -12208,6 +12276,7 @@ def host_classes(environ=None, path=None):
     return names
 
 
+# [@ANCHOR: infrastructure:in_host_class]
 def _in_host_class(spec, classes=None):
     """True when `spec` (a MANIFEST entry) is for every host or for a class this host has."""
     wanted = spec.get("host_class")
@@ -12236,6 +12305,7 @@ def _in_host_class(spec, classes=None):
 _DAEMON_FAMILY_ACCOUNTS = None
 
 
+# [@ANCHOR: infrastructure:sudoers_commands]
 def _sudoers_commands(content, accounts=None):
     """The absolute command paths the sudoers lines in `content` grant, in order; with `accounts`, only
     from lines whose user (first token) is one of them. `ALL` and other non-path commands are left out."""
@@ -12257,6 +12327,7 @@ def _sudoers_commands(content, accounts=None):
     return commands
 
 
+# [@ANCHOR: infrastructure:daemon_family_sudo_commands]
 def daemon_family_sudo_commands(accounts, manifest=None):
     """The command paths the sudoers.d grants of the daemon accounts `accounts` name."""
     manifest = MANIFEST if manifest is None else manifest
@@ -12268,6 +12339,7 @@ def daemon_family_sudo_commands(accounts, manifest=None):
     return found
 
 
+# [@ANCHOR: infrastructure:only_daemon_families]
 @contextlib.contextmanager
 def only_daemon_families(accounts):
     """Restricts the provisioning helpers to `accounts` (hamsd_<family> names) inside the block."""
@@ -12280,6 +12352,7 @@ def only_daemon_families(accounts):
         _DAEMON_FAMILY_ACCOUNTS = previous
 
 
+# [@ANCHOR: infrastructure:unit_user]
 def _unit_user(spec):
     """The User= of a MANIFEST unit file entry, or None."""
     for line in (spec.get("content") or "").splitlines():
@@ -12288,6 +12361,7 @@ def _unit_user(spec):
     return None
 
 
+# [@ANCHOR: infrastructure:daemon_family_unit_paths]
 def daemon_family_unit_paths(accounts, manifest=None):
     """The /opt/hams/systemd paths of every unit file (service, and the timer or path of the same
     name) for the daemon accounts `accounts`."""
@@ -12307,6 +12381,7 @@ def daemon_family_unit_paths(accounts, manifest=None):
     )
 
 
+# [@ANCHOR: infrastructure:spec_in_daemon_family]
 def _spec_in_daemon_family(spec):
     accounts = _DAEMON_FAMILY_ACCOUNTS
     if "user" in spec and "group" in spec and "provision_mode" not in spec:
@@ -12338,6 +12413,7 @@ _UNITS_ONLY = False
 _UNIT_PATH_PREFIXES = ("/opt/hams/systemd/", "/etc/systemd/system/", "/usr/local/sbin/")
 
 
+# [@ANCHOR: infrastructure:only_units]
 @contextlib.contextmanager
 def only_units():
     """Restricts provision_static_files() to the systemd unit files, their drop-ins and the /usr/local/sbin wrappers."""
@@ -12350,6 +12426,7 @@ def only_units():
         _UNITS_ONLY = previous
 
 
+# [@ANCHOR: infrastructure:spec_selected]
 def _spec_selected(spec, only_host_class=None):
     """With `only_host_class` (provision_host_class), exactly that class's entries; with
     only_daemon_families(), exactly those families' entries; otherwise every entry that is for all
@@ -12363,6 +12440,7 @@ def _spec_selected(spec, only_host_class=None):
     return _in_host_class(spec)
 
 
+# [@ANCHOR: infrastructure:host_class_unit_names]
 def host_class_unit_names():
     """Basenames of every systemd unit the MANIFEST restricts to a host class."""
     return {
@@ -12372,6 +12450,7 @@ def host_class_unit_names():
     }
 
 
+# [@ANCHOR: infrastructure:record_host_class]
 def record_host_class(name, path=None):
     """Adds `name` to HOST_CLASSES_FILE (idempotent). Used by provision.py --host-class."""
     if name not in KNOWN_HOST_CLASSES:
@@ -12446,6 +12525,7 @@ def _derived_env_values(target):
     return found if set(found) == set(keys) else None
 
 
+# [@ANCHOR: infrastructure:write_derived_env_file]
 def _write_derived_env_file(target, values):
     """Writes `target` (root:root, 0400, no secret in the plan or the log) from `values`."""
     fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
@@ -12706,12 +12786,14 @@ def prepare_test_host_for_smoketest(run_cmd_func, env_vars, hams_com_dir, hams_o
     return installed
 
 
+# [@ANCHOR: infrastructure:cleanup_test_host_after_smoketest]
 def cleanup_test_host_after_smoketest(installed_hamcall_index):
     """Removes the ephemeral HamCall copy (and the staged file it came from); nothing licensed stays on a test host."""
     smoketest_fixtures.remove_hamcall_index(installed_hamcall_index)
 
 
 # Units whose smoketest means more than "systemctl start returned": what each must be doing once the smoketest has run.
+# [@ANCHOR: infrastructure:test_fixture_unit_problems]
 def _test_fixture_unit_problems(started, domain):
     """Problems (strings) found in the units the smoketest started that have a stronger check than not failing."""
     sf = smoketest_fixtures
@@ -12884,6 +12966,7 @@ def run_post_provision_smoketest(has_hams_com=True, is_test_env=False, opt_in_un
     _logger.info("[*] Smoketest complete: %s", datetime.now())
 
 
+# [@ANCHOR: infrastructure:generate_secure_password]
 def generate_secure_password(length=32):
     alphabet = string.ascii_letters + string.digits
     return ''.join(secrets.choice(alphabet) for _ in range(length))
@@ -12963,6 +13046,7 @@ def _set_pdns_zone_defaults(env_vars):
     env_vars.setdefault("PDNS_PERSONAL_PARENT_ZONE", f"u.{domain}")
 
 
+# [@ANCHOR: infrastructure:load_and_prompt_env]
 def load_and_prompt_env(env_vars, is_test):
     """
     Populate env_vars for provisioning, non-interactively.
@@ -13208,6 +13292,7 @@ POSTGRESQL_LOCKDOWN_SETTINGS = (
 )
 
 
+# [@ANCHOR: infrastructure:conf_value]
 def _conf_value(line, key):
     """The value of an active `key = value` line of a postgresql.conf-style file, else None."""
     stripped = line.strip()
@@ -13739,6 +13824,7 @@ PARKING_RO_SQL = "/opt/hams/daemons/callsign_parking/parking_ro.sql"
 PARKING_VIEW = "ham_callbook_parking_view"
 
 
+# [@ANCHOR: infrastructure:provision_parking_role]
 def _provision_parking_role(run_cmd_func, db_name, sql_path=None, env_file=None):
     """The PostgreSQL login of the callsign parking page (daemons/callsign_parking): the `parking_ro` role, its generated password in
     keys/parking/parking_db.env (odoo:hamsd_parking 0640, written by _provision_cache_manager_role, so the password is generated only
@@ -13780,6 +13866,7 @@ def _provision_parking_role(run_cmd_func, db_name, sql_path=None, env_file=None)
 CACHE_MANAGER_SOCKET_HBA_LINE = "local   all             cache_manager_ro                        scram-sha-256\n"
 
 
+# [@ANCHOR: infrastructure:allow_cache_manager_socket_password_for_test]
 def _allow_cache_manager_socket_password_for_test(hba_paths=None):
     """
     Test hosts only: lets cache_manager_ro log in over the Unix socket with its password, and returns
@@ -14412,6 +14499,7 @@ def _parse_apt_simulation(output):
     return installs, upgrades, removals
 
 
+# [@ANCHOR: infrastructure:is_apt_protected]
 def _is_apt_protected(pkg):
     return pkg.startswith(APT_PROTECTED_PREFIXES)
 
@@ -14525,6 +14613,7 @@ RUNTIME_PIP_PACKAGES = (
 TEST_PIP_PACKAGES = ("hypothesis", "pip-audit")
 
 
+# [@ANCHOR: infrastructure:provision_environment]
 def provision_environment(
     run_cmd_func,
     env_vars,
