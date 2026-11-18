@@ -77,7 +77,7 @@ a download is trusted only through hams.com's reviewed mirror with a checked has
 | Linux and Raspberry Pi | `amixer`, `arecord`, `pactl` (alsa-utils, PulseAudio or PipeWire); `tpm2_create`, `tpm2_createprimary`, `tpm2_load`, `tpm2_unseal`, `tpm2_hmac`, `tpm2_readpublic`; `pkexec`; `iptables` or `nft` (the emergency hub's port 80 redirect, `hub_port_redirect.sh`); `id`; `modprobe`; `lsof`, `netstat`; `which`, `sh`; `nmcli`; `ip`, `traceroute`, `gpspipe` (the check-in network report; `gpspipe` is passed to the check-in survey by its caller); `ping` (the hub probe loop); `systemctl`, `loginctl`, `journalctl`; `udevadm`; `dmidecode`; `gpsd`/`gpspipe`; `chrony` with PPS (`chronyc`); DKMS (the stock `ch341` driver); ModemManager (a udev rule keeps it off our radios); NetworkManager | audio devices and mixers, sealing secrets in the TPM, privileged actions, serial permissions, device discovery, loopback-bind verification, services and autostart, GPS and time |
 | Linux and Raspberry Pi, stand-alone emergency hub (broker `hub_start`, hub = true only) | `hostapd` and `dnsmasq` (distribution packages, only suggested by the relay package; the broker starts them from its own generated files with fixed arguments; licences BSD-3-Clause and GPL-2.0/3.0, run as separate programs); `ip` (above) | the access point, DHCP, DNS and DHCP option 42 of the hub (RELAY_STANDALONE_EMERGENCY_HUB.md); not pinned, the distribution's version is used |
 | Windows | PowerShell; `schtasks`; `sc.exe`; `certutil`; `reg`; com0com (detected, not installed); virtual audio cables (detected) | installer, autostart, certificates, machine identity, virtual serial ports and audio |
-| macOS | `launchctl`; `hdiutil`, `xar`, `cpio`, `gunzip`; `ioreg`; `system_profiler`; `sysctl`; `pkgutil`; BlackHole (detected) | installer, autostart, unpacking downloaded tools, hardware identity |
+| macOS | `launchctl`; `hdiutil`; `ioreg`; `system_profiler`; `sysctl`; `pkgutil`; BlackHole (detected) | installer, autostart, unpacking downloaded tools, hardware identity |
 
 ### Build and release toolchain
 
@@ -123,7 +123,7 @@ The device worker (`device_worker_launch.rs`) is the one launch whose program is
 - hidapi (vendored in the Mercury tree, follows its pin), RADE (`rade_c` was copied in whole with no recorded upstream commit, so there is nothing honest to pin) and the model files (Hugging Face repositories, not GitHub releases) have no upstream check.
 - Inno Setup, MinGW-w64, wine and the container images are not pinned beyond what the release preflight
   prints; record the exact versions the next release uses.
-- Pat on macOS (2026-11-15, Bruce's decision): the relay installs upstream's Intel `.pkg` by unpacking its Payload (xar, gunzip, cpio; no `installer`, no root). The macOS install path has run only on Linux (the unpack against the real package); a run on a real Mac is still to do.
+- Pat on macOS (2026-11-15, Bruce's decision): the relay installs upstream's Intel `.pkg` by unpacking its Payload in native Rust (`pkg_unpack`: xar table of contents, gzip, cpio; no `xar`, `gunzip` or `cpio` program since 2026-11-18, no `installer`, no root). The macOS install path has run only on Linux (the unpack against packages built by real `xar` and `cpio`); a run on a real Mac is still to do.
 
 ## Consequences
 One place to look when a security advisory, a licence question or a build failure names a program; each change
