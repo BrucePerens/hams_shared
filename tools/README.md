@@ -544,9 +544,9 @@ Returns a `Layout`. Errors: `LayoutError` (a `RuntimeError`) when a git command 
 is removed first. `OSError` for a filesystem failure, also after removing what was made. `run_linters.py` prints the error and exits 2:
 it must never fall back to the main checkouts, which is the bug this removes.
 
-Special concerns: blocking, a few seconds to tens of seconds (a `git clone --shared` and checkout of each sibling; hams_open is about
-8,700 files); no network except the optional fetch; nothing is registered in any source repository (shared-object clones, so deleting
-the directory is the whole cleanup); disk use is the checked-out files of both siblings (a few hundred MB). Copies no secrets.
+Special concerns: blocking, a few seconds to tens of seconds (a hardlinked `git clone --local` and checkout of each sibling; hams_open is about
+8,700 files); no network except the optional fetch; nothing is registered in any source repository (hardlinked clones, not `--shared`: a concurrent gc in the source cannot delete objects under the layout, the
+2026-11-16 "unable to read tree" flake; deleting the directory is the whole cleanup); disk use is the checked-out files of both siblings (a few hundred MB). Copies no secrets.
 Not idempotent: each call makes a new directory. The caller must run `remove` (atexit in `run_linters.py`); `reap_orphans` is the
 safety net for a killed run.
 
@@ -558,7 +558,7 @@ atexit.register(lint_layout.remove, layout)
 repo_root = layout.hams_open        # anchors, claims, burn list now read this hams_shared
 ```
 
-See also: tests `BuildTests` and `IncidentTests` in `test_lint_layout.py`: a hams_shared change whose docs cite a missing anchor fails
+See also: tests `BuildTests`, `CloneRaceTests` and `IncidentTests` in `test_lint_layout.py`: a hams_shared change whose docs cite a missing anchor fails
 `verify_anchors` in the layout (and passes when the citation is fixed); the main checkouts, which the old code scanned, pass the same
 change.
 
