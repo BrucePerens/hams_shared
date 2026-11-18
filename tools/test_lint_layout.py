@@ -21,10 +21,12 @@ Tests [@ANCHOR: run_linters:stamp_repos]
 """
 
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
@@ -185,6 +187,29 @@ class BuildTests(LayoutTestCase):
                               environ=self.ws.environ, fetch=False, out=lambda _text: None)
         trees = self.ws.environ["HAMS_BATCH_TREE_DIR"]
         self.assertEqual(os.listdir(trees) if os.path.isdir(trees) else [], [])
+
+
+class CloneRaceTests(LayoutTestCase):
+    """Tests [@ANCHOR: lint_layout:build] against the 2026-11-16 'unable to read tree' flake: a concurrent gc/repack in
+    the source repository removes its objects between the clone and the checkout."""
+
+    def test_clone_survives_the_source_losing_its_objects_before_checkout(self):
+        sha = git(self.ws.com_main, "rev-parse", "HEAD")
+        real_run = subprocess.run
+
+        def run_then_gc(command, *args, **kwargs):
+            result = real_run(command, *args, **kwargs)
+            if "clone" in command:
+                objects = os.path.join(self.ws.com_main, ".git", "objects")
+                for name in os.listdir(objects):
+                    if name not in ("info", "pack"):
+                        shutil.rmtree(os.path.join(objects, name))
+            return result
+
+        dest = os.path.join(self.ws.root, "clone")
+        with mock.patch.object(lint_layout.subprocess, "run", run_then_gc):
+            lint_layout._clone_at(self.ws.com_main, dest, sha)
+        self.assertTrue(os.path.isfile(os.path.join(dest, "c", "__manifest__.py")))
 
 
 class IncidentTests(LayoutTestCase):
