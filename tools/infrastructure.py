@@ -13513,6 +13513,28 @@ def _provision_secret_schema(run_cmd_func, db_name):
         record_hook_failure("secret_schema", e)
 
 
+# [@ANCHOR: infrastructure:_provision_secret_broker]
+def _provision_secret_broker(run_cmd_func, env_vars):
+    """Installs the Tier B secret broker (hams_open zero_sudo/daemon/secret_broker/provision.py): its account, its credentials
+    directory and unit, and the Odoo unit's drop-in that gives the web account the right to reach the socket. It never enables or
+    starts the broker and never reads or overwrites the secrets file: the operator puts the secrets in and enables the unit.
+    Skipped when HAMS_COMMUNITY_DIR is unset or the script is absent. A failure is logged and never raised, so the later
+    provisioning steps still run. hams_open zero_sudo/docs/stories/secret_store_tier_b.md."""
+    community_dir = (env_vars or {}).get("HAMS_COMMUNITY_DIR")
+    script = f"{community_dir}/zero_sudo/daemon/secret_broker/provision.py" if community_dir else ""
+    if not script or not os.path.exists(script):
+        _logger.info("[*] Secret broker provisioning script not found; skipped.")
+        return
+    try:
+        run_cmd_func([
+            "python3", script, "--web-user", "odoo", "--code-dir", f"{community_dir}/zero_sudo/daemon",
+            "--odoo-unit", "odoo.service",
+        ])
+    except Exception as e:  # audit-ignore-catch-all
+        _logger.warning("[*] Could not provision the secret broker: %s", e)
+        record_hook_failure("secret_broker", e)
+
+
 # The PostgreSQL login of daemons/dx_firehose: the name of its OS account, so it logs in by peer authentication over the unix socket
 # with no password, and only the two tables its SELECT reads (daemons/dx_firehose/main.py _qso_select_sql). It used to share the `odoo`
 # role and its password over TCP.
@@ -14970,6 +14992,8 @@ def provision_environment(
                 _alter_database_owner_to_odoo(run_cmd_func, db_name)
                 _precreate_odoo_extensions(run_cmd_func, db_name)
                 _provision_secret_schema(run_cmd_func, db_name)
+                if not is_test_env:
+                    _provision_secret_broker(run_cmd_func, env_vars)
                 _provision_dx_firehose_role(run_cmd_func, db_name)
 
                 _logger.info(
