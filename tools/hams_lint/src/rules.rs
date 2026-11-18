@@ -497,7 +497,10 @@ mod tests {
         let a = fingerprint_of("spec", &["fn algo() { 1 }", "text", "rules"]);
         let b = fingerprint_of("spec", &["fn algo() { 2 }", "text", "rules"]);
         assert_ne!(a, b, "an algos.rs edit must change the fingerprint");
-        assert_eq!(a, fingerprint_of("spec", &["fn algo() { 1 }", "text", "rules"]));
+        assert_eq!(
+            a,
+            fingerprint_of("spec", &["fn algo() { 1 }", "text", "rules"])
+        );
     }
 
     #[test]
