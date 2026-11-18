@@ -22,7 +22,7 @@ pattern search never lists the searcher, its ancestors or its descendants. Pure 
                           [--while-pid N] [--timeout S]       exit 0 done, 1 failed, 75 timeout, 2 usage, 3 refused
     agent_procs.py run    NAME [--tag AGENT] [--cwd DIR] [--timeout S] [--mem-max SIZE] [--nice N] -- COMMAND...
                           a named job; log in ~/.cache/hams-jobs/NAME.log; ends after 1800 s (`--timeout 0`: never) and is
-                          capped at 6G, 24G when the command has `cargo`, `rustc` or `run_linters.py` (which also gets 5400 s) (`--mem-max none`: no cap; systemd-run --user scope, else ulimit -v); a timeout stops
+                          capped at 6G, 24G when the command has `cargo`, `rustc` or `run_linters.py` (which also gets 5400 s), none for `cycle_run.py`/`round_gate.py` (`--mem-max none`: no cap; systemd-run --user scope, else ulimit -v); a timeout stops
                           the whole process group (exit 124, reason `timeout` in the record); the command dies with its wrapper
     agent_procs.py jobs   [--json]                         shows each job's timeout and memory cap
     agent_procs.py reap   [--min-age S] [--apply] [--force]   your orphans: cwd a deleted path under /storage/agent_work, or
@@ -72,6 +72,9 @@ LINT_TIMEOUT = 5400
 # merge_pr.py runs run_linters, clippy and cargo fmt in its own process tree: under the 6G default the systemd scope's OOM policy stops the whole
 # tree with SIGTERM (exit 143, an empty log: merge_pr prints nothing until it ends), seen on hams_com #8849 2026-11-16.
 LINT_DRIVERS = ("run_linters.py", "merge_pr.py")
+# cycle_run.py and round_gate.py start the gate shards (postgres, browsers, xdist) and the lint as uncapped jobs, which stay in the
+# orchestrator's scope: under the 6G default the scope's OOM policy stopped round 145 with SIGTERM (exit 143) on 2026-11-17. No cap.
+ORCHESTRATORS = ("cycle_run.py", "round_gate.py")
 KILL_GRACE = 10
 AGENT_WORK_ROOT = "/storage/agent_work"
 DEFAULT_MIN_AGE = 900
@@ -1068,8 +1071,10 @@ def cmd_wait(args, out=sys.stdout):
 # [@ANCHOR: agent_procs:default_mem_max]
 def default_mem_max(command):
     """The memory cap when `--mem-max` is not given: `CARGO_MEM_MAX` (24G) when any word of `command` is, or ends in a path to,
-    `cargo` or `rustc`; otherwise `DEFAULT_MEM_MAX` (6G)."""
+    `cargo` or `rustc`; `LINT_MEM_MAX` for `LINT_DRIVERS`; `none` for `ORCHESTRATORS`; otherwise `DEFAULT_MEM_MAX` (6G)."""
     for word in command or ():
+        if os.path.basename(str(word)) in ORCHESTRATORS:
+            return "none"
         if os.path.basename(str(word)) in ("cargo", "rustc"):
             return CARGO_MEM_MAX
         if os.path.basename(str(word)) in LINT_DRIVERS:
