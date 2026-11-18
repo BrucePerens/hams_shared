@@ -1195,13 +1195,31 @@ class LimitTests(ProcTestCase):
     def test_run_linters_gets_the_longer_timeout_and_higher_cap(self):
         cmd = ["nice", "-n", "15", "python3", "hams_shared/tools/run_linters.py", "--no-baseline"]
         self.assertEqual(ap.default_timeout(cmd), 5400)
-        self.assertEqual(ap.default_mem_max(cmd), "24G")
+        self.assertEqual(ap.default_mem_max(cmd), "32G")
         self.assertEqual(ap.default_timeout(["python3", "test.py"]), 1800)
         self.assertEqual(ap.default_timeout(None), 1800)
         merge = ["python3", "devbox_tools/merge_pr.py", "hams_com", "1"]  # runs the whole lint in its tree: same limits as run_linters.py
-        self.assertEqual((ap.default_timeout(merge), ap.default_mem_max(merge)), (5400, "24G"))
+        self.assertEqual((ap.default_timeout(merge), ap.default_mem_max(merge)), (5400, "32G"))
 
     # Tests [@ANCHOR: agent_procs:default_mem_max]
+    def test_git_push_and_wrapped_lint_commands_get_the_lint_cap(self):
+        """The pre-push hook runs lint and cargo inside `git push`: 31 agent scopes were OOM-killed at 6G/12G in 24 h (2026-11-18)."""
+        for cmd in (["git", "push", "origin", "b"], ["git", "-C", "/w", "push", "-u", "origin", "b"],
+                    ["bash", "-c", "git push origin b && gh pr create --draft"],
+                    ["sh", "-c", "cd /w; nice -n 5 git push"],
+                    ["bash", "-c", "python3 hams_shared/tools/run_linters.py --no-baseline"],
+                    ["bash", "-c", "x=1 /opt/u/devbox_tools/merge_pr.py hams_com 1"]):
+            self.assertEqual((ap.default_mem_max(cmd), ap.default_timeout(cmd)), ("32G", 5400), cmd)
+        self.assertEqual(ap.default_mem_max(["bash", "-c", "cd /w && cargo test"]), "24G")
+        self.assertEqual(ap.default_mem_max(["bash", "-c", "python3 devbox_tools/cycle_run.py"]), "none")
+        for cmd in (["git", "pull"], ["git", "log", "--oneline"], ["bash", "-c", "echo pushing; git status"], ["echo", "push"]):
+            self.assertEqual(ap.default_mem_max(cmd), "6G", cmd)
+        script = os.path.join(self.tmp, "ship.sh")
+        with open(script, "w") as f:
+            f.write("#!/bin/sh\ngit commit -m x\ngit push origin HEAD\n")
+        self.assertEqual(ap.default_mem_max(["bash", script]), "32G")
+        self.assertEqual(ap.default_mem_max(["bash", os.path.join(self.tmp, "missing.sh")]), "6G")
+
     def test_cargo_and_rustc_commands_get_the_higher_default_cap(self):
         self.assertEqual(ap.default_mem_max(["python3", "test.py"]), "6G")
         self.assertEqual(ap.default_mem_max(None), "6G")

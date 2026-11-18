@@ -66,8 +66,9 @@ DEFAULT_TIMEOUT = 1800
 DEFAULT_MEM_MAX = "6G"
 # The large relay crate's cargo builds and tests need more than 6G (an agent had its runs killed, 2026-11-14).
 CARGO_MEM_MAX = "24G"
-# A full `run_linters.py` run reached the 6G cap (2026-11-16: exit 143 after 614 s, scope peak 6G) and can outlast 1800 s.
-LINT_MEM_MAX = "24G"
+# A full `run_linters.py` run reached the 6G cap (2026-11-16: exit 143 after 614 s, scope peak 6G) and can outlast 1800 s; merge_pr.py runs its
+# checks in parallel and hit 24G once (2026-11-18), and `git push` runs the same lint and cargo in its pre-push hook.
+LINT_MEM_MAX = "32G"
 LINT_TIMEOUT = 5400
 # merge_pr.py runs run_linters, clippy and cargo fmt in its own process tree: under the 6G default the systemd scope's OOM policy stops the whole
 # tree with SIGTERM (exit 143, an empty log: merge_pr prints nothing until it ends), seen on hams_com #8849 2026-11-16.
@@ -1089,27 +1090,50 @@ def cmd_wait(args, out=sys.stdout):
     return result.code
 
 
+SCRIPT_SCAN_BYTES = 65536
+WORD_RE = re.compile(r"[^\s;&|()<>'\"`$=]+")
+
+
+def command_words(command):
+    """The basenames of every word in `command`, also inside `bash -c` strings and the text of `.sh` script arguments."""
+    words = []
+    for arg in command or ():
+        arg = str(arg)
+        texts = [arg]
+        if arg.endswith(".sh") and os.path.isfile(arg):
+            with open(arg, errors="replace") as f:
+                texts.append(f.read(SCRIPT_SCAN_BYTES))
+        for text in texts:
+            words.extend(os.path.basename(w) for w in WORD_RE.findall(text))
+    return words
+
+
+def runs_git_push(words):
+    """True when `git` is followed by `push` within a few words (`git -C dir push`)."""
+    return any(w == "git" and "push" in words[i + 1:i + 6] for i, w in enumerate(words))
+
+
 # [@ANCHOR: agent_procs:default_mem_max]
 def default_mem_max(command):
-    """The memory cap when `--mem-max` is not given: `CARGO_MEM_MAX` (24G) when any word of `command` is, or ends in a path to,
-    `cargo` or `rustc`; `LINT_MEM_MAX` for `LINT_DRIVERS`; `none` for `ORCHESTRATORS`; otherwise `DEFAULT_MEM_MAX` (6G)."""
-    for word in command or ():
-        if os.path.basename(str(word)) in ORCHESTRATORS:
-            return "none"
-        if os.path.basename(str(word)) in ("cargo", "rustc"):
-            return CARGO_MEM_MAX
-        if os.path.basename(str(word)) in LINT_DRIVERS:
-            return LINT_MEM_MAX
+    """The memory cap when `--mem-max` is not given, from the words of `command` (also those inside a `bash -c` string or a `.sh` script
+    argument): `none` for `ORCHESTRATORS`; `LINT_MEM_MAX` (32G) for `LINT_DRIVERS` and `git push` (its pre-push hook runs lint and cargo);
+    `CARGO_MEM_MAX` (24G) for `cargo` or `rustc`; otherwise `DEFAULT_MEM_MAX` (6G)."""
+    words = command_words(command)
+    if any(w in ORCHESTRATORS for w in words):
+        return "none"
+    if any(w in LINT_DRIVERS for w in words) or runs_git_push(words):
+        return LINT_MEM_MAX
+    if any(w in ("cargo", "rustc") for w in words):
+        return CARGO_MEM_MAX
     return DEFAULT_MEM_MAX
 
 
-# [@ANCHOR: agent_procs:default_timeout]
 def default_timeout(command):
-    """The timeout when `--timeout` is not given: `LINT_TIMEOUT` (5400 s) when a word of `command` is, or ends in a path to,
-    `run_linters.py`; otherwise `DEFAULT_TIMEOUT` (1800 s)."""
-    for word in command or ():
-        if os.path.basename(str(word)) in LINT_DRIVERS:
-            return LINT_TIMEOUT
+    """The timeout when `--timeout` is not given: `LINT_TIMEOUT` (5400 s) for the commands `default_mem_max` gives `LINT_MEM_MAX`;
+    otherwise `DEFAULT_TIMEOUT` (1800 s)."""
+    words = command_words(command)
+    if any(w in LINT_DRIVERS for w in words) or runs_git_push(words):
+        return LINT_TIMEOUT
     return DEFAULT_TIMEOUT
 
 
