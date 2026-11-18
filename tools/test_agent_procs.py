@@ -1185,6 +1185,10 @@ class LimitTests(ProcTestCase):
         self.assertEqual(ap.default_mem_max(["nice", "-n", "10", "env", "A=1", "cargo", "test"]), "24G")
         self.assertEqual(ap.default_mem_max(["/opt/u/.cargo/bin/cargo", "build"]), "24G")
         self.assertEqual(ap.default_mem_max(["rustc", "x.rs"]), "24G")
+        # cycle_run.py / round_gate.py run the whole gate (4 shards, postgres, browsers) and the lint as uncapped children of their own
+        # scope: a 6G default stopped round 145 by SIGTERM (exit 143) via the scope's OOM policy, 2026-11-17.
+        self.assertEqual(ap.default_mem_max(["python3", "devbox_tools/cycle_run.py", "--round", "145"]), "none")
+        self.assertEqual(ap.default_mem_max(["/usr/bin/python3", "/x/devbox_tools/round_gate.py", "--round", "1"]), "none")
         self.assertEqual(ap.default_mem_max(["echo", "cargo-deny"]), "6G")
         cli("run", "cg", "--", "cargo", "--version", env=self.env)
         cli("wait", "--job", "cg", "--timeout", "30", env=self.env)
