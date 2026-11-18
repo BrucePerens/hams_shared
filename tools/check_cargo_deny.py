@@ -108,12 +108,13 @@ def main():
         sys.exit(1)
 
     target = check_target.require_directory(sys.argv[1], "check_cargo_deny")
+    # --locked: a stale Cargo.lock fails the check instead of being rewritten in the tree (it dirtied the gate snapshot, round 143).
     crate_dirs = [
-        (repo_root, crate_dir, ["cargo", "deny", "check"])
+        (repo_root, crate_dir, ["cargo", "deny", "--locked", "check"])
         for repo_root in _resolve_repo_roots(target)
         for crate_dir in find_deny_crates(repo_root)
     ] + [
-        (repo_root, crate_dir, ["cargo", "deny", "check", "advisories"])
+        (repo_root, crate_dir, ["cargo", "deny", "--locked", "check", "advisories"])
         for repo_root in _resolve_repo_roots(target)
         for crate_dir in find_lockfile_only_crates(repo_root)
     ]
