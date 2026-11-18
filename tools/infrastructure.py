@@ -983,6 +983,10 @@ def _migrate_signing_key(old_path, new_path, owner_str):
     gid = grp.getgrnam(group).gr_gid
     old_stat = os.stat(old_path)
     tmp_path = new_path + ".migrating"
+    # A copy left by a run that was killed between open and rename is ours alone (same name, the daemon's
+    # own 0700 directory); O_EXCL on it would fail every later run. The old key is still in place.
+    with contextlib.suppress(FileNotFoundError):
+        os.remove(tmp_path)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     fd = os.open(tmp_path, flags, 0o600)
     try:
