@@ -1568,6 +1568,26 @@ class ProvisionSystemdOverrideTests(_TmpDirTestCase):
             )
         )
 
+    def test_the_odoo_override_creates_the_socket_directory_and_joins_the_socket_group(self):
+        # hams_rpc_guard's Unix socket: /run/odoo must be 0755 (0750 locks the hamsd daemon users out of it) and the unit
+        # needs the group the socket is given to (hams_open #1880, the rehearsal in HAMS1_RPC_GUARD_REPORT_MODE_2026-11-12).
+        infra.provision_systemd_override(MagicMock(), {}, environment="prod", dest_dir=self.tmp)
+        with open(os.path.join(self.override_dir, "override.conf")) as f:
+            lines = f.read().splitlines()
+        for line in ("RuntimeDirectory=odoo", "RuntimeDirectoryMode=0755", "SupplementaryGroups=hamsd"):
+            self.assertEqual(lines.count(line), 1, line)
+
+    def test_the_socket_group_is_created_before_the_unit_that_names_it_and_only_when_missing(self):
+        run_cmd = MagicMock()
+        self.safe_patch_object(infra.grp, "getgrnam", side_effect=KeyError("hamsd"))
+        self.safe_patch_object(infra, "provision_systemd_override")
+        infra.provision_odoo_systemd_override(run_cmd, {}, False)
+        run_cmd.assert_called_once_with(["groupadd", "--system", "hamsd"])
+        run_cmd.reset_mock()
+        self.safe_patch_object(infra.grp, "getgrnam", return_value=MagicMock())
+        infra.provision_odoo_systemd_override(run_cmd, {}, False)
+        run_cmd.assert_not_called()
+
     def test_odoo_override_restarts_on_failure(self):
         # Real incident, 2026-10-01: odoo.service had no Restart= at all, so a
         # transient PostgreSQL restart (check_registries()'s own pre-fork
@@ -2851,6 +2871,27 @@ class InitializeOdooDatabaseInjectionTests(_SafePatchTestCase):
         self.assertIn("-u", install[after_d:])
         update_idx = after_d + install[after_d:].index("-u")
         self.assertEqual(install[update_idx + 1], "ham_communications_consent")
+
+    def test_the_rpc_guard_socket_lines_are_written_to_odoo_conf_once_each(self):
+        run_cmd = MagicMock()
+        self._run_with_dirs("/tmp/hams_open", "/tmp/hams_com", run_cmd)
+        cmds = [c.args[0] for c in run_cmd.call_args_list]
+        expected = {
+            "server_wide_modules": "base,rpc,web,hams_rpc_guard",
+            "hams_rpc_guard_socket": "/run/odoo/rpc.sock",
+            "hams_rpc_guard_socket_group": "hamsd",
+            "hams_rpc_guard_socket_mode": "0660",
+        }
+        self.assertEqual(dict(infra.ODOO_CONF_RPC_SOCKET), expected)
+        for key, value in expected.items():
+            delete = ["sudo", "sed", "-i", f"/^{key}[[:space:]]*=/d", "/etc/odoo/odoo.conf"]
+            append = [
+                c for c in cmds
+                if c[:2] == ["sudo", "bash"] and shlex.split(c[3])[:2] == ["echo", f"{key} = {value}"]
+            ]
+            self.assertIn(delete, cmds)
+            self.assertEqual(len(append), 1, f"expected exactly one append of {key}")
+            self.assertLess(cmds.index(delete), cmds.index(append[0]))
 
     def test_gevent_memory_limits_are_written_to_odoo_conf(self):
         # Tests [@ANCHOR: infrastructure:odoo_conf_gevent_memory_limits]

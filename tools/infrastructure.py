@@ -11027,6 +11027,13 @@ WantedBy=timers.target
                 # added.
                 "/opt/hams/spool",
             ],
+            # The hams_rpc_guard Unix socket (/run/odoo/rpc.sock, odoo.conf below): systemd creates /run/odoo owned by odoo and
+            # it must be 0755 (0750 keeps every hamsd daemon user out of it); the socket's group is hamsd (odoo.conf), which Odoo
+            # must belong to. A unit naming a group that does not exist fails with 216/GROUP, so provision_odoo_systemd_override
+            # creates it first.
+            "RuntimeDirectory": "odoo",
+            "RuntimeDirectoryMode": "0755",
+            "SupplementaryGroups": "hamsd",
             "PrivateTmp": "true",
             "PrivateDevices": "true",
             "NoNewPrivileges": "true",
@@ -11905,11 +11912,21 @@ def provision_systemd_override(
             _logger.warning("Failed to reload systemd daemons: %s", e)
 
 
+# The OS group of the hams_rpc_guard Unix socket (hams_rpc_guard/README.md, "Unix socket"): daemon users that talk to Odoo over
+# the socket belong to it. Created before the unit that names it (SupplementaryGroups=), which fails with 216/GROUP without it.
+ODOO_RPC_SOCKET_GROUP = "hamsd"
+
+
 def provision_odoo_systemd_override(run_cmd_func, env_vars, is_test, dest_dir=""):
     """Writes odoo.service's drop-in once, for the environment this host is. provision_environment used to call
     provision_systemd_override for "prod" and then for "test" with the same unit, so on a production host the test
     version (no prod-only lines) was written last and silently dropped the Odoo Web Bot Auth key lines
     (hams_shared #233). Both environments write the same file, so exactly one call may be made per run."""
+    if not dest_dir and not _planning():
+        try:
+            grp.getgrnam(ODOO_RPC_SOCKET_GROUP)
+        except KeyError:  # burn-ignore-os-account-probe
+            run_cmd_func(["groupadd", "--system", ODOO_RPC_SOCKET_GROUP])
     provision_systemd_override(
         run_cmd_func, env_vars, environment="test" if is_test else "prod", dest_dir=dest_dir
     )
@@ -11938,6 +11955,16 @@ def provision_odoo_systemd_override(run_cmd_func, env_vars, is_test, dest_dir=""
 ODOO_CONF_GEVENT_MEMORY_LIMITS = (
     ("limit_memory_soft_gevent", 3 * 1024 * 1024 * 1024),
     ("limit_memory_hard_gevent", 4 * 1024 * 1024 * 1024),
+)
+
+# The hams_rpc_guard Unix socket for the on-host daemons, written into /etc/odoo/odoo.conf by initialize_odoo_database() below
+# (hams_rpc_guard/README.md, "Unix socket"; the unit drop-in creates /run/odoo and the group). `rpc` serves JSON-2, `hams_rpc_guard`
+# must load server-wide to own the listener. Which daemons use the socket, and `rpc_transport`, are system parameters, not set here.
+ODOO_CONF_RPC_SOCKET = (
+    ("server_wide_modules", "base,rpc,web,hams_rpc_guard"),
+    ("hams_rpc_guard_socket", "/run/odoo/rpc.sock"),
+    ("hams_rpc_guard_socket_group", ODOO_RPC_SOCKET_GROUP),
+    ("hams_rpc_guard_socket_mode", "0660"),
 )
 
 # Worker limits for the ordinary HTTP/cron worker pool, written explicitly instead of left to Odoo's
@@ -12045,7 +12072,7 @@ def initialize_odoo_database(
         # removing one key never also deletes a longer key sharing its
         # prefix (e.g. a bare /^limit_memory_soft/d would take out
         # limit_memory_soft_gevent too).
-        for key, value in ODOO_CONF_GEVENT_MEMORY_LIMITS + ODOO_CONF_WORKER_LIMITS:
+        for key, value in ODOO_CONF_GEVENT_MEMORY_LIMITS + ODOO_CONF_WORKER_LIMITS + ODOO_CONF_RPC_SOCKET:
             run_cmd_func(["sudo", "sed", "-i", f"/^{key}[[:space:]]*=/d", "/etc/odoo/odoo.conf"])
             run_cmd_func(["sudo", "bash", "-c", f"echo {shlex.quote(f'{key} = {value}')} >> /etc/odoo/odoo.conf"])
     except Exception as e: # audit-ignore-catch-all
