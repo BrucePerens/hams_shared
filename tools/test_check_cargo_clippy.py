@@ -639,14 +639,25 @@ class ClippyCommandTests(unittest.TestCase):
     def test_the_relay_is_linted_with_all_targets_and_its_features(self):
         cmd = chk._clippy_command("/w/daemons/hams_local_relay")
         self.assertIn("--all-targets", cmd)
-        self.assertIn("--locked", cmd)
         self.assertEqual(cmd[cmd.index("--features") + 1], "radioctl,shared_receiver")
         self.assertEqual(cmd[-2:], ["-W", "clippy::all"])
 
     def test_any_other_crate_keeps_the_plain_command(self):
         self.assertEqual(
-            chk._clippy_command("/w/daemons/other"), ["cargo", "clippy", "--locked", "--", "-W", "clippy::all"]
+            chk._clippy_command("/w/daemons/other"), ["cargo", "clippy", "--", "-W", "clippy::all"]
         )
+
+    def test_locked_only_when_a_lock_file_exists_and_a_new_lock_is_removed(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertNotIn("--locked", chk._clippy_command(d))
+            with patch.object(chk.subprocess, "run", side_effect=lambda *a, **k: open(os.path.join(d, "Cargo.lock"), "w").close()):
+                chk._run_clippy(d)
+            self.assertFalse(os.path.exists(os.path.join(d, "Cargo.lock")))
+            open(os.path.join(d, "Cargo.lock"), "w").close()
+            self.assertIn("--locked", chk._clippy_command(d))
+            with patch.object(chk.subprocess, "run"):
+                chk._run_clippy(d)
+            self.assertTrue(os.path.exists(os.path.join(d, "Cargo.lock")))
 
 
 if __name__ == "__main__":

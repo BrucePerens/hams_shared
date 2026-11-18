@@ -215,6 +215,13 @@ class LockOnlyCrateTests(unittest.TestCase):
         _write(os.path.join(no_lock, "Cargo.toml"))
         self.assertEqual(chk.find_lockfile_only_crates(self.tmp), [])
 
+    def test_locked_flag_only_with_a_lock_file(self):
+        crate = os.path.join(self.tmp, "daemons", "x")
+        _write(os.path.join(crate, "Cargo.toml"))
+        self.assertEqual(chk._locked(crate), [])
+        _write(os.path.join(crate, "Cargo.lock"))
+        self.assertEqual(chk._locked(crate), ["--locked"])
+
     def test_main_runs_only_the_advisories_check_in_a_lockfile_only_crate(self):
         crate = os.path.join(self.tmp, "daemons", "bare")
         _write(os.path.join(crate, "Cargo.toml"))
