@@ -394,5 +394,57 @@ class MovedNotLostTests(unittest.TestCase):
         self.assertEqual(code, 1, out)
 
 
+class RecordedFixedTrimTests(unittest.TestCase):
+    """The #9358 case: to-do bullets removed because a partial fix finished them."""
+
+    TODO = "night_shift_todo/low/relay-a.md"
+    HEAD_TODO = (
+        "---\nstatus: open\n---\n\nAcceptance:\n"
+        "- `forward_opus` re-checks the PTT release epoch after the inner queue has room, so a packet held while the queue is full is not queued after a release.\n"
+        "- Packets already inside the inner queue when PTT is released are dropped or shown not to play (check whether anything drains them on release).\n"
+        "- `open_session` has an overall deadline for the wait for SUBACK from the broker.\n"
+    )
+    TRIMMED = "---\nstatus: open\n---\n\nAcceptance:\n- `open_session` has an overall deadline for the wait for SUBACK from the broker.\n"
+    HISTORY = (
+        "night_shift_history/2026-11-17-x.md",
+        "### Relay audio\n\n`forward_opus` now re-checks the PTT release epoch before sending, so a packet held while the inner queue was full "
+        "is dropped after a release. Packets already queued are drained once when released.\n",
+    )
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        _init_repo(self.tmp)
+        _commit_file(self.tmp, self.TODO, self.HEAD_TODO)
+        _write(os.path.join(self.tmp, self.TODO), self.TRIMMED)
+        _git(self.tmp, "add", self.TODO)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_removed_bullets_recorded_in_a_staged_history_entry_are_accepted(self):
+        _write(os.path.join(self.tmp, self.HISTORY[0]), self.HISTORY[1])
+        _git(self.tmp, "add", self.HISTORY[0])
+        code, out = _run(self.tmp, "--staged")
+        self.assertEqual(code, 0, out)
+
+    def test_removed_bullets_without_a_history_entry_are_still_flagged(self):
+        code, out = _run(self.tmp, "--staged")
+        self.assertEqual(code, 1, out)
+
+    def test_an_unrelated_history_entry_does_not_excuse_the_removal(self):
+        _write(os.path.join(self.tmp, self.HISTORY[0]), "### Billing\n\nInvoices now round correctly.\n")
+        _git(self.tmp, "add", self.HISTORY[0])
+        code, out = _run(self.tmp, "--staged")
+        self.assertEqual(code, 1, out)
+
+    def test_a_removed_non_bullet_line_is_not_excused(self):
+        _write(os.path.join(self.tmp, self.TODO), self.TRIMMED.replace("Acceptance:", "").replace("status: open", "status: x"))
+        _git(self.tmp, "add", self.TODO)
+        _write(os.path.join(self.tmp, self.HISTORY[0]), self.HISTORY[1])
+        _git(self.tmp, "add", self.HISTORY[0])
+        code, out = _run(self.tmp, "--staged")
+        self.assertEqual(code, 1, out)
+
+
 if __name__ == "__main__":
     unittest.main()
