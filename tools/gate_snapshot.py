@@ -465,8 +465,9 @@ def verify_snapshot(gate_dir, fetch=True, environ=None, cargo_target_dir=None):
         head = _git(path, "rev-parse", "HEAD", check=False)
         if head != commit:
             problems.append("%s tree %s is at %s, the snapshot says %s" % (key, path, head[:12], commit[:12]))
-        if _git(path, "status", "--porcelain", "--untracked-files=no", check=False):
-            problems.append("%s tree %s has uncommitted changes" % (key, path))
+        dirty = _git(path, "status", "--porcelain", "--untracked-files=no", check=False)
+        if dirty:
+            problems.append("%s tree %s has uncommitted changes: %s" % (key, path, "; ".join(dirty.splitlines()[:10])))
         if key in expected and expected[key] != commit and not (key == "com" and only_notes_ahead(mains["com"], commit, expected[key])):
             problems.append("%s is behind origin/main: snapshot %s, origin/main %s" % (key, commit[:12], expected[key][:12]))
     pointed = environ.get(OPEN_TREE_ENV)
