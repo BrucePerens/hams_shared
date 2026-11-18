@@ -39,6 +39,7 @@ Tests [@ANCHOR: agent_procs:forward_signal]
 Tests [@ANCHOR: agent_procs:wrapper_main]
 Tests [@ANCHOR: agent_procs:parse_size]
 Tests [@ANCHOR: agent_procs:limit_argv]
+Tests [@ANCHOR: agent_procs:scope_oom_killed]
 Tests [@ANCHOR: agent_procs:stop_group]
 Tests [@ANCHOR: agent_procs:orphan_reason]
 Tests [@ANCHOR: agent_procs:cmd_reap]
@@ -75,6 +76,7 @@ import tempfile
 import threading
 import time
 import unittest
+import unittest.mock
 from unittest import mock
 
 from hypothesis import given as hypothesis_given, settings
@@ -1096,6 +1098,27 @@ class JobTests(ProcTestCase):
         self.until(lambda: os.path.exists(building), 30)
         wrapper.send_signal(signal.SIGUSR1)
         self.assertEqual(wrapper.wait(timeout=30), 128 + int(signal.SIGUSR1))
+
+    def test_wrapper_main_records_mem_max_when_the_scope_was_oom_killed(self):
+        """Tests [@ANCHOR: agent_procs:wrapper_main] and [@ANCHOR: agent_procs:scope_oom_killed]: a job whose systemd scope
+        the kernel OOM-killed at its cap gets exit_reason `mem_max` (round 145 looked like an unknown SIGTERM)."""
+        results = {}
+        for oom in (True, False):
+            name = f"oom{oom}"
+            rec = ap.JobRecord(name, "", os.getpid(), os.getpid(), os.getpid(), 5, "/w", ["x"], "/l", 1.0, "bruce")
+            ap.write_record(rec, self.jobs)
+            saved = (ap.limit_argv, ap.scope_oom_killed, sys.stdin)
+            ap.limit_argv = lambda argv, mem_max, nice: ["sh", "-c", "exit 137"]
+            ap.scope_oom_killed = lambda unit: oom
+            sys.stdin = io.StringIO("go\n")
+            try:
+                with unittest.mock.patch("shutil.which", return_value="/bin/sh"):
+                    code = ap.wrapper_main(name, ["sh"], self.jobs, mem_max="1G")
+            finally:
+                ap.limit_argv, ap.scope_oom_killed, sys.stdin = saved
+            results[oom] = (code, ap.read_record(name, self.jobs).exit_reason)
+        self.assertEqual(results[True], (137, "mem_max"))
+        self.assertEqual(results[False][1], None)
 
     def test_wrapper_main_refuses_to_run_without_the_go_line(self):
         code = subprocess.run([sys.executable, TOOL, "_wrap", "never", "--", "touch", os.path.join(self.tmp, "ran")],

@@ -608,6 +608,25 @@ def user_scope_works():
         return False
 
 
+def scope_unit():
+    """Name of the systemd scope `limit_argv` gives this wrapper's command (unique per wrapper process)."""
+    return f"agent-job-{os.getpid()}.scope"
+
+
+# [@ANCHOR: agent_procs:scope_oom_killed]
+def scope_oom_killed(unit):
+    """True when the (failed) user scope `unit` was stopped by the kernel OOM killer at its MemoryMax (`Result=oom-kill`)."""
+    try:
+        out = subprocess.run(["systemctl", "--user", "show", "-p", "Result", "--value", unit], capture_output=True, text=True,
+                             timeout=20).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if out.strip() != "oom-kill":
+        return False
+    subprocess.run(["systemctl", "--user", "reset-failed", unit], capture_output=True, timeout=20)  # the failed scope stays loaded
+    return True
+
+
 # [@ANCHOR: agent_procs:limit_argv]
 def limit_argv(argv, mem_max, nice, have_systemd=None):
     """The command line the wrapper runs for `argv`: `nice -n NICE` first when `nice` is non-zero; the memory cap `mem_max`
@@ -619,7 +638,7 @@ def limit_argv(argv, mem_max, nice, have_systemd=None):
         if have_systemd is None:
             have_systemd = user_scope_works()
         if have_systemd:
-            argv = ["systemd-run", "--user", "--scope", "-q", "-p", f"MemoryMax={mem_max}", "-p", "MemorySwapMax=0"] + argv
+            argv = ["systemd-run", "--user", "--scope", "-q", f"--unit={scope_unit()[:-6]}", "-p", f"MemoryMax={mem_max}", "-p", "MemorySwapMax=0"] + argv
         else:
             argv = ["sh", "-c", f'ulimit -v {parse_size(mem_max) // 1024} && exec "$@"', "sh"] + argv
     if nice:
@@ -663,7 +682,7 @@ def wrapper_main(name, argv, directory=None, timeout=0, kill_grace=KILL_GRACE, m
     the program was not found) and `ended_at` into the job's record when the record still names this process. Returns that
     exit code. SIGTERM, SIGINT, SIGHUP, SIGQUIT, SIGUSR1 and SIGUSR2 (`ALLOWED_SIGNALS`) are forwarded to the command and do not
     stop the wrapper. After `timeout` seconds (0: never) the whole process group is stopped with `stop_group` (SIGTERM, then
-    SIGKILL after `kill_grace`), the exit code is 124 and the record gets `exit_reason` `timeout`. The command asks the kernel
+    SIGKILL after `kill_grace`), the exit code is 124 and the record gets `exit_reason` `timeout`; a command that fails inside a systemd scope the kernel OOM-killed at `mem_max` gets `mem_max`. The command asks the kernel
     for SIGTERM when the wrapper dies (PR_SET_PDEATHSIG). `mem_max` and `nice` are applied with `limit_argv` here, so the
     wrapper's own command line never names systemd-run."""
     if sys.stdin.readline().strip() != "go":
@@ -691,6 +710,8 @@ def wrapper_main(name, argv, directory=None, timeout=0, kill_grace=KILL_GRACE, m
             code = EX_TIMEOUT_JOB
         else:
             code = 128 - code if code < 0 else code
+            if code and mem_max and scope_oom_killed(scope_unit()):
+                reason = "mem_max"
     except OSError as error:
         print(f"agent_procs: cannot run {argv[0]}: {error}", file=sys.stderr, flush=True)
         code = 127
