@@ -588,7 +588,28 @@ def run_traced(trace_file, argv, poll=0.2):
     ABORTED_STATUS returned, so the caller loses seconds, not the whole step, before it reruns the step untraced."""
     command = ["strace", "-I", "1", "--kill-on-exit", "-f", "-q", "-y", "-s", "4096", "--seccomp-bpf", "-e", "trace=" + STRACE_SYSCALLS,
                "-o", trace_file, "--"] + list(argv)
-    proc = subprocess.Popen(command)
+    proc = subprocess.Popen(command, preexec_fn=_die_with_parent(os.getpid()))
+    try:
+        return _watch_traced(proc, trace_file, poll)
+    finally:
+        if proc.poll() is None:  # an error or interrupt in the watcher: never leave strace behind
+            proc.kill()
+            proc.wait()
+
+
+def _die_with_parent(parent):
+    """A `preexec_fn` making the child receive SIGKILL when `parent` dies by any means (even SIGKILL, which no handler or finally can catch): a
+    strace ended this way ends every process it traces through --kill-on-exit, so a traced run cannot outlive its caller."""
+    def setup():
+        import ctypes
+        ctypes.CDLL(None, use_errno=True).prctl(1, signal.SIGKILL)  # PR_SET_PDEATHSIG
+        if os.getppid() != parent:  # the caller died before the option took effect
+            os._exit(1)
+    return setup
+
+
+def _watch_traced(proc, trace_file, poll):
+    """The loop of `run_traced`: reads the growing trace until the main process ends; returns its status."""
     main_pid, status, offset, partial = None, None, 0, ""
     while status is None:
         ended = proc.poll() is not None
