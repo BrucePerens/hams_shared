@@ -325,6 +325,18 @@ class RunTests(unittest.TestCase):
             code, status = self.run_canary({}, only_if_new_commit=True)
         self.assertEqual((code, status, self.commands), (0, None, []))
 
+    # Tests [@ANCHOR: gate_canary:run_canary]
+    def test_skip_when_frozen_builds_nothing_while_the_merge_freeze_file_exists(self):
+        freeze = os.path.join(self.tmp.name, "MERGE_FREEZE")
+        open(freeze, "w").close()
+        code, status = self.run_canary({}, skip_when_frozen=freeze)
+        self.assertEqual((code, status, self.commands), (3, None, []))
+        self.assertIn("merge freeze", self.out[-1])
+        os.remove(freeze)
+        code, status = self.run_canary({}, skip_when_frozen=freeze)
+        self.assertEqual(code, 0)
+        self.assertTrue(self.commands)
+
     # Tests [@ANCHOR: gate_canary:main]
     def test_main_prints_the_status_and_reports_a_missing_one(self):
         out = []
@@ -424,7 +436,7 @@ class RelaySuiteTests(RunTests):
 
 class UnitFileTests(unittest.TestCase):
     # Tests [@ANCHOR: gate_canary:run_canary]
-    def test_the_user_units_run_the_canary_niced_and_are_not_installed_or_enabled(self):
+    def test_the_user_units_run_the_canary_niced_and_run_weekly_niced_and_skip_a_freeze(self):
         service = configparser.ConfigParser(strict=False, interpolation=None)
         service.optionxform = str
         service.read(os.path.join(HERE, "hams-gate-canary.service"))
@@ -437,8 +449,10 @@ class UnitFileTests(unittest.TestCase):
         timer.read(os.path.join(HERE, "hams-gate-canary.timer"))
         self.assertIn("OnCalendar", timer["Timer"])
         self.assertTrue(timer["Timer"]["Persistent"] in ("true", "false"))
+        self.assertTrue(timer["Timer"]["OnCalendar"].startswith("Sun "), "weekly, on the night into Sunday")
+        self.assertIn("--skip-when-frozen", service["Service"]["ExecStart"])
         with open(os.path.join(HERE, "hams-gate-canary.service")) as handle:
-            self.assertIn("NOT enabled", handle.read())
+            self.assertIn("enabled on the dev box", handle.read())
 
 
 if __name__ == "__main__":

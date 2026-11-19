@@ -5,7 +5,7 @@
 The nightly whole-system canary (ADR 0118): a sharded whole-system run on a clean snapshot of `origin/main`.
 
     gate_canary.py run    [--workspace DIR] [--parent DIR] [--state-dir DIR] [--shards N] [--shards-file FILE]
-                          [--jobs N] [--max-jobs-when-idle N] [--only-if-new-commit] [--no-bisect] [--no-fetch]
+                          [--jobs N] [--max-jobs-when-idle N] [--only-if-new-commit] [--skip-when-frozen] [--no-bisect] [--no-fetch]
     gate_canary.py status [--state-dir DIR]          # print status.json
 
 `run` builds the gate tree with `gate_snapshot.py` (which refuses a stale input), runs the shards through the ordinary
@@ -17,7 +17,7 @@ candidates join it.
 
 It runs on this machine only, at `nice -n 10`, one shard at a time unless the machine is idle (see `--max-jobs-when-idle`), never
 signals a process, and refuses on the production host. The systemd user units are `hams-gate-canary.service` and
-`hams-gate-canary.timer`; they are provided and not enabled. The reference is the "Nightly whole-system canary" section of tools/README.md.
+`hams-gate-canary.timer`; the timer runs weekly (Sunday 02:00) on the dev box. The reference is the "Weekly whole-system canary" section of tools/README.md.
 """
 
 import argparse
@@ -40,6 +40,7 @@ import atomic_io
 
 DEFAULT_STATE_DIR = os.path.expanduser("~/.cache/hams-test/canary")
 STATUS_NAME = "status.json"
+FREEZE_FILE = os.path.expanduser("~/workspace/tmp/MERGE_FREEZE")
 CANDIDATES_NAME = "known_red_candidates.json"
 NOTE_NAME = "note.txt"
 STATUS_VERSION = 1
@@ -305,7 +306,7 @@ def _rebuild_overwritten_artifacts(problems, trees, cargo_target_dir, out):
 # [@ANCHOR: gate_canary:run_canary]
 def run_canary(workspace=gate_snapshot.DEFAULT_WORKSPACE, parent=None, state_dir=DEFAULT_STATE_DIR, shards=gate_snapshot.DEFAULT_SHARDS,
                shards_file=None, jobs=1, idle_jobs=2, only_if_new_commit=False, bisect=True, fetch=True, runner=None, snapshot=None,
-               out=print, hostname=None, slots=None, load=None, relay=True):
+               out=print, hostname=None, slots=None, load=None, relay=True, skip_when_frozen=None):
     """One canary run; returns `(exit status, status document or None)`.
 
     Takes `<state_dir>/canary.lock` (a second run exits 3 at once, nothing is waited for). With `only_if_new_commit` and the
@@ -313,7 +314,7 @@ def run_canary(workspace=gate_snapshot.DEFAULT_WORKSPACE, parent=None, state_dir
     (`snapshot` replaces `gate_snapshot.create_snapshot` in tests), runs the shard commands with `choose_jobs` at a time, and writes
     `status.json` and `known_red_candidates.json` to `state_dir`. With `bisect`, every shard with a new failure is bisected (one
     after the other) and the report path is added to the status as `bisect`. Exit status: 0 green, 1 red (a new failure or shard error),
-    2 refused (production host, stale or missing input), 3 already running. `runner(command, log_path)` runs a command line (default
+    2 refused (production host, stale or missing input), 3 already running or, with `skip_when_frozen` (the MERGE_FREEZE path), frozen. `runner(command, log_path)` runs a command line (default
     `shell_runner`)."""
     runner = runner or shell_runner
     try:
@@ -321,6 +322,9 @@ def run_canary(workspace=gate_snapshot.DEFAULT_WORKSPACE, parent=None, state_dir
     except gate_snapshot.SnapshotError as error:
         out("REFUSING: %s" % error)
         return 2, None
+    if skip_when_frozen and os.path.exists(skip_when_frozen):
+        out("gate_canary: merge freeze (%s exists): a round is snapshotting origin/main; not starting" % skip_when_frozen)
+        return 3, None
     os.makedirs(state_dir, exist_ok=True)
     lock = open(os.path.join(state_dir, "canary.lock"), "a")
     try:
@@ -453,6 +457,7 @@ def main(argv=None, out=print):
     run.add_argument("--jobs", type=int, default=1, help="shards at once (default 1)")
     run.add_argument("--max-jobs-when-idle", type=int, default=2, help="shards at once when the machine is idle (default 2)")
     run.add_argument("--only-if-new-commit", action="store_true", help="do nothing when origin/main is what the last run tested")
+    run.add_argument("--skip-when-frozen", action="store_true", help="exit 3 at once while ~/workspace/tmp/MERGE_FREEZE exists (the timer's run)")
     run.add_argument("--no-bisect", action="store_true")
     run.add_argument("--no-fetch", action="store_true")
     run.add_argument("--no-relay", action="store_true", help="skip the whole relay `cargo test` suite (it runs after the shards by default)")
@@ -469,7 +474,8 @@ def main(argv=None, out=print):
             return 1
     try:
         code, _ = run_canary(args.workspace, args.parent, args.state_dir, args.shards, args.shards_file, args.jobs,
-                             args.max_jobs_when_idle, args.only_if_new_commit, not args.no_bisect, not args.no_fetch, out=out, relay=not args.no_relay)
+                             args.max_jobs_when_idle, args.only_if_new_commit, not args.no_bisect, not args.no_fetch, out=out, relay=not args.no_relay,
+                             skip_when_frozen=FREEZE_FILE if args.skip_when_frozen else None)
     except CanaryError as error:
         out("gate_canary: %s" % error)
         return 1
