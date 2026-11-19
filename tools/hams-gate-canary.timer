@@ -1,9 +1,11 @@
-# Timer of hams-gate-canary.service (ADR 0118). Provided and NOT enabled; see the service file for the install commands.
+# Timer of hams-gate-canary.service (ADR 0118). Enabled weekly on the dev box (Bruce, 2026-11-19); see the service file for the install commands.
 [Unit]
-Description=Run the whole-system test canary nightly
+Description=Run the whole-system test canary weekly
 
 [Timer]
-OnCalendar=*-*-* 01:30:00
+# Sunday 02:00, i.e. the night of Saturday: no round normally runs then; a run is about 4.5 h. A MERGE_FREEZE skips it (the service passes --skip-when-frozen);
+# a round that holds the test slots only delays it (test.py --wait queues on the slot lock).
+OnCalendar=Sun *-*-* 02:00:00
 Persistent=true
 RandomizedDelaySec=15min
 
