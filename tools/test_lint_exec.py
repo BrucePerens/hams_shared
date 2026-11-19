@@ -14,6 +14,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -661,8 +662,19 @@ class XdistTests(unittest.TestCase):
         self.assertEqual(lint_exec.with_xdist(self.step, 3), self.step.argv)
         self.assertFalse(lint_exec.xdist_available("/nonexistent/python3"))
 
+class NoStepLockByDefaultTests(unittest.TestCase):
+    def test_the_devbox_tools_step_takes_no_machine_wide_lock(self):
+        # It held the lock 124 s at the median and queued every merge_pr behind one another (2026-11-19).
+        self.assertNotIn("pytest devbox_tools/", lint_exec.MACHINE_WIDE_STEPS)
+
+
 class MachineWideLockTests(unittest.TestCase):
     """Tests [@ANCHOR: lint_exec:machine_wide_lock]: a step that reads machine-wide state runs one at a time across lint runs."""
+
+    def setUp(self):
+        patcher = mock.patch.object(lint_exec, "MACHINE_WIDE_STEPS", frozenset({"pytest devbox_tools/"}))
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_two_holders_of_the_same_step_exclude_each_other_and_other_steps_pass(self):
         import fcntl

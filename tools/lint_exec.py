@@ -356,10 +356,12 @@ def render_output(step, returncode, stdout, stderr):
     return "".join(parts)
 
 
-# Steps whose tests look at machine-wide state (every entry of /dev/shm, every process called `odoo shell`) and so fail when another lint run
-# executes the same tests at the same moment: with lint slots (2026-11-08) two runs did, 3 of 3 runs side by side. They run one at a time per
-# machine, across runs, under a flock in ~/.cache/hams-lint/steplocks/ (released when the step ends or the process dies).
-MACHINE_WIDE_STEPS = frozenset({"pytest devbox_tools/"})
+# Steps whose tests look at machine-wide state and so fail when another lint run executes the same tests at the same moment run one at a
+# time per machine, across runs, under a flock in ~/.cache/hams-lint/steplocks/ (released when the step ends or the process dies).
+# None today: `pytest devbox_tools/` was the only one (its test_odoo_shell_check counted every `odoo shell` on the machine) and held the
+# lock 124 s at the median, 291 s at p90, which queued every merge_pr behind one another (2026-11-19); that test now counts only its own
+# stand-ins, and three concurrent full runs of the suite pass.
+MACHINE_WIDE_STEPS = frozenset()
 
 
 # [@ANCHOR: lint_exec:machine_wide_lock]
