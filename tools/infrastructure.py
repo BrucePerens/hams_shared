@@ -1136,14 +1136,6 @@ SHARED_ODOO_ACCOUNT_UNITS = {
         "Relay and auth behavior: Bruce reviews and merges changes to the relay units himself (night rules), so it is not "
         "migrated unattended (plan section 13)."
     ),
-    "hams.simulated.bots.service": (
-        "Credentials in /etc/hams-bots are hand-placed odoo-owned files outside the key flow, and the bots write "
-        "/opt/hams/cache/whisper; both need MANIFEST ownership before an account change (plan section 13)."
-    ),
-    "hams.simulated.observer.service": (
-        "Credentials in /etc/hams-bots are hand-placed odoo-owned files outside the key flow, and the observer writes "
-        "/opt/hams/cache/whisper; migrates with the bots (plan section 13)."
-    ),
     "stray.odoo.shell.detector.service": (
         "Privileged by design and permanent: it inspects other processes of the odoo account (a one-off odoo shell left "
         "running), which an account of its own, or ProtectProc=invisible, would hide from it."
@@ -1676,6 +1668,18 @@ FAMILY_ACCOUNT_UNITS = {
         "no_key": True,
         "odoo_reads": True,
     },
+    # The simulated bots and the Official Observer share one low-privilege account (Bruce, 2026-11-19; the observer must be independent of
+    # the band server's account, and the two hold the same one key, the AI safety reporting key, so a second account would isolate nothing).
+    # They write only their model cache directory (the `HF_HOME` state directory /opt/hams/spool/simbots). Their two hand-placed secrets in
+    # /etc/hams-bots stay root-owned and arrive through LoadCredential=; the one Odoo key lives in the family key directory.
+    "hams.simulated.bots.service": {
+        "user": "hamsd_simbots",
+        "environment_files": frozenset({"common.env"}),
+    },
+    "hams.simulated.observer.service": {
+        "user": "hamsd_simbots",
+        "environment_files": frozenset({"common.env"}),
+    },
     # distributed_redis_cache's invalidation daemon holds no Odoo key. Its one credential is the CONNECT-only PostgreSQL login
     # that provisioning writes (_provision_cache_manager_role), and the daemon reads that file itself, so `db_login` names it:
     # the file lives in the family key directory, odoo:hamsd_cache_manager 0640, the same shape as an Odoo key. odoo is in the
@@ -2178,6 +2182,21 @@ MANIFEST = {
             "environments": ["prod", "test"],
         },
         {
+            # daemons/hams_simulated_bots (hams.simulated.bots.service and hams.simulated.observer.service): the simulated band's bots and
+            # its Official Observer, one account for both (Bruce, 2026-11-19). It owns the AI safety reporting key (the family key directory
+            # /opt/hams/etc/keys/simbots) and its model-cache state (/opt/hams/spool/simbots). odoo joins this group for the key hand-off
+            # (chgrp, never chown). Not in hams_com: the traversal group, the ACL entries on the directories it passes through and the
+            # group on /opt/hams/models are all it has.
+            "user": "hamsd_simbots",
+            "group": "hamsd_simbots",
+            "home": "/nonexistent",
+            "shell": "/usr/sbin/nologin",
+            "add_to_users": ["odoo"],
+            "member_of": ["hams_traverse"],
+            "not_member_of": ["hams_com"],
+            "environments": ["prod", "test"],
+        },
+        {
             # daemons/gdpr_csv_export: the GDPR export builder, which handles members' personal data. Its own account and key
             # (gdpr_export_service_internal.key) mean no other daemon reads the key or anything the unit holds. odoo joins this group for the key hand-off (chgrp, never chown). Not in hams_com: the traversal group plus the ACL entries on the directories it passes through are all it has.
             "user": "hamsd_gdpr_export",
@@ -2604,6 +2623,16 @@ MANIFEST = {
             "environments": ["prod", "test"],
         },
         {
+            # Key directory of the simbots family (hamsd_simbots): owned by odoo, group = the one account that consumes the keys in it,
+            # 0750 (Bruce, NIGHT_PLAN 226); the AI safety reporting key moves here from the flat keys directory (hams_open
+            # hams_ai_safety_reporting 1.2). See the ncvec_sync entry above for the full reasoning.
+            "path": "/opt/hams/etc/keys/simbots",
+            "owner": "odoo:hamsd_simbots",
+            "provision_mode": "750",
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
             # Key directory of the gdpr_export family (hamsd_gdpr_export): owned by odoo, group = the one account that consumes
             # the keys in it, 0750 (Bruce, NIGHT_PLAN 226); see the ncvec_sync entry above for the full reasoning.
             "path": "/opt/hams/etc/keys/gdpr_export",
@@ -2880,28 +2909,40 @@ MANIFEST = {
             "environments": ["prod", "test"],
         },
         {
+            # The simulated bots' and the Observer's one writable directory (HF_HOME of both units; they load the speech models from the
+            # explicit /opt/hams/models paths, so the libraries write here at most a lock or a small cache file). Replaces
+            # /opt/hams/cache/whisper, which the family account cannot reach (no traverse entry on /opt/hams/cache). Owned by the family
+            # account, 0750 so odoo (in its group) can read and not write.
+            "path": "/opt/hams/spool/simbots",
+            "owner": "hamsd_simbots:hamsd_simbots",
+            "provision_mode": "750",
+            "recursive_owner": True,
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
             # Speech models for the simulated-band bots (MANIFEST["model_files"]). Read-only at runtime:
-            # root's provisioning fetch is the only writer.
+            # root's provisioning fetch is the only writer. Public data: group hamsd_simbots (the bots and the observer) reads them.
             "path": "/opt/hams/models",
-            "owner": "hams_com:hams_com",
+            "owner": "hams_com:hamsd_simbots",
             "provision_mode": "750",
             "runtime_mount": "ro",
             "environments": ["prod", "test"],
         },
         {
             # Speech models for the simulated-band bots (MANIFEST["model_files"]). Read-only at runtime:
-            # root's provisioning fetch is the only writer.
+            # root's provisioning fetch is the only writer. Public data: group hamsd_simbots (the bots and the observer) reads them.
             "path": "/opt/hams/models/piper",
-            "owner": "hams_com:hams_com",
+            "owner": "hams_com:hamsd_simbots",
             "provision_mode": "750",
             "runtime_mount": "ro",
             "environments": ["prod", "test"],
         },
         {
             # Speech models for the simulated-band bots (MANIFEST["model_files"]). Read-only at runtime:
-            # root's provisioning fetch is the only writer.
+            # root's provisioning fetch is the only writer. Public data: group hamsd_simbots (the bots and the observer) reads them.
             "path": "/opt/hams/models/faster-whisper-tiny.en",
-            "owner": "hams_com:hams_com",
+            "owner": "hams_com:hamsd_simbots",
             "provision_mode": "750",
             "runtime_mount": "ro",
             "environments": ["prod", "test"],
@@ -8717,7 +8758,27 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 CapabilityBoundingSet=
-ReadWritePaths=/opt/hams/cache/whisper
+ReadWritePaths=/opt/hams/spool/simbots
+# Its own account, hamsd_simbots, shared with the Official Observer (Bruce, 2026-11-19; hams_com DAEMON_OS_ISOLATION_PLAN.md). Derived from the code
+# (daemons/hams_simulated_bots): no subprocess, no top-level /proc read of its own, writes only the HF_HOME state directory (and the
+# optional status file the unit does not set); the two secrets are read once at start, so LoadCredential= hands them over from the
+# root-owned /etc/hams-bots files (band_connection.py reads a relative name from $CREDENTIALS_DIRECTORY) and the account never
+# holds the root-only files; the AI safety key is in the family key directory. ProcSubset=pid is the family rule, but the speech
+# libraries (ctranslate2, onnxruntime) are unmeasured against it from here (neither is installed on the dev box): the deploy step
+# starts both units and reads the journal for a /proc/cpuinfo or /proc/meminfo failure; the remedy is to drop that one line.
+ProtectProc=invisible
+ProcSubset=pid
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
 # The robots' one process runs about 24 threads per robot just idling (ten robots: about 242,
 # measured with `ps -o nlwp`) and gains about 16 per person who transmits: the band server
 # adds a media line per person, every robot's aiortc connection starts a receiver and decoder
@@ -8729,10 +8790,11 @@ ReadWritePaths=/opt/hams/cache/whisper
 # (recycle a connection after N retired lines, or stop the retired receivers).
 TasksMax=4096
 Type=simple
-User=odoo
+User=hamsd_simbots
+Group=hamsd_simbots
 WorkingDirectory=/opt/hams/daemons/hams_simulated_bots
 
-Environment="HF_HOME=/opt/hams/cache/whisper"
+Environment="HF_HOME=/opt/hams/spool/simbots"
 # Speech models live at a stable path outside the daemon tree (MANIFEST["model_files"], placed by
 # `provision.py --fetch-models` on a production host only). Set, the daemon loads exactly these files and
 # never reaches for the network; a missing file is a loud error, not a silent download.
@@ -8749,17 +8811,19 @@ Environment="DAEMON_ARGS="
 # here, never in this unit text. See night_shift_history.md (hams_com) for the
 # full story of why this drop-in existed unversioned in the first place.
 Environment="HAMS_SIMULATED_BAND_WS_URL=ws://localhost:3000/ws"
-Environment="HAMS_SIMULATED_BAND_KEY_FILE=/etc/hams-bots/band.key"
+LoadCredential=band.key:/etc/hams-bots/band.key
+Environment="HAMS_SIMULATED_BAND_KEY_FILE=band.key"
 Environment="HAMS_SIMULATED_BOT_HOST_NAME=hams1-local-bots"
-Environment="HAMS_SIMULATED_BOT_COORDINATOR_TOKEN_FILE=/etc/hams-bots/coordinator.key"
+LoadCredential=coordinator.key:/etc/hams-bots/coordinator.key
+Environment="HAMS_SIMULATED_BOT_COORDINATOR_TOKEN_FILE=coordinator.key"
 Environment="ODOO_URL=https://hams.com"
 # Added 2026-10-19: the key file of the create-only `ai_safety_reporting_service_internal` account (hams_ai_safety_reporting),
 # which main.create_safety_ticket() loads through hams_config.load_credentials(). Without it that call sys.exit(1)'d and a
-# flagged QSO never became a hams_helpdesk ticket (observer, 2026-10-17). A path, not a secret; the file is odoo:odoo 0600
-# and these units run as odoo. The key itself is written by the daemon key registry. hams_config also needs DB_NAME (the
+# flagged QSO never became a hams_helpdesk ticket (observer, 2026-10-17). A path, not a secret; the file was odoo:odoo 0600
+# and these units run as hamsd_simbots (moved to the family directory 2026-11-19: odoo:hamsd_simbots 0640, written by hams_ai_safety_reporting 1.2's registry row). The key itself is written by the daemon key registry. hams_config also needs DB_NAME (the
 # X-Odoo-Database header; it fails fast without it), which common.env supplies as it does for every other Odoo client daemon.
 EnvironmentFile=/opt/hams/etc/common.env
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/ai_safety_reporting_service_internal.env"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/simbots/ai_safety_reporting_service_internal.env"
 
 ExecStart=/usr/bin/python3 /opt/hams/daemons/hams_simulated_bots/main.py $DAEMON_ARGS
 
@@ -8804,16 +8868,37 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 CapabilityBoundingSet=
-ReadWritePaths=/opt/hams/cache/whisper
+ReadWritePaths=/opt/hams/spool/simbots
+# Its own account, hamsd_simbots, shared with the simulated bots (Bruce, 2026-11-19; hams_com DAEMON_OS_ISOLATION_PLAN.md). Derived from the code
+# (daemons/hams_simulated_bots): no subprocess, no top-level /proc read of its own, writes only the HF_HOME state directory (and the
+# optional status file the unit does not set); the two secrets are read once at start, so LoadCredential= hands them over from the
+# root-owned /etc/hams-bots files (band_connection.py reads a relative name from $CREDENTIALS_DIRECTORY) and the account never
+# holds the root-only files; the AI safety key is in the family key directory. ProcSubset=pid is the family rule, but the speech
+# libraries (ctranslate2, onnxruntime) are unmeasured against it from here (neither is installed on the dev box): the deploy step
+# starts both units and reads the journal for a /proc/cpuinfo or /proc/meminfo failure; the remedy is to drop that one line.
+ProtectProc=invisible
+ProcSubset=pid
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
 # One band connection and one transcriber (no robots), so far fewer threads than the bot fleet,
 # but its receiver count also grows with each person who transmits (see
 # hams.simulated.bots.service above). 1024 matches the Pacificon demo kit's Observer.
 TasksMax=1024
 Type=simple
-User=odoo
+User=hamsd_simbots
+Group=hamsd_simbots
 WorkingDirectory=/opt/hams/daemons/hams_simulated_bots
 
-Environment="HF_HOME=/opt/hams/cache/whisper"
+Environment="HF_HOME=/opt/hams/spool/simbots"
 # Speech models live at a stable path outside the daemon tree (MANIFEST["model_files"], placed by
 # `provision.py --fetch-models` on a production host only). Set, the daemon loads exactly these files and
 # never reaches for the network; a missing file is a loud error, not a silent download.
@@ -8827,15 +8912,16 @@ Environment="DAEMON_ARGS="
 # ODOO_URL, but never reads HAMS_SIMULATED_BOT_HOST_NAME or
 # HAMS_SIMULATED_BOT_COORDINATOR_TOKEN_FILE -- those are BotClient-specific).
 Environment="HAMS_SIMULATED_BAND_WS_URL=ws://localhost:3000/ws"
-Environment="HAMS_SIMULATED_BAND_KEY_FILE=/etc/hams-bots/band.key"
+LoadCredential=band.key:/etc/hams-bots/band.key
+Environment="HAMS_SIMULATED_BAND_KEY_FILE=band.key"
 Environment="ODOO_URL=https://hams.com"
 # Added 2026-10-19: the key file of the create-only `ai_safety_reporting_service_internal` account (hams_ai_safety_reporting),
 # which main.create_safety_ticket() loads through hams_config.load_credentials(). Without it that call sys.exit(1)'d and a
-# flagged QSO never became a hams_helpdesk ticket (observer, 2026-10-17). A path, not a secret; the file is odoo:odoo 0600
-# and these units run as odoo. The key itself is written by the daemon key registry. hams_config also needs DB_NAME (the
+# flagged QSO never became a hams_helpdesk ticket (observer, 2026-10-17). A path, not a secret; the file was odoo:odoo 0600
+# and these units run as hamsd_simbots (moved to the family directory 2026-11-19: odoo:hamsd_simbots 0640, written by hams_ai_safety_reporting 1.2's registry row). The key itself is written by the daemon key registry. hams_config also needs DB_NAME (the
 # X-Odoo-Database header; it fails fast without it), which common.env supplies as it does for every other Odoo client daemon.
 EnvironmentFile=/opt/hams/etc/common.env
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/ai_safety_reporting_service_internal.env"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/simbots/ai_safety_reporting_service_internal.env"
 
 ExecStart=/usr/bin/python3 /opt/hams/daemons/hams_simulated_bots/observer.py $DAEMON_ARGS
 
@@ -10582,7 +10668,7 @@ WantedBy=timers.target
             "url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/low/en_US-lessac-low.onnx",
             "sha256": "f7d01dde371555732c4c314111ac79672b1a5ce2fc19266ab42178fd8df7f375",
             "size": 63201294,
-            "owner": "hams_com:hams_com",
+            "owner": "hams_com:hamsd_simbots",
             "mode": "640",
         },
         {
@@ -10590,7 +10676,7 @@ WantedBy=timers.target
             "url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/low/en_US-lessac-low.onnx.json",
             "sha256": "45754dfdebb3b8661c3fc564713772deec6e064feeb5b4e9594857dc7305193a",
             "size": 4882,
-            "owner": "hams_com:hams_com",
+            "owner": "hams_com:hamsd_simbots",
             "mode": "640",
         },
         {
@@ -10598,7 +10684,7 @@ WantedBy=timers.target
             "url": "https://huggingface.co/Systran/faster-whisper-tiny.en/resolve/0d3d19a32d3338f10357c0889762bd8d64bbdeba/config.json",
             "sha256": "14b1b421a90349bc551b881461426b561a874049cb9e4c4864f2ca384f6a7cc5",
             "size": 2317,
-            "owner": "hams_com:hams_com",
+            "owner": "hams_com:hamsd_simbots",
             "mode": "640",
         },
         {
@@ -10606,7 +10692,7 @@ WantedBy=timers.target
             "url": "https://huggingface.co/Systran/faster-whisper-tiny.en/resolve/0d3d19a32d3338f10357c0889762bd8d64bbdeba/model.bin",
             "sha256": "1a5afae06a4db91c975c9a9d78be5cc110ee4ea022ad57d55492e4550e936b2a",
             "size": 75537502,
-            "owner": "hams_com:hams_com",
+            "owner": "hams_com:hamsd_simbots",
             "mode": "640",
         },
         {
@@ -10614,7 +10700,7 @@ WantedBy=timers.target
             "url": "https://huggingface.co/Systran/faster-whisper-tiny.en/resolve/0d3d19a32d3338f10357c0889762bd8d64bbdeba/tokenizer.json",
             "sha256": "929c5252409436dce1b38a75d1abbcb5e132d170d8e324e4e04ed915fa2d22df",
             "size": 2128466,
-            "owner": "hams_com:hams_com",
+            "owner": "hams_com:hamsd_simbots",
             "mode": "640",
         },
         {
@@ -10622,7 +10708,7 @@ WantedBy=timers.target
             "url": "https://huggingface.co/Systran/faster-whisper-tiny.en/resolve/0d3d19a32d3338f10357c0889762bd8d64bbdeba/vocabulary.txt",
             "sha256": "ff77588746d3a2595d32ab5b69ffd7b95ce2441ac57533cb66fc3eb575a115cf",
             "size": 422309,
-            "owner": "hams_com:hams_com",
+            "owner": "hams_com:hamsd_simbots",
             "mode": "640",
         },
         {
