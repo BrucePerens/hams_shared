@@ -7471,6 +7471,21 @@ class ModelFilesTests(_SafePatchTestCase):
             self.assertEqual(infra.provision_model_files(environment="prod", fetch=self._fetcher(data, calls)), [])
         self.assertEqual(calls, [])
 
+    def test_a_file_that_already_verifies_still_gets_the_manifests_owner_and_mode(self):
+        # The speech models moved to the group hamsd_simbots (2026-11-19): the copies already on a host must follow the manifest
+        # without a new download.
+        calls = []
+        data = {"a.bin": b"hello"}
+        path = os.path.join(self.tmp, "a.bin")
+        with open(path, "wb") as f:
+            f.write(data["a.bin"])
+        with self._manifest(data), patch.object(infra, "apply_permissions") as apply:
+            infra.provision_model_files(environment="prod", fetch=self._fetcher(data, calls))
+            with infra.planning():
+                infra.provision_model_files(environment="prod", fetch=self._fetcher(data, calls))
+        apply.assert_called_once_with(path, "hams_com:hams_com", 0o640)  # the real run; plan mode changes nothing
+        self.assertEqual(calls, [])
+
     def test_a_download_that_fails_the_checksum_is_not_installed_and_is_recorded(self):
         calls = []
         wrong = {"a.bin": b"WRONG"}

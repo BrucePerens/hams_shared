@@ -11899,8 +11899,8 @@ def provision_model_files(environment="prod", dest_dir="", fetch=None):
 
     Production only: anything but environment "prod" (a test environment), a HAMS_ISOLATED_NS=1
     run (test.py's own provisioning) or a `dest_dir` staging run does nothing and returns [], so a
-    test host never downloads a model. A file that already verifies (size and SHA-256) is left alone
-    with no network access. A missing or wrong one is fetched to `<path>.part`, verified, and only
+    test host never downloads a model. A file that already verifies (size and SHA-256) is not fetched again
+    (no network access) but is given the manifest's owner and mode again, so a change of group reaches the copies already on a host. A missing or wrong one is fetched to `<path>.part`, verified, and only
     then renamed into place; a download that fails or does not verify leaves nothing at the path
     (an installed good copy is never replaced by a bad one) and is recorded as a hook failure.
     `fetch(url, part_path, expected_size)` is the injectable transport (tests pass a fake).
@@ -11912,6 +11912,8 @@ def provision_model_files(environment="prod", dest_dir="", fetch=None):
     for spec in MANIFEST.get("model_files", []):
         path = spec["path"]
         if _model_file_verifies(path, spec):
+            if not _plan("chown", f"{path} -> {spec.get('owner')} mode {spec.get('mode', '640')}"):
+                apply_permissions(path, spec.get("owner"), int(spec.get("mode", "640"), 8))
             continue
         if _plan("download", f"{spec['url']} -> {path} ({spec['size']} bytes, sha256 {spec['sha256']})"):
             continue
