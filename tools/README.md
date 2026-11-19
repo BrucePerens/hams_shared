@@ -2314,10 +2314,10 @@ Purpose: removes old trees. Keeps the `keep` newest `gate_*` directories of `par
 
 Purpose: the command line above. Returns 0 on success, 1 for a stale or incomplete snapshot or a failed step (`REFUSING:` and one `  - problem` line each), 2 on the production host.
 
-## Nightly whole-system canary (`gate_canary.py`, ADR 0118)
+## Weekly whole-system canary (`gate_canary.py`, ADR 0118)
 
 ```
-python3 hams_shared/tools/gate_canary.py run [--only-if-new-commit] [--jobs 1] [--max-jobs-when-idle 2] [--no-bisect] [--shards 4] [--shards-file FILE] [--state-dir ~/.cache/hams-test/canary]
+python3 hams_shared/tools/gate_canary.py run [--only-if-new-commit] [--skip-when-frozen] [--jobs 1] [--max-jobs-when-idle 2] [--no-bisect] [--shards 4] [--shards-file FILE] [--state-dir ~/.cache/hams-test/canary]
 python3 hams_shared/tools/gate_canary.py status
 ```
 
@@ -2338,7 +2338,7 @@ appended (see "Minimal module sets"). Exit status: 0 green, 1 red, 2 refused, 3 
 It runs on this machine only: no remote host, no `kill`, refuses on the production host. Each shard is the full pipeline (a private network namespace per run), so shards that run at once work in any slot, RabbitMQ modules included; `--jobs` and `--max-jobs-when-idle` bound how many.
 
 
-**systemd.** `tools/hams-gate-canary.service` (oneshot, `Nice=10`, idle I/O, `--only-if-new-commit`) and `tools/hams-gate-canary.timer` (01:30 nightly, `Persistent=true`) are user units. They are provided and not enabled; the install and
+**systemd.** `tools/hams-gate-canary.service` (oneshot, `Nice=10`, idle I/O, `--only-if-new-commit --skip-when-frozen`) and `tools/hams-gate-canary.timer` (weekly, Sunday 02:00, `Persistent=true`) are user units, enabled on the dev box (Bruce, 2026-11-19). `--skip-when-frozen` exits 3 at once while `~/workspace/tmp/MERGE_FREEZE` exists; a round holding the test slots only delays the run (`test.py --wait`). The install and
 enable commands are in the service file's header comment. On demand: `systemctl --user start hams-gate-canary.service` or run the script.
 
 ### `[@ANCHOR: gate_canary:read_shard_results]` `read_shard_results(log_directory)`
