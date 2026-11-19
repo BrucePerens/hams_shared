@@ -5572,8 +5572,7 @@ class SharedOdooAccountRatchetTests(unittest.TestCase):
         "adif.ingress.service", "adif.processor.service", "backup.worker.service",
         "code.review.sweep.service", "credential.touch.timer.service", "event.ai.enrichment.service",
         "hams-exception-report@.service", "hams.daemon.keys.service", "hams.data.relay.service",
-        "hams.relay.bridge.service", "hams.simulated.bots.service",
-        "hams.simulated.observer.service", "pager-os-monitor.service", "stray.odoo.shell.detector.service",
+        "hams.relay.bridge.service", "pager-os-monitor.service", "stray.odoo.shell.detector.service",
         "ticket.triage.event.service", "ticket.triage.service",
     )
 
@@ -5707,7 +5706,7 @@ class SimulatedBandUnitHardeningTests(unittest.TestCase):
         for unit in ("hams.simulated.bots.service", "hams.simulated.observer.service"):
             with self.subTest(unit=unit):
                 key_files = [v.strip('"') for v in self._values(unit, "Environment") if v.strip('"').startswith("ODOO_KEY_FILE=")]
-                self.assertEqual(key_files, ["ODOO_KEY_FILE=/opt/hams/etc/keys/ai_safety_reporting_service_internal.env"])
+                self.assertEqual(key_files, ["ODOO_KEY_FILE=/opt/hams/etc/keys/simbots/ai_safety_reporting_service_internal.env"])
                 self.assertIn("/opt/hams/etc/common.env", self._values(unit, "EnvironmentFile"))  # DB_NAME, which hams_config needs
 
     def test_the_rest_of_the_sandbox_is_still_whole(self):
@@ -5838,7 +5837,7 @@ class OdooUnitSecondTierTests(unittest.TestCase):
     def test_the_units_left_out_are_still_left_out(self):
         # A unit that gains RestrictNamespaces or RestrictSUIDSGID later must be a reviewed change: the reasons are above.
         for unit in ("pager-os-monitor.service", "backup.worker.service", "credential.touch.timer.service",
-                     "hams.simulated.bots.service", "hams.relay.bridge.service"):
+                     "hams.relay.bridge.service"):
             with self.subTest(unit=unit):
                 self.assertEqual(infra.systemd_unit_directive_values(infra.MANIFEST, unit, "RestrictNamespaces"), [])
 
@@ -5897,13 +5896,72 @@ class SimulatedBandAccountTests(unittest.TestCase):
         self.assertTrue(rules["no_key"] and rules["odoo_reads"] and rules["no_state"])
         self.assertEqual(rules["environment_files"], frozenset())
 
-    def test_the_bots_and_the_observer_still_run_as_odoo_with_their_reason(self):
-        # They hold the AI safety key (a registry row with no registration in code) and read the speech models, which are
-        # hams_com-only; both need their own change first (daemon OS isolation).
-        for unit in ("hams.simulated.bots.service", "hams.simulated.observer.service"):
+
+class SimbotsAccountTests(unittest.TestCase):
+    """The simulated bots and the Official Observer on one low-privilege account, hamsd_simbots (Bruce, 2026-11-19): it owns the
+    AI safety reporting key (family key directory) and the model-cache state, and holds neither root-only secret."""
+
+    UNITS = ("hams.simulated.bots.service", "hams.simulated.observer.service")
+
+    def _values(self, unit, directive):
+        return infra.systemd_unit_directive_values(infra.MANIFEST, unit, directive)
+
+    def test_both_units_run_as_the_one_account_and_have_left_the_shared_odoo_list(self):
+        for unit in self.UNITS:
             with self.subTest(unit=unit):
-                self.assertEqual(infra.systemd_unit_directive_values(infra.MANIFEST, unit, "User"), ["odoo"])
-                self.assertIn(unit, infra.SHARED_ODOO_ACCOUNT_UNITS)
+                self.assertEqual(self._values(unit, "User"), ["hamsd_simbots"])
+                self.assertEqual(self._values(unit, "Group"), ["hamsd_simbots"])
+                self.assertEqual(infra.FAMILY_ACCOUNT_UNITS[unit]["user"], "hamsd_simbots")
+                self.assertNotIn(unit, infra.SHARED_ODOO_ACCOUNT_UNITS)
+
+    def test_the_account_is_a_nologin_family_account_odoo_hands_the_key_to(self):
+        account = [a for a in infra.MANIFEST["system_accounts"] if a["user"] == "hamsd_simbots"]
+        self.assertEqual(len(account), 1)
+        self.assertEqual(
+            {k: account[0][k] for k in ("group", "shell", "add_to_users", "member_of", "not_member_of", "environments")},
+            {"group": "hamsd_simbots", "shell": "/usr/sbin/nologin", "add_to_users": ["odoo"],
+             "member_of": ["hams_traverse"], "not_member_of": ["hams_com"], "environments": ["prod", "test"]},
+        )
+
+    def test_the_key_and_the_state_are_the_accounts_and_the_cache_path_is_gone(self):
+        directories = {d["path"]: d for d in infra.MANIFEST["directories"]}
+        self.assertEqual(directories["/opt/hams/etc/keys/simbots"]["owner"], "odoo:hamsd_simbots")
+        self.assertEqual(directories["/opt/hams/spool/simbots"]["owner"], "hamsd_simbots:hamsd_simbots")
+        for unit in self.UNITS:
+            with self.subTest(unit=unit):
+                self.assertEqual(self._values(unit, "ReadWritePaths"), ["/opt/hams/spool/simbots"])
+                self.assertIn('"HF_HOME=/opt/hams/spool/simbots"', self._values(unit, "Environment"))
+                self.assertNotIn("/opt/hams/cache/whisper", " ".join(self._values(unit, "Environment") + self._values(unit, "ReadWritePaths")))
+
+    def test_the_two_hand_placed_secrets_come_in_by_credential_and_are_never_read_by_the_account(self):
+        bots = {v.split(":", 1)[0]: v.split(":", 1)[1] for v in self._values("hams.simulated.bots.service", "LoadCredential")}
+        self.assertEqual(bots, {"band.key": "/etc/hams-bots/band.key", "coordinator.key": "/etc/hams-bots/coordinator.key"})
+        observer = self._values("hams.simulated.observer.service", "LoadCredential")
+        self.assertEqual(observer, ["band.key:/etc/hams-bots/band.key"])
+        for unit in self.UNITS:
+            env = self._values(unit, "Environment")
+            self.assertIn('"HAMS_SIMULATED_BAND_KEY_FILE=band.key"', env)
+            self.assertEqual([v for v in env if "/etc/hams-bots" in v], [])
+        self.assertIn('"HAMS_SIMULATED_BOT_COORDINATOR_TOKEN_FILE=coordinator.key"', self._values("hams.simulated.bots.service", "Environment"))
+        self.assertEqual([d for d in infra.MANIFEST["directories"] if d["path"].startswith("/etc/hams-bots")], [])
+
+    def test_the_speech_models_are_readable_through_the_accounts_group_only(self):
+        for entry in infra.MANIFEST["directories"]:
+            if entry["path"] in ("/opt/hams/models", "/opt/hams/models/piper", "/opt/hams/models/faster-whisper-tiny.en"):
+                self.assertEqual((entry["owner"], entry["provision_mode"]), ("hams_com:hamsd_simbots", "750"))
+        for spec in infra.MANIFEST["model_files"]:
+            if spec["path"].startswith("/opt/hams/models/"):
+                self.assertEqual((spec["owner"], spec["mode"]), ("hams_com:hamsd_simbots", "640"))
+
+    def test_the_units_carry_the_second_sandbox_tier_and_share_no_process_view_with_other_accounts(self):
+        for unit in self.UNITS:
+            with self.subTest(unit=unit):
+                self.assertEqual(self._values(unit, "ProtectProc"), ["invisible"])
+                self.assertEqual(self._values(unit, "ProcSubset"), ["pid"])
+                self.assertEqual(self._values(unit, "UMask"), ["0027"])
+                self.assertEqual(self._values(unit, "RestrictNamespaces"), ["true"])
+                self.assertEqual(infra.systemd_unit_sandbox_gaps(infra.MANIFEST, unit), set())
+
 
 
 class FamilyAccountUnitTests(_SafePatchTestCase):
@@ -7411,6 +7469,21 @@ class ModelFilesTests(_SafePatchTestCase):
             f.write(data["a.bin"])
         with self._manifest(data), patch.object(infra, "apply_permissions"):
             self.assertEqual(infra.provision_model_files(environment="prod", fetch=self._fetcher(data, calls)), [])
+        self.assertEqual(calls, [])
+
+    def test_a_file_that_already_verifies_still_gets_the_manifests_owner_and_mode(self):
+        # The speech models moved to the group hamsd_simbots (2026-11-19): the copies already on a host must follow the manifest
+        # without a new download.
+        calls = []
+        data = {"a.bin": b"hello"}
+        path = os.path.join(self.tmp, "a.bin")
+        with open(path, "wb") as f:
+            f.write(data["a.bin"])
+        with self._manifest(data), patch.object(infra, "apply_permissions") as apply:
+            infra.provision_model_files(environment="prod", fetch=self._fetcher(data, calls))
+            with infra.planning():
+                infra.provision_model_files(environment="prod", fetch=self._fetcher(data, calls))
+        apply.assert_called_once_with(path, "hams_com:hams_com", 0o640)  # the real run; plan mode changes nothing
         self.assertEqual(calls, [])
 
     def test_a_download_that_fails_the_checksum_is_not_installed_and_is_recorded(self):
