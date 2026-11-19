@@ -631,7 +631,7 @@ def scope_oom_killed(unit):
 # [@ANCHOR: agent_procs:limit_argv]
 def limit_argv(argv, mem_max, nice, have_systemd=None):
     """The command line the wrapper runs for `argv`: `nice -n NICE` first when `nice` is non-zero; the memory cap `mem_max`
-    (text such as `6G`, or `None` for no cap) as `systemd-run --user --scope -p MemoryMax=... -p MemorySwapMax=0`, or, when
+    (text such as `6G`, or `None` for no cap) as `systemd-run --user --scope -p MemoryMax=...`, or, when
     that is unavailable (`have_systemd` False; default: `user_scope_works()`), `ulimit -v` in a `sh -c` (address space, a
     cruder cap)."""
     argv = list(argv)
@@ -639,7 +639,7 @@ def limit_argv(argv, mem_max, nice, have_systemd=None):
         if have_systemd is None:
             have_systemd = user_scope_works()
         if have_systemd:
-            argv = ["systemd-run", "--user", "--scope", "-q", f"--unit={scope_unit()[:-6]}", "-p", f"MemoryMax={mem_max}", "-p", "MemorySwapMax=0"] + argv
+            argv = ["systemd-run", "--user", "--scope", "-q", f"--unit={scope_unit()[:-6]}", "-p", f"MemoryMax={mem_max}"] + argv
         else:
             argv = ["sh", "-c", f'ulimit -v {parse_size(mem_max) // 1024} && exec "$@"', "sh"] + argv
     if nice:

@@ -3659,7 +3659,7 @@ Purpose: bytes in a size such as `6G`, `512M`, `100K` or a plain number (binary 
 
 ### `[@ANCHOR: agent_procs:limit_argv]` `limit_argv(argv, mem_max, nice, have_systemd=None)`
 
-Purpose: the command line a job really runs. `nice -n N` first when `nice` is non-zero; the cap `mem_max` (`None`: none) as `systemd-run --user --scope -p MemoryMax=... -p MemorySwapMax=0`, or `ulimit -v` in `sh -c` when `systemd-run --user` does not work here (`have_systemd`, default probed once). Test: `test_agent_procs.py`.
+Purpose: the command line a job really runs. `nice -n N` first when `nice` is non-zero; the cap `mem_max` (`None`: none) as `systemd-run --user --scope -p MemoryMax=...`, or `ulimit -v` in `sh -c` when `systemd-run --user` does not work here (`have_systemd`, default probed once). Test: `test_agent_procs.py`.
 
 ### `[@ANCHOR: agent_procs:stop_group]` `stop_group(pgid, sid, grace, sleep, clock)`
 

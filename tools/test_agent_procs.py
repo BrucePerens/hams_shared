@@ -1252,7 +1252,7 @@ class LimitTests(ProcTestCase):
         capped = ap.limit_argv(["x"], "1G", 0, have_systemd=True)
         self.assertEqual(capped[:3], ["systemd-run", "--user", "--scope"])
         self.assertIn("MemoryMax=1G", capped)
-        self.assertIn("MemorySwapMax=0", capped)
+        self.assertNotIn("MemorySwapMax=0", capped)  # capped jobs may swap
         fallback = ap.limit_argv(["x"], "1G", 0, have_systemd=False)
         self.assertEqual(fallback[0], "sh")
         self.assertIn("ulimit -v 1048576", fallback[2])
