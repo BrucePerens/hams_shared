@@ -10,6 +10,7 @@ touched the network or read hardware state is never stored, and --no-cache bypas
 import io
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -339,6 +340,30 @@ class TraceCacheEndToEndTests(unittest.TestCase):
         self.assertEqual(code, 3)
         self.assertEqual(subprocess.run([PY, ltc.__file__, "run", os.path.join(self.tmp, "k.txt"), "--", "bash", "-c", "kill -9 $$"]).returncode,
                          137)
+
+    # Tests [@ANCHOR: lint_trace_cache:run_traced]
+    def test_strace_does_not_outlive_a_caller_that_is_stopped_hard(self):
+        # A caller ended hard (timeout, SIGKILL) used to leave its strace behind, orphaned and writing to the trace file for days.
+        # The traced command is a short sleep, so a failing run leaks nothing for long.
+        wrapper = subprocess.Popen([PY, ltc.__file__, "run", os.path.join(self.tmp, "o.txt"), "--", "sleep", "20"])
+        children = []
+        for _ in range(100):
+            try:
+                with open("/proc/%d/task/%d/children" % (wrapper.pid, wrapper.pid)) as handle:
+                    children = [int(pid) for pid in handle.read().split()]
+            except OSError:
+                children = []
+            if children:
+                break
+            time.sleep(0.1)
+        self.assertTrue(children, "the wrapper started no strace")
+        wrapper.send_signal(signal.SIGKILL)
+        wrapper.wait()
+        for _ in range(100):
+            if not os.path.exists("/proc/%d" % children[0]):
+                break
+            time.sleep(0.1)
+        self.assertFalse(os.path.exists("/proc/%d" % children[0]), "strace outlived its caller")
 
 
 if __name__ == "__main__":
