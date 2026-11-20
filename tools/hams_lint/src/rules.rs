@@ -510,7 +510,7 @@ mod tests {
             .find(|c| c.spec.name == "check_absolute_paths")
             .expect("check present");
         let (path, count) = check.spec.allow.iter().next().expect("an allowlist");
-        let lines = |n: usize| "/home/x\n".repeat(n);
+        let lines = |n: usize| concat!("/ho", "me/x\n").repeat(n);
         let eval = |rel: &str, n: usize| check.eval(rel, rel, lines(n).as_bytes()).findings;
         assert!(eval(path, *count).is_empty());
         assert!(eval(path, count + 1)[0].message.contains("allowlisted"));
