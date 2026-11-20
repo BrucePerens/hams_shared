@@ -121,7 +121,9 @@ def check_one(name, entry, today=None):
         return {"name": name, "error": f"HTTP {e.code} from GitHub API for {repo}"}
     except urllib.error.URLError as e:
         return {"name": name, "error": f"network error reaching GitHub API: {e.reason}"}
-    except (json.JSONDecodeError, KeyError, ValueError) as e:
+    except OSError as e:
+        return {"name": name, "error": f"network error reaching GitHub API: {e}"}
+    except (json.JSONDecodeError, KeyError, ValueError, TypeError) as e:
         # A response GitHub's own API returns with HTTP 200 but
         # a body this script doesn't expect -- a non-JSON error/maintenance page (json.load
         # raises JSONDecodeError), or valid JSON missing "tag_name"/"sha" (a schema a future
