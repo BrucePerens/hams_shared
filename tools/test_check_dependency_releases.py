@@ -98,6 +98,21 @@ class CheckOneTests(unittest.TestCase):
         self.assertIn("error", result)
         self.assertIn("no route to host", result["error"])
 
+    def test_a_read_timeout_or_reset_is_reported_not_raised(self):
+        # A timeout while reading the body (TimeoutError) or a reset mid-read is an OSError but
+        # not a URLError, so it used to abort the whole scheduled run.
+        entry = {"repo": "owner/repo", "mode": "release", "pinned": "v1.0.0"}
+        for exc in (TimeoutError("timed out"), ConnectionResetError("reset")):
+            with patch.object(chk, "_github_get", side_effect=exc):
+                result = chk.check_one("thing", entry)
+            self.assertIn("error", result)
+
+    def test_a_json_list_body_is_reported_not_raised(self):
+        entry = {"repo": "owner/repo", "mode": "release", "pinned": "v1.0.0"}
+        with patch.object(chk, "_github_get", return_value=[{"tag_name": "v2"}]):
+            result = chk.check_one("thing", entry)
+        self.assertIn("error", result)
+
     def test_a_response_missing_the_expected_key_is_reported_not_raised(self):
         # GitHub's API returning valid JSON with an unexpected
         # schema (missing "tag_name") raised an uncaught KeyError from inside check_one(),
