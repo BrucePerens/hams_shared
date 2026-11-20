@@ -1402,6 +1402,19 @@ def test_except_importerror_cannot_be_exempted_by_any_tag():
         assert any("Soft dependencies" in e for e in errors), tag
 
 
+def test_except_importerror_cannot_be_exempted_by_the_bare_burn_ignore_either():
+    # The message says "no exemption anywhere"; add_error's generic bare `burn-ignore` bypass
+    # used to silence this one line anyway.
+    source = (
+        "try:\n"
+        "    import optional_thing\n"
+        "except ImportError:  # burn-ignore\n"
+        "    optional_thing = None\n"
+    )
+    errors, _warnings = _dict_findings(source)
+    assert any("Soft dependencies" in e for e in errors)
+
+
 def test_soft_import_handler_variants_are_all_flagged():
     for handler in (
         "except ImportError as e:",

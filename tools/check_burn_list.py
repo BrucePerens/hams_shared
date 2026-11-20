@@ -2071,10 +2071,11 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                     if isinstance(n, (ast.Name, ast.Attribute))
                 }
                 if handler_names & {"ImportError", "ModuleNotFoundError"}:
-                    self.add_error(
-                        handler.lineno,
+                    # Not add_error(): its bare burn-ignore bypass would exempt a rule that has none.
+                    self.errors.append(
+                        (handler.lineno,
                         "CRITICAL FAST FAIL: Soft dependencies (try/except ImportError or ModuleNotFoundError) are forbidden, with no exemption anywhere. Programs, tests and tools must fast-fail on a missing dependency. If Odoo, use manifest external_dependencies; otherwise add it to the requirements file and import it at the top of the file.",
-                    )
+                    ))
                 is_catch_all = handler.type is None or (
                     isinstance(handler.type, ast.Name)
                     and handler.type.id in ("Exception", "BaseException")
