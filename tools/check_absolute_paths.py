@@ -75,7 +75,6 @@ ALLOWED_HOME_PATHS = {
     "devbox_tools/pacificon_demo_kit/host/hams-demo-observer.service": (1, "systemd unit for the demo host's dedicated hams_bots account (venv in its home)"),
     ".github/workflows/build-relay.yml": (10, "CI runner host paths (/home/github-runner/ci-cache bind mount, /github/home container home) and comments explaining them"),
     ".github/workflows/build-server-daemons.yml": (1, "comment naming the runner's saved PATH entry"),
-    "tools/hams_lint/src/rules.rs": (1, "unit-test fixture: a fake home path fed to the check_absolute_paths rule"),
     "tools/hams_lint/rules/checks.toml": (6, "lint-rule fixtures and the literal the rule itself searches for"),
     "daemons/radioctl/crates/radioctld/src/rigs.rs": (3, "unit-test fixture: a fake HOME for firmware-path resolution"),
     "daemons/radioctl/crates/radioctl-protocols/src/perseus.rs": (3, "unit-test fixture: a fake HOME for firmware-path resolution"),
