@@ -1132,7 +1132,7 @@ class JobTests(ProcTestCase):
 
     def test_cmd_run_cmd_jobs_cmd_stop_in_process(self):
         out = io.StringIO()
-        args = ap.parse_args(["run", "inproc", "--tag", "me", "--", "sleep", "60"])
+        args = ap.parse_args(["run", "inproc", "--tag", "me", "--mem-max", "none", "--", "sleep", "60"])
         self.assertEqual(ap.cmd_run(args, out), 0)
         self.assertIn("wait: agent_procs.py wait --job inproc", out.getvalue())
         out = io.StringIO()
