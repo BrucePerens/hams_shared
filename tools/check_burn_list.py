@@ -3460,6 +3460,9 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
             elif func_name == "Markup":
                 if node.args:
                     arg0 = node.args[0]
+                    # Markup(name) where name was assigned the interpolated string above it.
+                    if isinstance(arg0, ast.Name) and arg0.id in self.assignments:
+                        arg0 = self.assignments[arg0.id]
 
                     def _is_escape_call(n):
                         # Recognizes html.escape(...)/
@@ -3489,6 +3492,17 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                             ]
                         if isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "format":
                             return list(n.args) + [kw.value for kw in n.keywords]
+                        if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Add):
+                            # "<b>" + name: the pieces are joined as plain str before Markup sees them.
+                            operands, stack = [], [n]
+                            while stack:
+                                part = stack.pop()
+                                if isinstance(part, ast.BinOp) and isinstance(part.op, ast.Add):
+                                    stack += [part.left, part.right]
+                                else:
+                                    operands.append(part)
+                            literal = any(isinstance(o, ast.Constant) and isinstance(o.value, str) for o in operands)
+                            return [o for o in operands if not isinstance(o, ast.Constant)] if literal else []
                         if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Mod):
                             rhs = n.right
                             if isinstance(rhs, ast.Tuple):
@@ -3505,11 +3519,12 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                             and getattr(arg0.func, "attr", "") == "format"
                         )
                         or (
-                            isinstance(arg0, ast.BinOp) and isinstance(arg0.op, ast.Mod)
+                            isinstance(arg0, ast.BinOp) and isinstance(arg0.op, (ast.Mod, ast.Add))
                         )
                     ):
                         exprs = _interpolated_exprs(arg0)
-                        if not (exprs and all(_is_safely_escaped(e) for e in exprs)):
+                        is_pure_literal_sum = isinstance(arg0, ast.BinOp) and isinstance(arg0.op, ast.Add) and not exprs
+                        if not is_pure_literal_sum and not (exprs and all(_is_safely_escaped(e) for e in exprs)):
                             self.add_error(
                                 node.lineno,
                                 "CRITICAL XSS VULNERABILITY: Do not interpolate variables directly into Markup(). Use odoo.tools.html_escape on user inputs first or use standard QWeb rendering.",

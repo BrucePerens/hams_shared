@@ -3112,6 +3112,25 @@ def test_markup_of_a_plain_string_literal_is_not_flagged():
     assert not any("XSS VULNERABILITY" in e for e in errors)
 
 
+def test_markup_of_a_concatenation_with_an_unescaped_value_is_an_xss_vulnerability():
+    errors, _warnings = _dict_findings("def f(name):\n    return Markup('<b>' + name + '</b>')\n")
+    assert any("XSS VULNERABILITY" in e for e in errors)
+
+
+def test_markup_of_a_variable_assigned_an_fstring_is_an_xss_vulnerability():
+    errors, _warnings = _dict_findings("def f(name):\n    body = f'<b>{name}</b>'\n    return Markup(body)\n")
+    assert any("XSS VULNERABILITY" in e for e in errors)
+
+
+def test_markup_of_a_concatenation_of_literals_or_escaped_values_is_not_flagged():
+    for source in (
+        "html = Markup('<b>' + 'static' + '</b>')\n",
+        "def f(name):\n    return Markup('<b>' + escape(name) + '</b>')\n",
+    ):
+        errors, _warnings = _dict_findings(source)
+        assert not any("XSS VULNERABILITY" in e for e in errors), source
+
+
 def test_markup_percent_interpolation_of_an_html_escaped_value_is_not_flagged():
     # The Markup(...) XSS check must not be overbroad -- ham_onboarding/models/res_users.py and
     # upgrade_request.py both explicitly html.escape() every interpolated value before
