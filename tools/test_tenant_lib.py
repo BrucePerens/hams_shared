@@ -276,6 +276,12 @@ class SpecValidationTests(unittest.TestCase):
             with self.assertRaises(lib.SpecError, msg=name):
                 lib.validate_spec(dict(PERENS, name=name))
 
+    def test_a_non_string_admin_login_or_language_is_a_spec_error_not_a_type_error(self):
+        for key in ("admin_login", "language"):
+            for value in (5, None, ["en_US"]):
+                with self.assertRaises(lib.SpecError, msg=f"{key}={value!r}"):
+                    lib.validate_spec(dict(PERENS, **{key: value}))
+
     def test_bad_domains_are_refused(self):
         for domain in ("hams.com", "www.hams.com", "x.hams.com", "*.example.com", "example.com.",
                        "localhost", "10.0.0.1", "a b.example", "http://example.com", "-x.example.com"):
