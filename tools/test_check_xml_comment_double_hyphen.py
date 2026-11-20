@@ -56,6 +56,18 @@ class CheckXmlCommentDoubleHyphenTests(unittest.TestCase):
         self.assertEqual(len(violations), 1)
         self.assertIn("security_rules.xml:2", violations[0])
 
+    def test_flags_a_comment_that_ends_with_three_hyphens(self):
+        # `<!-- x --->` is the same XML error (lxml: "Double hyphen within comment"): the
+        # comment body may not end in a hyphen, and the lazy `(.*?)-->` match leaves that
+        # last hyphen as the body's final character, so no inner "--" is visible.
+        self._write(
+            "some_module/security/security_rules.xml",
+            "<odoo>\n<!-- note --->\n<record/>\n</odoo>\n",
+        )
+        violations = cxc.check_xml_comment_double_hyphen(self.tmp)
+        self.assertEqual(len(violations), 1)
+        self.assertIn("security_rules.xml:2", violations[0])
+
     def test_flags_a_multiline_comment_double_hyphen(self):
         self._write(
             "some_module/views/some_views.xml",

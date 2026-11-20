@@ -119,7 +119,8 @@ def check_xml_comment_double_hyphen(repo_root):
 
             for match in _COMMENT_RE.finditer(content):
                 inner = match.group(1)
-                if "--" in inner:
+                # A body ending in "-" gives "--->": the same error with no inner "--".
+                if "--" in inner or inner.endswith("-"):
                     # match.start(1), not match.start(): the latter is the
                     # start of the WHOLE match (including the 4-char "<!--"
                     # delimiter), so adding inner.index("--") to it landed 4
@@ -131,7 +132,8 @@ def check_xml_comment_double_hyphen(repo_root):
                     # test, not by inspection -- see
                     # test_check_xml_comment_double_hyphen.py's
                     # CheckXmlCommentDoubleHyphenPropertyTests.
-                    lineno = _line_of_offset(content, match.start(1) + inner.index("--"))
+                    at = inner.index("--") if "--" in inner else len(inner) - 1
+                    lineno = _line_of_offset(content, match.start(1) + at)
                     violations.append(
                         f"{os.path.relpath(path, repo_root)}:{lineno} "
                         f"Literal '--' inside an XML comment -- illegal per the XML spec "
