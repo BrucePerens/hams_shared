@@ -71,6 +71,7 @@ DEFAULT_CARGO_GB = 25
 DEFAULT_FLOOR_GB = 20
 DEFAULT_RESULTS_MB = 200
 MACHINES_FILE = os.path.join(os.path.dirname(os.path.abspath(globals().get("__file__", "lint_cache.py"))), "lint_machines.json")
+FULL_RUN_ENV = "HAMS_LINT_FULL_RUN"  # set by run_linters.py for a run without --changed/--only (round and main lints)
 UNIT_SUFFIX_CHARS = frozenset("0123456789abcdef")
 
 
@@ -628,6 +629,8 @@ def named_cargo_session(name, environ=None, log=None):
     never a failure) and the exclusive lock held until the block ends. A `CARGO_TARGET_DIR` set by the caller is
     yielded untouched; HAMS_LINT_NO_CACHE=1 yields a throwaway directory deleted afterwards."""
     environ = os.environ if environ is None else environ
+    if environ.get(FULL_RUN_ENV) == "1":
+        name += "-full"  # a round or main lint (a full run) has its own directory and lock: merge_pr's batch lints hold the shared one for hours
     if environ.get("HAMS_LINT_NO_CACHE") == "1":
         scratch = scratch_mkdtemp(f"hams-{name}-cold-cargo-", environ)
         try:

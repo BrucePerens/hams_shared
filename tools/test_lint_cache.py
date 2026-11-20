@@ -220,6 +220,15 @@ class CargoBudgetTest(unittest.TestCase):
         self.assertFalse(os.path.exists(target))
 
     # Tests [@ANCHOR: lint_cache:named_cargo_session]
+    def test_a_full_run_session_has_its_own_directory_and_lock_so_it_never_waits_behind_a_merge_pr_batch_lint(self):
+        base = {"XDG_CACHE_HOME": self._tmp.name}
+        with lint_cache.named_cargo_session("relay-export-test", base) as shared:  # a merge_pr batch lint holds the shared lock
+            with lint_cache.named_cargo_session("relay-export-test", dict(base, HAMS_LINT_FULL_RUN="1")) as own:
+                self.assertNotEqual(own, shared)
+                self.assertFalse(locked_free(shared))
+                self.assertFalse(locked_free(own))
+
+    # Tests [@ANCHOR: lint_cache:named_cargo_session]
     def test_named_session_directory_is_under_the_budgeted_cargo_base(self):
         cache = self._tmp.name
         environ = {"XDG_CACHE_HOME": cache}

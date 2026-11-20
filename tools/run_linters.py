@@ -1395,6 +1395,8 @@ def main():
     options = _parse_args(sys.argv[1:])
     if "--no-cache" in sys.argv:
         os.environ["HAMS_LINT_NO_CACHE"] = "1"  # read by lint_cache in the steps and forwarded to the runners
+    if options.changed is None and not options.only:
+        os.environ[lint_cache.FULL_RUN_ENV] = "1"  # a round/main lint: its relay structural build must not wait for merge_pr's shared lock
     if options.lint_caches:
         sys.exit(lint_cache.main([options.lint_caches]))
     if options.lock_status:
