@@ -353,6 +353,15 @@ def run_canary(workspace=gate_snapshot.DEFAULT_WORKSPACE, parent=None, state_dir
     out("gate_canary: %d shard(s), %d at a time, tree %s" % (len(commands), width, trees["parent"]))
 
     def one(index):
+        # A shard that crashes (the runner cannot start, its results file is unreadable) is that shard's error, so the night
+        # is red and status.json is written; an exception out of the pool used to leave the previous (maybe green) status.
+        try:
+            return run_shard(index)
+        except (OSError, ValueError, gate_snapshot.SnapshotError) as error:
+            return {"number": index + 1, "modules": shard_modules[index], "exit_status": 2, "results": None,
+                    "problems": ["the shard crashed: %s" % error]}
+
+    def run_shard(index):
         directory = os.path.join(trees["parent"], "logs", "shard%d" % (index + 1))
         problems = gate_snapshot.verify_snapshot(trees["parent"], fetch=False, environ={gate_snapshot.OPEN_TREE_ENV: trees["open"]},
                                                  cargo_target_dir=manifest["cargo_target_dir"])

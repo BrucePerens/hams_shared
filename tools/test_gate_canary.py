@@ -257,6 +257,21 @@ class RunTests(unittest.TestCase):
         self.assertEqual(status["tolerated"], [])
 
     # Tests [@ANCHOR: gate_canary:run_canary]
+    def test_a_shard_that_crashes_makes_the_night_red_and_still_writes_the_status(self):
+        base = self.runner_for({})
+
+        def runner(command, log_path):
+            if "shard 1 " in command:
+                raise OSError("cannot start the shard")
+            return base(command, log_path)
+
+        code, status = gc.run_canary(state_dir=self.state, runner=runner, snapshot=self.snapshot, out=self.out.append,
+                                     hostname="devbox", slots=2, load=99.0)
+        self.assertEqual((code, status["status"]), (1, "red"))
+        self.assertIn("cannot start the shard", status["shard_errors"][0])
+        self.assertTrue(os.path.exists(os.path.join(self.state, "status.json")))
+
+    # Tests [@ANCHOR: gate_canary:run_canary]
     def test_a_shard_killed_by_a_signal_after_tolerated_failures_makes_the_night_red(self):
         def killed(directory):
             write_results(directory, known={"mod_a:K.k": {}})
