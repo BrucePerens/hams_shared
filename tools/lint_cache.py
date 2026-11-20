@@ -256,25 +256,37 @@ def free_bytes(path):
 
 
 @contextlib.contextmanager
-def locked(path, exclusive=True, wait=True):
+def locked(path, exclusive=True, wait=True, timeout=None):
     """flock on `path` + ".lock" (created beside `path`). Yields True when held, False when `wait` is False and
-    another process holds it."""
+    another process holds it, or when `timeout` seconds of waiting (polled every 2 s) passed without getting it."""
     lock_path = path.rstrip(os.sep) + ".lock"
     os.makedirs(os.path.dirname(lock_path), exist_ok=True)
     handle = open(lock_path, "a+")
     try:
-        flags = (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | (0 if wait else fcntl.LOCK_NB)
-        try:
-            fcntl.flock(handle, flags)
-        except OSError:
-            yield False
-            return
+        flags = (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | (0 if wait and timeout is None else fcntl.LOCK_NB)
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            try:
+                fcntl.flock(handle, flags)
+                break
+            except OSError:
+                if not wait or deadline is None or time.monotonic() >= deadline:
+                    yield False
+                    return
+                time.sleep(2)
         try:
             yield True
         finally:
             fcntl.flock(handle, fcntl.LOCK_UN)
     finally:
         handle.close()
+
+
+class LockTimeout(RuntimeError):
+    """The named cargo session's lock stayed busy for CARGO_LOCK_WAIT_SECONDS."""
+
+
+CARGO_LOCK_WAIT_SECONDS = 1800  # a cold relay build under load took 40 min and 15 lint runs queued behind it, each waiting without end
 
 
 def _require_lock(held, target):
@@ -648,8 +660,10 @@ def named_cargo_session(name, environ=None, log=None):
         # In RAM one directory serves every slot: the exclusive lock below already makes concurrent builds take turns, and four
         # copies of a 4.5 GB dependency build cost 13.5 GB of memory (measured 2026-11-08).
         target = cargo_target_dir(name, dict(environ, HAMS_LINT_SLOT="1"))
-    with locked(target, exclusive=True) as held:
-        _require_lock(held, target)
+    limit = float(environ.get("HAMS_LINT_CARGO_LOCK_WAIT") or CARGO_LOCK_WAIT_SECONDS)
+    with locked(target, exclusive=True, timeout=limit) as held:
+        if not held:
+            raise LockTimeout(f"lint cache: {target} stayed locked by another build for {limit:g} s (HAMS_LINT_CARGO_LOCK_WAIT)")
         prepare_cargo_target(target, environ, log)
         yield target
 
