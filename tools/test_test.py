@@ -387,6 +387,16 @@ class RunCmdHangRecoveryTests(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertEqual(len(written), 1)
 
+    def test_output_that_is_not_utf8_does_not_end_the_stream_early(self):
+        """A stray non-UTF-8 byte used to raise inside the reader thread, which ended the stream: the rest of the run's output was lost and the child was then terminated."""
+        seen = []
+        extractor = MagicMock()
+        extractor.mcp_mode = False
+        extractor.process_line.side_effect = seen.append
+        rc = _test_runner.run_cmd(["sh", "-c", "printf 'before\\n\\377bad\\nafter\\n'"], extractor)
+        self.assertEqual(rc, 0)
+        self.assertTrue(any("after" in line for line in seen), seen)
+
     def test_force_killed_is_reported_as_failure_even_with_zero_captured_errors(self):
         # Before this pass's second fix, `if force_killed: return 1 if
         # final_errors > initial_errors else 0` would report SUCCESS for a

@@ -1363,6 +1363,7 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        errors="replace",  # a stray non-UTF-8 byte must not end the reader thread (and with it the run's output)
         bufsize=1,
         preexec_fn=preexec_child,
         cwd=cwd,
