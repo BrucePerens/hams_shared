@@ -8763,11 +8763,11 @@ ReadWritePaths=/opt/hams/spool/simbots
 # (daemons/hams_simulated_bots): no subprocess, no top-level /proc read of its own, writes only the HF_HOME state directory (and the
 # optional status file the unit does not set); the two secrets are read once at start, so LoadCredential= hands them over from the
 # root-owned /etc/hams-bots files (band_connection.py reads a relative name from $CREDENTIALS_DIRECTORY) and the account never
-# holds the root-only files; the AI safety key is in the family key directory. ProcSubset=pid is the family rule, but the speech
-# libraries (ctranslate2, onnxruntime) are unmeasured against it from here (neither is installed on the dev box): the deploy step
-# starts both units and reads the journal for a /proc/cpuinfo or /proc/meminfo failure; the remedy is to drop that one line.
+# holds the root-only files; the AI safety key is in the family key directory. NO ProcSubset=pid, unlike the rest of the family:
+# measured on hams1, 2026-11-20 (round 155), onnxruntime (the piper voice) prints "Error in cpuinfo: failed to parse processor
+# information from /proc/cpuinfo" and "Unknown CPU vendor" at start and warns of CPU performance degradation, so it runs blind to
+# the CPU features it would pick kernels by; /proc/cpuinfo and /proc/meminfo are what pid-only hides.
 ProtectProc=invisible
-ProcSubset=pid
 UMask=0027
 ProtectKernelTunables=true
 ProtectKernelModules=true
@@ -8873,11 +8873,11 @@ ReadWritePaths=/opt/hams/spool/simbots
 # (daemons/hams_simulated_bots): no subprocess, no top-level /proc read of its own, writes only the HF_HOME state directory (and the
 # optional status file the unit does not set); the two secrets are read once at start, so LoadCredential= hands them over from the
 # root-owned /etc/hams-bots files (band_connection.py reads a relative name from $CREDENTIALS_DIRECTORY) and the account never
-# holds the root-only files; the AI safety key is in the family key directory. ProcSubset=pid is the family rule, but the speech
-# libraries (ctranslate2, onnxruntime) are unmeasured against it from here (neither is installed on the dev box): the deploy step
-# starts both units and reads the journal for a /proc/cpuinfo or /proc/meminfo failure; the remedy is to drop that one line.
+# holds the root-only files; the AI safety key is in the family key directory. NO ProcSubset=pid, unlike the rest of the family:
+# measured on hams1, 2026-11-20 (round 155), onnxruntime (the piper voice) prints "Error in cpuinfo: failed to parse processor
+# information from /proc/cpuinfo" and "Unknown CPU vendor" at start and warns of CPU performance degradation, so it runs blind to
+# the CPU features it would pick kernels by; /proc/cpuinfo and /proc/meminfo are what pid-only hides.
 ProtectProc=invisible
-ProcSubset=pid
 UMask=0027
 ProtectKernelTunables=true
 ProtectKernelModules=true

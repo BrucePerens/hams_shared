@@ -5897,11 +5897,15 @@ class SimulatedBandAccountTests(unittest.TestCase):
         self.assertEqual(rules["environment_files"], frozenset())
 
 
+# The units whose speech libraries (onnxruntime) read /proc/cpuinfo, so they run without ProcSubset=pid.
+SIMBOTS_UNITS = ("hams.simulated.bots.service", "hams.simulated.observer.service")
+
+
 class SimbotsAccountTests(unittest.TestCase):
     """The simulated bots and the Official Observer on one low-privilege account, hamsd_simbots (Bruce, 2026-11-19): it owns the
     AI safety reporting key (family key directory) and the model-cache state, and holds neither root-only secret."""
 
-    UNITS = ("hams.simulated.bots.service", "hams.simulated.observer.service")
+    UNITS = SIMBOTS_UNITS
 
     def _values(self, unit, directive):
         return infra.systemd_unit_directive_values(infra.MANIFEST, unit, directive)
@@ -5953,11 +5957,12 @@ class SimbotsAccountTests(unittest.TestCase):
             if spec["path"].startswith("/opt/hams/models/"):
                 self.assertEqual((spec["owner"], spec["mode"]), ("hams_com:hamsd_simbots", "640"))
 
-    def test_the_units_carry_the_second_sandbox_tier_and_share_no_process_view_with_other_accounts(self):
+    def test_the_units_hide_other_accounts_processes_but_leave_proc_cpuinfo_to_the_speech_libraries(self):
+        # onnxruntime failed to parse /proc/cpuinfo under ProcSubset=pid on hams1 (2026-11-20) and ran without CPU feature detection.
         for unit in self.UNITS:
             with self.subTest(unit=unit):
                 self.assertEqual(self._values(unit, "ProtectProc"), ["invisible"])
-                self.assertEqual(self._values(unit, "ProcSubset"), ["pid"])
+                self.assertEqual(self._values(unit, "ProcSubset"), [])
                 self.assertEqual(self._values(unit, "UMask"), ["0027"])
                 self.assertEqual(self._values(unit, "RestrictNamespaces"), ["true"])
                 self.assertEqual(infra.systemd_unit_sandbox_gaps(infra.MANIFEST, unit), set())
@@ -6145,6 +6150,8 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
                             ["CAP_SETUID", "CAP_SETGID"],
                         )
                     continue
+                if directive == "ProcSubset" and unit in SIMBOTS_UNITS:
+                    continue  # onnxruntime needs /proc/cpuinfo: SimbotsAccountTests pins the omission
                 with self.subTest(unit=unit, directive=directive):
                     self.assertEqual(
                         infra.systemd_unit_directive_values(infra.MANIFEST, unit, directive), expected
