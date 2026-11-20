@@ -197,17 +197,17 @@ class FakeSystem(lib.System):
             name = re.search(r"datname = '(\w+)'", sql).group(1)
             return lib.Result(0, "1\n" if name in self.databases else "\n")
         if sql.startswith("CREATE DATABASE"):
-            name = sql.split()[2]
+            name = sql.split()[2].strip('"')
             self.databases[name] = {"modules": set(), "extensions": set(), "revoked": False}
             return lib.Result(0)
         if sql.startswith("DROP DATABASE"):
-            self.databases.pop(re.search(r"DROP DATABASE (?:IF EXISTS )?(\w+)", sql).group(1), None)
+            self.databases.pop(re.search(r'DROP DATABASE (?:IF EXISTS )?"?(\w+)"?', sql).group(1), None)
             return lib.Result(0)
         if sql.startswith("DROP ROLE"):
             self.roles.discard(sql.split()[-1].rstrip(";"))
             return lib.Result(0)
         if sql.startswith("REVOKE ALL ON DATABASE"):
-            self.databases[sql.split()[4]]["revoked"] = True
+            self.databases[sql.split()[4].strip('"')]["revoked"] = True
             return lib.Result(0)
         if sql.startswith("SELECT (d.datacl"):
             name = re.search(r"datname = '(\w+)'", sql).group(1)
@@ -332,6 +332,13 @@ class SpecValidationTests(unittest.TestCase):
 
 
 class RenderTests(_Base):
+    def test_database_name_is_quoted_so_a_sql_reserved_word_still_works(self):
+        # NAME_RE accepts `user`, `table`, `order`: `CREATE DATABASE user` is a syntax error in PostgreSQL.
+        spec = lib.validate_spec(dict(PERENS, name="user", domains=["user.example.com"]))
+        self.assertIn('CREATE DATABASE "user" OWNER t_user', lib.render_pg_sql(spec, "database"))
+        self.assertIn('ON DATABASE "user" FROM PUBLIC', lib.render_pg_sql(spec, "database_acl"))
+        self.assertIn('GRANT CONNECT ON DATABASE "user" TO t_user', lib.render_pg_sql(spec, "database_acl"))
+
     def test_conf_has_no_database_password_and_binds_loopback_only(self):
         text = lib.render_odoo_conf(self.spec, self.paths, "$pbkdf2-sha512$x")
         self.assertIn("http_interface = 127.0.0.1", text)
