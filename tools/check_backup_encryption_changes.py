@@ -63,6 +63,7 @@ def run_git(repo, *args):
 def parse_diff(text):
     """Parse `git diff -U0` text into `{path: [(added_lines, removed_lines), ...]}`, one tuple per hunk (the lines without their `+`/`-`)."""
     files, path, added, removed = {}, None, None, None
+    old_path = None  # from the `--- a/` header: the name of a deleted file (its `+++` line says /dev/null)
     old_left = new_left = 0  # lines of the current hunk still to come: its body is counted, never guessed from a `+++ ` or `--- ` prefix
 
     def close():
@@ -75,10 +76,12 @@ def parse_diff(text):
         elif new_left > 0 and line.startswith("+"):
             added.append(line[1:])
             new_left -= 1
+        elif line.startswith("--- "):
+            old_path = line[6:].rstrip("\t") if line.startswith("--- a/") else None
         elif line.startswith("+++ "):
             close()
-            # git ends the path with a tab when it holds a space
-            path, added, removed = (line[6:].rstrip("\t") if line.startswith("+++ b/") else None), [], []
+            # git ends the path with a tab when it holds a space; a deleted file is scanned under its old name
+            path, added, removed = (line[6:].rstrip("\t") if line.startswith("+++ b/") else old_path if line.startswith("+++ /dev/null") else None), [], []
         elif line.startswith("@@"):
             close()
             added, removed = [], []
@@ -147,7 +150,7 @@ def check_repo(repo, base="origin/main", today=None):
     code, merge_base = run_git(repo, "merge-base", base, "HEAD")
     if code != 0 or not merge_base.strip():
         return []
-    code, diff = run_git(repo, "diff", "-U0", "--no-color", "--no-ext-diff", merge_base.strip())
+    code, diff = run_git(repo, "-c", "core.quotepath=off", "diff", "-U0", "--no-color", "--no-ext-diff", merge_base.strip())
     if code != 0:
         return []
     files = parse_diff(diff)

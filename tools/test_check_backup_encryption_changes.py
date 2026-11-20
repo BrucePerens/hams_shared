@@ -49,7 +49,7 @@ class PureTests(unittest.TestCase):
     def test_parse_diff(self):
         files = chk.parse_diff(DIFF)
         self.assertEqual(files["tools/b2_backup.py"], [(["x = 1", "y = 2"], []), (["new = 1"], ["old = 1"])])
-        self.assertNotIn("gone.py", files)
+        self.assertEqual(files["gone.py"], [([], ["bye"])])  # a deleted file is scanned under its old name
         self.assertEqual(chk.parse_diff(""), {})
 
     def test_parse_diff_keeps_a_removed_line_that_starts_with_two_dashes_and_a_space(self):
@@ -152,6 +152,25 @@ class RepoTests(unittest.TestCase):
     def test_an_untracked_file_with_a_non_ascii_name_is_scanned(self):
         self.write("tools/caf\u00e9_backup.py", "run(['pgbackrest', 'stanza-create'])\n")
         self.assertTrue(chk.check_repo(self.repo))
+
+    def test_deleting_a_file_that_holds_a_cipher_setting_fails(self):
+        self.write("tools/provision_pg.py", "conf = 'repo1-cipher-type=aes-256-cbc'\n")
+        self.git("add", "-A")
+        self.git("commit", "-qm", "pg")
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        self.git("rm", "-q", "tools/provision_pg.py")
+        self.git("commit", "-qm", "drop")
+        problems = chk.check_repo(self.repo)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("tools/provision_pg.py", problems[0])
+
+    def test_a_committed_cipher_change_in_a_file_with_a_non_ascii_name_fails(self):
+        self.write("tools/provision_caf\u00e9.py", "conf = 'cipher-pass=x'\n")
+        self.git("add", "-A")
+        self.git("commit", "-qm", "accent")
+        problems = chk.check_repo(self.repo)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("provision_caf\u00e9.py", problems[0])
 
     def test_an_entry_added_in_the_same_change_approves_it(self):
         self.write("tools/provision.py", "k = secrets.token_bytes(32)  # HAMS_CRYPTO_KEY\n")
