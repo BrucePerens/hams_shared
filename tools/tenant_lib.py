@@ -454,7 +454,8 @@ def render_nft(specs):
 # [@ANCHOR: tenant_lib:render_pg_sql]
 # Verified by [@ANCHOR: test_tenant_lib:render_pg_sql]
 def render_pg_sql(spec, phase):
-    """SQL for one phase, all identifiers validated by NAME_RE so interpolation is safe."""
+    """SQL for one phase, all identifiers validated by NAME_RE so interpolation is safe. The database name is
+    double-quoted: NAME_RE also accepts SQL reserved words (`user`, `table`, `order`) that an unquoted name would break."""
     name = spec["name"]
     role = pg_role(name)
     limit = spec["pg_connection_limit"]
@@ -469,10 +470,10 @@ def render_pg_sql(spec, phase):
         return f"ALTER ROLE {role} CONNECTION LIMIT {limit};"
     if phase == "database":
         return (
-            f"CREATE DATABASE {name} OWNER {role} TEMPLATE template0 ENCODING 'UTF8';"
+            f'CREATE DATABASE "{name}" OWNER {role} TEMPLATE template0 ENCODING \'UTF8\';'
         )
     if phase == "database_acl":
-        return f"REVOKE ALL ON DATABASE {name} FROM PUBLIC; GRANT CONNECT ON DATABASE {name} TO {role};"
+        return f'REVOKE ALL ON DATABASE "{name}" FROM PUBLIC; GRANT CONNECT ON DATABASE "{name}" TO {role};'
     if phase == "extensions":
         return "CREATE EXTENSION IF NOT EXISTS pg_trgm; CREATE EXTENSION IF NOT EXISTS unaccent;"
     raise ValueError(phase)
@@ -1203,7 +1204,7 @@ def build_delete_steps(spec, paths, system, all_specs=None):
             lambda: system.run(["systemctl", "disable", "--now", f"hams-tenant@{name}.service"], check=False),
         )
     )
-    steps.append(Step("drop_db", f"DROP DATABASE {name}", lambda: psql(system, f"DROP DATABASE IF EXISTS {name} WITH (FORCE);")))
+    steps.append(Step("drop_db", f"DROP DATABASE {name}", lambda: psql(system, f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE);')))
     steps.append(Step("drop_role", f"DROP ROLE {role}", lambda: psql(system, f"DROP ROLE IF EXISTS {role};")))
 
     def remove_files():
