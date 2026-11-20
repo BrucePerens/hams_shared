@@ -271,10 +271,10 @@ def validate_spec(raw):
                 f"extra module {module!r} is not allow-listed for tenants "
                 f"({', '.join(sorted(EXTRA_MODULE_ALLOWLIST))})"
             )
-    if not re.match(r"^[A-Za-z0-9_.@-]{1,64}\Z", spec["admin_login"]):
+    if not isinstance(spec["admin_login"], str) or not re.match(r"^[A-Za-z0-9_.@-]{1,64}\Z", spec["admin_login"]):
         raise SpecError("admin_login has unsupported characters")
     spec["static_site"] = _validate_static_site(spec["static_site"], spec)
-    if not re.match(r"^[a-z]{2,3}_[A-Z]{2}\Z", spec["language"]):
+    if not isinstance(spec["language"], str) or not re.match(r"^[a-z]{2,3}_[A-Z]{2}\Z", spec["language"]):
         raise SpecError(f"language must look like en_US: {spec['language']!r}")
     return spec
 
