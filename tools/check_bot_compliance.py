@@ -20,7 +20,7 @@ def get_public_ip():
         )
         response = urllib.request.urlopen(req, timeout=5).read()
         return json.loads(response)["ip"]
-    except (urllib.error.URLError, json.JSONDecodeError, OSError, KeyError) as e:
+    except (urllib.error.URLError, ValueError, OSError, KeyError, TypeError) as e:
         # KeyError added 2026-09-10: a valid-JSON response missing the "ip" key -- e.g. a
         # CDN/edge challenge or rate-limit page fronting api.ipify.org, returned with a 200
         # status and a JSON body of a different shape -- previously crashed this function

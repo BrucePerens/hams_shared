@@ -55,6 +55,14 @@ class GetPublicIpTests(unittest.TestCase):
         mock_urlopen.return_value.read.return_value = json.dumps({"error": "rate limited"}).encode()
         self.assertIsNone(chk.get_public_ip())
 
+    @patch("check_bot_compliance.urllib.request.urlopen")
+    def test_a_non_object_or_non_utf8_body_returns_none_instead_of_crashing(self, mock_urlopen):
+        # A 200 body that is a JSON list/string (TypeError on ["ip"]) or is not UTF-8 at all
+        # (UnicodeDecodeError, which is not a JSONDecodeError) used to escape the except tuple.
+        for body in (b"[1, 2]", b'"busy"', b"\xff\xfe\x00"):
+            mock_urlopen.return_value.read.return_value = body
+            self.assertIsNone(chk.get_public_ip(), body)
+
 
 class CheckFcrdnsTests(unittest.TestCase):
     @patch("check_bot_compliance.socket.gethostbyname")
