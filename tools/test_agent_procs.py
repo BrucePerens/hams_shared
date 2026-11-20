@@ -77,6 +77,7 @@ import threading
 import time
 import unittest
 import unittest.mock
+import uuid
 from unittest import mock
 
 from hypothesis import given as hypothesis_given, settings
@@ -113,8 +114,8 @@ class ProcTestCase(unittest.TestCase):
             try:
                 os.killpg(proc.pid, signal.SIGKILL)
             except (ProcessLookupError, PermissionError):
-                pass
-            proc.wait()
+                proc.kill()  # not a group leader (started without its own session)
+            proc.wait(timeout=30)
         for rec in ap.list_records(self.jobs):
             if rec.pgid in (os.getpgrp(), 0, 1):  # never the group of the test runner itself
                 continue
@@ -526,8 +527,11 @@ class WaitTests(ProcTestCase):
     def test_a_waiter_loop_whose_own_text_holds_the_pattern_ends(self):
         """The shape that never ended on 2026-11-08: `until ! <search for TOKEN>; do sleep; done` in a bash -c that
         itself contains TOKEN."""
-        decoy = self.decoy("tokselfwait")
-        loop = (f"until ! {sys.executable} {TOOL} find --quiet --cmd-contains tokselfwait; do sleep 0.2; done; echo ended")
+        # A token unique to this run: find is user-wide, so a fixed token made two concurrent lint runs of this test see each
+        # other's decoy and waiter forever (the 2026-11-20 hang of pytest tools/[2of4]). The loop also has its own deadline.
+        token = f"tokselfwait{uuid.uuid4().hex}"
+        decoy = self.decoy(token)
+        loop = (f"for i in $(seq 150); do {sys.executable} {TOOL} find --quiet --cmd-contains {token} || break; sleep 0.2; done; echo ended")
         waiter = subprocess.Popen(["bash", "-c", loop], stdout=subprocess.PIPE, text=True,
                                   env=dict(os.environ, **self.env))
         self.spawned.append(waiter)
