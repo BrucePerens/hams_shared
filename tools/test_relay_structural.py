@@ -22,6 +22,7 @@ import unittest
 HERE = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, HERE)
 
+import lint_cache  # noqa: E402
 import relay_structural as rs  # noqa: E402
 
 LISTING = "\n".join("%s: test" % name for name in (
@@ -155,6 +156,17 @@ class MainTests(Fixture):
         done = subprocess.run([sys.executable, os.path.join(HERE, "relay_structural.py"), os.path.join(self.root, "repo")], capture_output=True, text=True, env=env)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(open(os.path.join(self.root, "calls.txt"), encoding="utf-8").read().split(), ["cwd=" + relay] * 2)
+
+    def test_a_busy_build_directory_fails_the_step_with_a_message_instead_of_waiting_forever(self):
+        self.crate("daemons/hams_local_relay")
+        cache = os.path.join(self.root, "cache")
+        env = dict(os.environ, XDG_CACHE_HOME=cache, HAMS_LINT_CARGO_LOCK_WAIT="0.1")
+        env.pop("CARGO_TARGET_DIR", None)
+        env.pop("HAMS_LINT_NO_CACHE", None)
+        with lint_cache.named_cargo_session(rs.SESSION_NAME, dict(env)):
+            done = subprocess.run([sys.executable, os.path.join(HERE, "relay_structural.py"), os.path.join(self.root, "repo")], capture_output=True, text=True, env=env)
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("stayed locked", done.stdout)
 
     def test_a_group_that_shrank_fails_before_running_anything(self):
         done, calls = self.run_main("exposure_tests::a: test\n")
