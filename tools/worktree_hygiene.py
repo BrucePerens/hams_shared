@@ -330,7 +330,7 @@ def move_nested(repo, path, workspace=None):
 
 # [@ANCHOR: worktree_hygiene:registered_jobs]
 def registered_jobs(state_dir=None):
-    """[(record file, record dict)] of the jobs devbox_tools/new_agent_worktree.py registered. An unreadable record is skipped."""
+    """[(record file, record dict)] of the jobs devbox_tools/new_agent_worktree.py registered. An unreadable record, or a file whose JSON is not an object, is skipped."""
     state_dir = state_dir or os.environ.get("AGENT_WORKTREE_STATE") or os.path.expanduser("~/.local/state/agent-worktrees")
     jobs = []
     if os.path.isdir(state_dir):
@@ -340,9 +340,11 @@ def registered_jobs(state_dir=None):
             path = os.path.join(state_dir, name)
             try:
                 with open(path, encoding="utf-8") as handle:
-                    jobs.append((path, json.load(handle)))
+                    record = json.load(handle)
             except (OSError, ValueError):
                 continue
+            if isinstance(record, dict):  # valid JSON that is not an object is no record, and `reap_finished_jobs` calls .get on it
+                jobs.append((path, record))
     return jobs
 
 
