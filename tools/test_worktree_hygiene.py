@@ -334,6 +334,17 @@ class WorktreeHygieneTest(unittest.TestCase):
         self.assertEqual(os.path.basename(new), "hams_shared_wt")
         self.assertEqual(sorted(os.listdir(os.path.dirname(new))), ["hams_com", "hams_open", "hams_shared_wt"])
 
+    # Tests [@ANCHOR: global:worktree_hygiene:registered_jobs]
+    # Tests [@ANCHOR: global:worktree_hygiene:reap_finished_jobs]
+    def test_a_record_file_holding_valid_json_that_is_not_an_object_is_skipped(self):
+        state = os.path.join(self.tmp.name, "state_nonobject")
+        os.makedirs(state)
+        for name, text in (("list.json", "[]"), ("null.json", "null"), ("number.json", "7")):
+            with open(os.path.join(state, name), "w") as handle:
+                handle.write(text)
+        self.assertEqual(wh.registered_jobs(state), [])
+        self.assertEqual(wh.reap_finished_jobs(True, state), [])
+
     def test_move_nested_mode_never_moves_dirty_work(self):
         dirty = self.nested("dirty2", dirty=True)
         with unittest.mock.patch.object(wh, "move_nested") as mover:
