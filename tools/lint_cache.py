@@ -269,11 +269,14 @@ def locked(path, exclusive=True, wait=True, timeout=None):
             try:
                 fcntl.flock(handle, flags)
                 break
-            except OSError:
+            except BlockingIOError:
                 if not wait or deadline is None or time.monotonic() >= deadline:
                     yield False
                     return
                 time.sleep(2)
+            except OSError:  # flock itself failed (not "held by another process"): waiting longer cannot help
+                yield False
+                return
         try:
             yield True
         finally:
@@ -661,7 +664,10 @@ def named_cargo_session(name, environ=None, log=None):
         # copies of a 4.5 GB dependency build cost 13.5 GB of memory (measured 2026-11-08).
         target = cargo_target_dir(name, dict(environ, HAMS_LINT_SLOT="1"))
     limit = float(environ.get("HAMS_LINT_CARGO_LOCK_WAIT") or CARGO_LOCK_WAIT_SECONDS)
+    started = time.monotonic()
     with locked(target, exclusive=True, timeout=limit) as held:
+        if not held and time.monotonic() - started < limit:
+            _require_lock(held, target)  # flock failed before the wait ran out
         if not held:
             raise LockTimeout(f"lint cache: {target} stayed locked by another build for {limit:g} s (HAMS_LINT_CARGO_LOCK_WAIT)")
         prepare_cargo_target(target, environ, log)
