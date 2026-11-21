@@ -9151,7 +9151,7 @@ class ProvisionUnitsTests(_SafePatchTestCase):
 
 
 class AuthGatewayJournalNamespaceTests(unittest.TestCase):
-    """The auth gateway logs client addresses, so its journal is its own namespace with a 14-day cap (to-do gateway-logs-client-ip)."""
+    """The auth gateway logs client addresses, so its journal is its own namespace and is never expired (logs are permanent; to-do gateway-logs-client-ip)."""
 
     UNIT = "hams-auth-gateway.service"
     CONF = "/etc/systemd/journald@hams-auth.conf"
@@ -9159,11 +9159,12 @@ class AuthGatewayJournalNamespaceTests(unittest.TestCase):
     def test_the_unit_logs_to_the_hams_auth_namespace(self):
         self.assertEqual(infra.systemd_unit_directive_values(infra.MANIFEST, self.UNIT, "LogNamespace"), ["hams-auth"])
 
-    def test_the_namespace_config_caps_retention_at_fourteen_days_in_production(self):
+    def test_the_namespace_config_sets_no_retention_limit_in_production(self):
         matches = [e for e in infra.MANIFEST["static_files"] if e["path"] == self.CONF]
         self.assertEqual(len(matches), 1)
         self.assertIn("[Journal]\n", matches[0]["content"])
-        self.assertIn("MaxRetentionSec=14d\n", matches[0]["content"])
+        self.assertNotIn("MaxRetention", matches[0]["content"])
+        self.assertNotIn("MaxUse", matches[0]["content"])
         self.assertEqual(matches[0]["environments"], ["prod"])
 
 # Class anchors (ADR 0113) exercised by the tests above.
