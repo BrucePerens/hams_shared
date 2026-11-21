@@ -336,6 +336,14 @@ class DeliveryTests(unittest.TestCase):
         self.assertEqual(len(done), 1)
         self.assertEqual(mails, ["[hams.com DOWN] odoo"])
 
+    def test_each_successful_send_is_logged_without_addresses(self):
+        env = {"PAGER_FALLBACK_EMAIL": "secret@b", "SMTP_HOST": "m"}
+        with self.assertLogs(sm.logger, level="INFO") as logs:
+            sm.deliver([("recovered", "public", "ok")], env, "h",
+                       channels=self._channels(email=lambda e, k, t, x: None))
+        self.assertEqual(logs.output, ["INFO:%s:recovered message sent for public via email" % sm.logger.name])
+        self.assertNotIn("secret", logs.output[0])
+
     def test_message_is_not_delivered_when_every_channel_fails(self):
         env = {"PAGER_FALLBACK_EMAIL": "a@b", "SMTP_HOST": "m", "PAGER_WEBHOOK_URL": "https://h"}
 

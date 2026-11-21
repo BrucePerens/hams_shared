@@ -448,6 +448,7 @@ def deliver(messages, env, host, channels=CHANNELS):
             try:
                 send(env, kind, title, text)
                 sent = True
+                logger.info("%s message sent for %s via %s", kind, check, name)
             except (OSError, urllib.error.URLError, ValueError, smtplib.SMTPException) as exc:
                 logger.error("%s page failed: %s", name, exc)
         if sent:
