@@ -454,6 +454,23 @@ class InheritExactnessTests(InheritFixture):
         self.assertTrue(self.messages[0].startswith("stamp inheritance: cannot list no_such_ref..%s: " % tip), self.messages)
         self.assertGreater(len(self.messages[0]), len("stamp inheritance: cannot list no_such_ref..%s: " % tip))
 
+    # Tests [@ANCHOR: lint_stamp_gate:inherit_stamp]
+    def test_a_diff_that_git_cannot_make_is_logged_with_the_cause(self):
+        code = self.commit("daemons/x/src/a.rs", "1\n", "code")
+        self.put_stamp(code, "changed 2026-10-30T10:00:00 steps=3 names=check_cargo_clippy\n")
+        tip = self.commit("claims/a.md", "# a\n", "claim")
+        real = lint_stamp_gate._git
+
+        def failing(repo, *args):
+            if "diff" in args:
+                return subprocess.CompletedProcess(args, 128, "", "fatal: bad object\n")
+            return real(repo, *args)
+        with unittest.mock.patch.object(lint_stamp_gate, "_git", failing):
+            self.assertIsNone(self.inherit(tip))
+        self.assertEqual(len(self.messages), 1)
+        self.assertIn("cannot diff", self.messages[0])
+        self.assertIn("bad object", self.messages[0])
+
     def test_an_existing_stamp_of_the_tip_is_returned_as_it_is(self):
         tip = self.commit("claims/a.md", "# a\n", "claim")
         self.put_stamp(tip, "full steps=9\n")
