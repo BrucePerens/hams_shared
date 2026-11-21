@@ -391,6 +391,18 @@ class VerifyTests(SnapshotTestBase):
         self.assertTrue(gs.only_notes_ahead(com, old, git(com, "rev-parse", "HEAD")))
 
     # Tests [@ANCHOR: gate_snapshot:only_notes_ahead]
+    def test_a_code_file_renamed_into_a_notes_directory_is_not_a_notes_only_change(self):
+        com = self.ws.path("hams_com")
+        write(os.path.join(com, "daemons_x.py"), "print(1)\n" * 40)
+        git(com, "add", "daemons_x.py")
+        git(com, "commit", "-q", "-m", "code")
+        old = git(com, "rev-parse", "HEAD")
+        os.makedirs(os.path.join(com, "night_shift_todo"), exist_ok=True)
+        git(com, "mv", "daemons_x.py", "night_shift_todo/x.md")
+        git(com, "commit", "-q", "-m", "rename code into notes")
+        self.assertFalse(gs.only_notes_ahead(com, old, git(com, "rev-parse", "HEAD")))
+
+    # Tests [@ANCHOR: gate_snapshot:only_notes_ahead]
     def test_notes_tolerance_is_only_for_hams_com_and_only_when_the_snapshot_is_an_ancestor(self):
         com = self.ws.path("hams_com")
         old = git(com, "rev-parse", "HEAD")
