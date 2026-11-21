@@ -2982,7 +2982,7 @@ class OdooLogrotateTests(unittest.TestCase):
         text = infra.format_env(self._entry()["content"], {})
         self.assertTrue(text.startswith("/var/log/odoo/*.log {\n"), text)
         directives = {line.strip() for line in text.splitlines()}
-        for wanted in ("daily", "rotate 36500", "dateext", "maxsize 300M", "compress", "delaycompress", "copytruncate",
+        for wanted in ("daily", "rotate 14", "maxsize 300M", "compress", "delaycompress", "copytruncate",
                        "missingok", "notifempty"):
             self.assertIn(wanted, directives)
         self.assertNotIn("weekly", directives)
@@ -3006,7 +3006,7 @@ class StaticFilesRenderTests(unittest.TestCase):
     hand copy of the MANIFEST text. These tests pin the rendering and refuse a doubled brace in any rendered file."""
 
     LOGROTATE = (
-        "/var/log/odoo/*.log {\n    daily\n    rotate 36500\n    dateext\n    maxsize 300M\n    compress\n    delaycompress\n"
+        "/var/log/odoo/*.log {\n    daily\n    rotate 14\n    maxsize 300M\n    compress\n    delaycompress\n"
         "    copytruncate\n    missingok\n    notifempty\n}\n"
     )
 

@@ -3827,7 +3827,7 @@ end
         },
         {
             # hams1 readiness audit 2026-10-04, row 19: Odoo's log rotated weekly, uncompressed, four kept, so
-            # odoo-server.log.2 was 921 MB and .1 580 MB (0.6-0.9 GB a week at INFO). Daily, kept forever (rotate 36500 is 100 years; log files are permanent, Bruce 2026-11-20), compressed
+            # odoo-server.log.2 was 921 MB and .1 580 MB (0.6-0.9 GB a week at INFO). Daily, 14 kept, compressed
             # (delaycompress keeps the newest rotation readable by a tailing process), and a 300 MB size cap so a
             # noisy day rotates early. copytruncate because Odoo keeps its log file open. Braces are doubled
             # because provision_static_files formats content with str.format (render_static_content). Install this
@@ -3837,8 +3837,7 @@ end
             "content": """\
 /var/log/odoo/*.log {{
     daily
-    rotate 36500
-    dateext
+    rotate 14
     maxsize 300M
     compress
     delaycompress
