@@ -6055,6 +6055,11 @@ Every class of the tools that is not a function, with its fields, who creates it
 
 **Notes.** The command line reports the message and fails, since guessing a baseline could hide new failures.
 
+### `LockTimeout` [@ANCHOR: lint_cache:lint_cache_lock_timeout_class]
+
+**Purpose.** The exception raised when a named cargo session's lock stays held by another build for longer than the wait limit (`CARGO_LOCK_WAIT_SECONDS`, 1800 s by default, overridable with HAMS_LINT_CARGO_LOCK_WAIT). It exists so a lint run or the relay export test stops with a clear message instead of queueing behind a long cold build without end; the message names the locked target directory and the seconds waited. Callers let it propagate and the run fails; nothing is pruned or built in the locked directory.
+**Definition.** `class LockTimeout(RuntimeError)` in `tools/lint_cache.py`. It adds no fields and no methods of its own: it carries only the message text passed when it is raised, and catching `RuntimeError` also catches it.
+
 ### `ResultCache` [@ANCHOR: lint_cache:lint_cache_result_cache_class]
 
 **Purpose.** Per-file results for a checker, keyed by the file's content hash, valid for one checker version. `get(path)` returns the stored result (any JSON value) or None on a miss; `put(path, result)` stores it. A changed file has a different content hash, so it can never read another content's entry. `enabled` False (`--no-cache`, HAMS_LINT_NO_CACHE=1) makes every `get` a miss and `put` a no-op. `save()` m

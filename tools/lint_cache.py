@@ -285,6 +285,7 @@ def locked(path, exclusive=True, wait=True, timeout=None):
         handle.close()
 
 
+# [@ANCHOR: lint_cache:lint_cache_lock_timeout_class]
 class LockTimeout(RuntimeError):
     """The named cargo session's lock stayed busy for CARGO_LOCK_WAIT_SECONDS."""
 
