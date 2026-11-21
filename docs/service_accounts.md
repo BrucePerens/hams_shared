@@ -91,12 +91,6 @@ How to read the tables: "Model access" is read from each module's `security/ir.m
 
 Since version 1.1 the module registers this account's daemon key with the Daemon Key Manager (`register_ai_safety_reporting_key()`, `/opt/hams/etc/keys/ai_safety_reporting_service_internal.env`), so a new install has the key the Simulated Band bots and the Official Observer file tickets with.
 
-## `hams_base`
-
-| XML ID | What it is for | Model access |
-|--------|----------------|--------------|
-| `hams_base.user_dmarc_purge_service` | Runs the daily job that deletes DMARC reports older than 180 days. Reads and deletes reports only. | `hams_base_dmarc_report:RD`, `hams_base_dmarc_record:RD` |
-
 ## `hams_helpdesk`
 
 | XML ID | What it is for | Model access |
