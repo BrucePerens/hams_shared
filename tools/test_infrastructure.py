@@ -1768,6 +1768,25 @@ class LoadAndPromptEnvTests(_SafePatchTestCase):
         infra.load_and_prompt_env(env_vars, is_test=True)
         self.assertEqual(env_vars["DOMAIN"], "localhost")
 
+    def test_pdns_catalog_and_parent_zone_survive_and_are_production_only(self):
+        # Tests [@ANCHOR: infrastructure:set_pdns_zone_defaults]
+        # pdns_sync reads both; without them new zones are Native with no catalog and the
+        # secondary never gets them (incident 2026-11-21). write_env_files rewrites pdns.env
+        # from env_groups only, so unlisted lines were dropped on re-provision.
+        for key in ("PDNS_CATALOG_ZONE", "PDNS_PARENT_ZONE"):
+            self.assertIn(key, infra.MANIFEST["env_groups"]["pdns.env"])
+        env_vars = {"DOMAIN": "hams.com"}
+        infra.load_and_prompt_env(env_vars, is_test=False)
+        self.assertEqual(env_vars["PDNS_CATALOG_ZONE"], "catalog.hams.com")
+        self.assertEqual(env_vars["PDNS_PARENT_ZONE"], "hams.com")
+        test_vars = {}
+        infra.load_and_prompt_env(test_vars, is_test=True)
+        self.assertNotIn("PDNS_CATALOG_ZONE", test_vars)
+        self.assertNotIn("PDNS_PARENT_ZONE", test_vars)
+        kept = {"DOMAIN": "hams.com", "PDNS_CATALOG_ZONE": "c.example"}
+        infra.load_and_prompt_env(kept, is_test=False)
+        self.assertEqual(kept["PDNS_CATALOG_ZONE"], "c.example")
+
     def test_pdns_zone_defaults_derive_from_domain(self):
         # [@ANCHOR: infrastructure:test_pdns_zone_defaults]
         # Tests [@ANCHOR: infrastructure:set_pdns_zone_defaults]

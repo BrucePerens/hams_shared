@@ -3617,6 +3617,8 @@ MANIFEST = {
             "PDNS_API_URL",
             "PDNS_ZONE_NAMESERVERS",
             "PDNS_PERSONAL_PARENT_ZONE",
+            "PDNS_CATALOG_ZONE",
+            "PDNS_PARENT_ZONE",
         ],
         "odoo.env": [
             "ODOO_ADMIN_PASSWORD",
@@ -13294,6 +13296,10 @@ def load_and_prompt_env(env_vars, is_test):
             )
         domain = env_vars["DOMAIN"]
         _set_pdns_zone_defaults(env_vars)
+        # Catalog zone and signed parent zone (pdns_sync): production only; a test host leaves them
+        # unset so its zones stay Native. Listed in env_groups so write_env_files keeps them.
+        env_vars.setdefault("PDNS_CATALOG_ZONE", f"catalog.{domain.strip().strip('.')}")
+        env_vars.setdefault("PDNS_PARENT_ZONE", domain.strip().strip("."))
 
         env_vars.setdefault("ODOO_URL", "http://odoo:8069")
         env_vars.setdefault("SYSADMIN_EMAILS", f"admin@{domain}")
