@@ -129,6 +129,7 @@ def inherit_stamp(repo, tip, passed_dir, base="origin/main", log=print):
             continue
         diff = _git(repo, "diff", "--ignore-submodules=none", "--name-only", "--no-renames", old, tip)
         if diff.returncode != 0:
+            log("stamp inheritance: cannot diff %s..%s: %s" % (old[:9], tip[:9], diff.stderr.strip()))
             return None
         changed = [line for line in diff.stdout.splitlines() if line]
         other = [path for path in changed if not exempt_path(path)]
