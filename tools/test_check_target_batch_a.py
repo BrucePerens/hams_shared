@@ -28,6 +28,7 @@ BATCH_A = {
     "check_function_test_anchors.py": ((), None),
     "check_gdpr_erasure_uses_service_utility.py": ((), None),
     "check_init_imports.py": ((), None),
+    "check_migration_registry_deletes.py": ((), None),
     "check_int_float_overflow.py": ((), None),
     "check_manifest_dependencies.py": ((), None),
     "check_model_extension_collisions.py": ((), None),
