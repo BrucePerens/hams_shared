@@ -8488,12 +8488,13 @@ WantedBy=multi-user.target
         {
             # Journal namespace of hams-auth-gateway.service (its LogNamespace=hams-auth): systemd starts
             # systemd-journald@hams-auth on demand and reads this file for it. The gateway logs the client
-            # address on handshake and refusal lines. No MaxRetentionSec: log records are permanent (Bruce, 2026-11-20; it was
-            # 14d from 2026-11-08). No SystemMaxUse existed, so none is set. Rollback: remove the LogNamespace= line and this file.
+            # address on handshake and refusal lines; 14 days (Bruce's delegate, 2026-11-08) keeps them long
+            # enough for abuse handling and no longer. Rollback: remove the LogNamespace= line and this file.
             "path": "/etc/systemd/journald@hams-auth.conf",
             "content": """\
 [Journal]
 Storage=persistent
+MaxRetentionSec=14d
 """,
             "owner": "root:root",
             "mode": "644",
