@@ -416,13 +416,13 @@ NOTE_PATHS = ("night_shift_todo/", "night_shift_history/", "night_shift_question
 # [@ANCHOR: gate_snapshot:only_notes_ahead]
 def only_notes_ahead(repo, snapshot, head):
     """True when `head` is ahead of `snapshot` (the snapshot is an ancestor of it) and every path that differs between them lies
-    under `night_shift_todo/`, `night_shift_history/` or `night_shift_questions/`: to-do notes pushed straight to hams_com main,
+    under `night_shift_todo/`, `night_shift_history/` or `night_shift_questions/` (renames are not folded and a moved submodule pointer counts, as in `lint_stamp_gate`): to-do notes pushed straight to hams_com main,
     which change no code or test. Any other difference, or a snapshot that is not an ancestor of `head`, is False."""
     ancestor = subprocess.run(["git", "-c", "safe.directory=" + repo, "-C", repo, "merge-base", "--is-ancestor", snapshot, head],
                               capture_output=True, timeout=600)
     if ancestor.returncode != 0:
         return False
-    paths = _git(repo, "diff", "--name-only", "-z", snapshot, head, check=False).split("\0")
+    paths = _git(repo, "diff", "--ignore-submodules=none", "--no-renames", "--name-only", "-z", snapshot, head, check=False).split("\0")
     paths = [path for path in paths if path]
     return bool(paths) and all(path.startswith(NOTE_PATHS) for path in paths)
 
