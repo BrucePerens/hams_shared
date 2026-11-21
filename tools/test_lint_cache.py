@@ -229,6 +229,16 @@ class CargoBudgetTest(unittest.TestCase):
                 self.assertFalse(locked_free(own))
 
     # Tests [@ANCHOR: lint_cache:named_cargo_session]
+    def test_a_named_session_gives_up_when_the_lock_stays_busy(self):
+        base = {"XDG_CACHE_HOME": self._tmp.name}
+        with lint_cache.named_cargo_session("relay-structural", base):
+            with self.assertRaises(lint_cache.LockTimeout):
+                with lint_cache.named_cargo_session("relay-structural", dict(base, HAMS_LINT_CARGO_LOCK_WAIT="0.1")):
+                    self.fail("the lock was held elsewhere")
+        with lint_cache.named_cargo_session("relay-structural", base) as target:  # released: the next one gets it
+            self.assertTrue(os.path.isdir(target))
+
+    # Tests [@ANCHOR: lint_cache:named_cargo_session]
     def test_named_session_directory_is_under_the_budgeted_cargo_base(self):
         cache = self._tmp.name
         environ = {"XDG_CACHE_HOME": cache}

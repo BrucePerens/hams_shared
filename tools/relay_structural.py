@@ -111,16 +111,24 @@ def main(argv):
     if _run(["cargo", "--version"], relay, None).returncode != 0:
         print("❌ cargo is not installed: the relay's structural tests cannot run")
         return 1
+    try:
+        return _run_group(argv, positional[0], relay)
+    except lint_cache.LockTimeout as error:
+        print("❌ relay structural tests did not run: %s\nAnother lint run holds the relay build directory; rerun when the box is quieter." % error)
+        return 1
+
+
+def _run_group(argv, repo_root, relay):
     with lint_cache.named_cargo_session(SESSION_NAME, log=print) as target:
         env = dict(os.environ, CARGO_INCREMENTAL="0")
         if target:
             env["CARGO_TARGET_DIR"] = target
         # The build runs in a copy of the checkout at a fixed path (cargo hashes paths into its fingerprints: a different worktree every run
         # recompiled the relay each time). The tests read the same bytes there; the lock held by the session keeps other runs out of it.
-        work = lint_cache.work_checkout(positional[0], lint_exec.repo_name(positional[0]) or "checkout", target, log=print)
+        work = lint_cache.work_checkout(repo_root, lint_exec.repo_name(repo_root) or "checkout", target, log=print)
         if work:
             relay = os.path.join(work, RELAY_REL)
-        shown = (lambda text: text.replace(work, os.path.abspath(positional[0]))) if work else (lambda text: text)
+        shown = (lambda text: text.replace(work, os.path.abspath(repo_root))) if work else (lambda text: text)
         listing = _run(cargo_command(filters=(), list_only=True), relay, env)  # every test of the binary: the filters are checked against it
         if listing.returncode != 0:
             print("❌ the relay's tests did not build:\n" + shown(listing.stdout + listing.stderr))
