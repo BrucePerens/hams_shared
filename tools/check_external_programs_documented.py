@@ -46,7 +46,7 @@ DISCOVERY_FUNCTIONS = {
 # in the same change that documents the program in ADR 0114.
 DYNAMIC_LAUNCH_FILES = frozenset({
     "src/audio_mixer.rs", "src/bounded_command.rs",
-    "src/ardop.rs", "src/checkin.rs", "src/com0com.rs", "src/device_worker_launch.rs", "src/direwolf.rs", "src/gps_time.rs", "src/m17_reference.rs", "src/mercury.rs",
+    "src/ardop.rs", "src/checkin.rs", "src/com0com.rs", "src/device_worker_launch.rs", "src/direwolf.rs", "src/gps_time.rs", "src/m17_reference.rs", "src/mercury.rs", "src/privileged_action.rs",
     "src/relay_info.rs", "src/secret_store.rs", "src/shared_receiver/frontend_process.rs", "src/updater.rs", "src/winlink.rs",
 })
 

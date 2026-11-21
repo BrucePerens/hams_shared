@@ -250,6 +250,7 @@ STEP_META = {
     "check_anchor_docs_standard": {"suffixes": frozenset({".md", ".rs", ".py", ".js", ".mjs", ".txt"})},
     "check_int_float_overflow": {"suffixes": _PY},
     "check_float_isfinite": {"suffixes": _PY},
+    "check_migration_registry_deletes": {"suffixes": _PY},
     # Test files (.py/.js/.mjs/.rs) plus the checker's own allowlist and ratchet baseline.
     "check_wallclock_in_tests": {"suffixes": frozenset({".py", ".js", ".mjs", ".rs", ".txt", ".json"})},
     # Reads every .py and .sh file of both repositories and its own known list (boundary_hazards_known.json).
@@ -2667,6 +2668,16 @@ def main():
     _add(
         "check_float_isfinite",
         [python_exec, os.path.join(dir_path, "tools", "check_float_isfinite.py"), *_pair_roots],
+        print_ok=False,
+    )
+
+    # check_migration_registry_deletes -- incident 2026-11-21: ham_base 0.13 post-migration deleted 13,241 live chatter rows
+    # because "model not in env.registry" was read as "model removed"; mid-upgrade the dependants are not loaded yet. Flags
+    # a delete/unlink in a migrations/ file whose condition uses registry / model / table existence; reviewed cases carry
+    # `# migration-registry-ok: <reason>`. One process over both roots.
+    _add(
+        "check_migration_registry_deletes",
+        [python_exec, os.path.join(dir_path, "tools", "check_migration_registry_deletes.py"), *_pair_roots],
         print_ok=False,
     )
 

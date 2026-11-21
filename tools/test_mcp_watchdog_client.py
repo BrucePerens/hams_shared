@@ -150,7 +150,9 @@ class DeadlineTests(unittest.TestCase):
                 ],
                 capture_output=True,
                 text=True,
-                timeout=1 + client.OVERALL_TIMEOUT_MARGIN_SECS + 30,
+                # Only a hang guard: the client ends itself after 1 + the margin seconds of wall clock, but start-up and
+                # tear-down of a python process on a saturated box (load 68, 4 xdist workers) took 30 s more than 46 s allowed.
+                timeout=1 + client.OVERALL_TIMEOUT_MARGIN_SECS + 150,
                 cwd=os.path.dirname(__file__),
             )
         self.assertEqual(result.returncode, 1)

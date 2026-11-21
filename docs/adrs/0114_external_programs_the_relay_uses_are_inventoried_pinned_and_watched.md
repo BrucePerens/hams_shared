@@ -119,6 +119,8 @@ The device worker (`device_worker_launch.rs`) is the one launch whose program is
 
 `bounded_command.rs` is the second: it runs whatever helper its caller hands it (`sh`, a TNC's `-h` or `--version`, and the other programs the first table already names) under a time limit and a size cap. It chooses no program itself, so the file is in `DYNAMIC_LAUNCH_FILES`; every caller that names a literal program is still checked against the tables.
 
+`privileged_action.rs` is the third: `run_pkexec` calls `run_launcher("pkexec", ...)`, and the launcher is a parameter only so a test can stand in a fake for `pkexec`. The one program the relay starts there is `pkexec` (already in the first table), so the file is in `DYNAMIC_LAUNCH_FILES`.
+
 ## Known gaps (to-dos)
 - hidapi (vendored in the Mercury tree, follows its pin), RADE (`rade_c` was copied in whole with no recorded upstream commit, so there is nothing honest to pin) and the model files (Hugging Face repositories, not GitHub releases) have no upstream check.
 - Inno Setup, MinGW-w64, wine and the container images are not pinned beyond what the release preflight
