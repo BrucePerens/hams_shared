@@ -93,8 +93,9 @@ def _views(tree, module):
         yield node.get("id"), _qualified(parent, module), edits
 
 
-def collect(roots):
-    """{parent: [(module, id, relpath, expr, position, attrs)]} for all roots."""
+def collect(roots, problems=None):
+    """{parent: [(module, id, relpath, expr, position, attrs)]} for all roots. A file that cannot be parsed or read is described in
+    the list `problems` when the caller passes one: its views were not checked."""
     by_parent = {}
     for root in roots:
         for path in tree_files(root, ".xml", SKIP_DIRS, skip_hidden=True, untracked=True):
@@ -103,7 +104,9 @@ def collect(roots):
                 continue
             try:
                 tree = etree.parse(path)
-            except (etree.XMLSyntaxError, OSError):
+            except (etree.XMLSyntaxError, OSError) as error:
+                if problems is not None:
+                    problems.append(f"{os.path.relpath(path, root)}: cannot be parsed or read ({type(error).__name__}): its view edits were not checked")
                 continue
             rel = os.path.relpath(path, root)
             for view_id, parent, edits in _views(tree, module):
@@ -150,7 +153,9 @@ def check_conflicts(by_parent):
 
 
 def check_view_xpath_conflicts(roots):
-    return check_conflicts(collect(roots))
+    problems = []
+    by_parent = collect(roots, problems)
+    return problems + check_conflicts(by_parent)
 
 
 if __name__ == "__main__":

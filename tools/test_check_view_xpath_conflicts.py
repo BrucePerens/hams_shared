@@ -81,6 +81,11 @@ class ViewXpathConflictTests(unittest.TestCase):
         found, _ = self.scan(self.modules(a=view(), b=view(id="r", body=record)))
         self.assertTrue(any(line.startswith("(a)") for line in found), found)
 
+    def test_a_view_file_that_does_not_parse_is_reported(self):
+        found, _ = self.scan(self.modules(ham_base=view(), broken="<odoo><template>"))
+        self.assertEqual(len(found), 1, found)
+        self.assertIn("cannot be parsed", found[0])
+
     def test_command_line_exit_codes(self):
         with tempfile.TemporaryDirectory() as root:
             for name in ("a", "b"):
