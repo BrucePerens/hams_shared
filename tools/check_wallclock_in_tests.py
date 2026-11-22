@@ -364,7 +364,7 @@ def read_baseline(path=BASELINE_PATH):
     return {}
 
 
-def scan(roots):
+def scan(roots, problems=None):
     """{display_path: [line, ...]} for every test file with at least one finding, before allowlist/baseline."""
     results = {}
     scanned = 0
@@ -382,7 +382,9 @@ def scan(roots):
             try:
                 with open(path, encoding="utf-8") as f:
                     source = f.read()
-            except (OSError, UnicodeDecodeError):
+            except (OSError, UnicodeDecodeError) as error:
+                if problems is not None:
+                    problems.append(f"{prefix}/{rel}: cannot read ({type(error).__name__}); the file was not checked")
                 continue
             scanned += 1
             if kind == "py":
@@ -409,7 +411,10 @@ def main():
             repo_root = os.path.dirname(repo_root)
         if repo_root not in roots:
             roots.append(repo_root)
-    results, scanned = scan(roots)
+    problems = []
+    results, scanned = scan(roots, problems)
+    for problem in problems:
+        print(f"❌ {problem}")
     check_target.require_scanned(scanned, ", ".join(roots), "check_wallclock_in_tests", "test files")
     allowed = read_allowlist()
     results = {p: v for p, v in results.items() if p not in allowed}
@@ -417,7 +422,7 @@ def main():
         print(json.dumps({p: len(v) for p, v in sorted(results.items())}, indent=1))
         return
     baseline = read_baseline()
-    failed = False
+    failed = bool(problems)
     for path, lines in sorted(results.items()):
         if len(lines) > baseline.get(path, 0):
             failed = True
