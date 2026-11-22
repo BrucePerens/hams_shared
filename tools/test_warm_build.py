@@ -17,7 +17,7 @@ import warm_build  # noqa: E402
 
 class Base(unittest.TestCase):
     def setUp(self):
-        self.parent = tempfile.mkdtemp()
+        self.parent = tempfile.mkdtemp(dir="/dev/shm" if os.access("/dev/shm", os.W_OK) else None)  # the RAM file system the lint cache uses
         self.addCleanup(shutil.rmtree, self.parent, True)
         self.base = os.path.join(self.parent, "hams-lint-cargo")
         os.makedirs(self.base)
@@ -49,6 +49,15 @@ class StackTests(Base):
         self.build("echo two > $M/t/c", promote=True)
         self.assertEqual(len(self.layers()), 2)
         self.assertEqual(self.build("ls $M/t", promote=False).split(), ["a", "c"])
+
+    def test_a_populated_directory_of_a_lower_layer_can_be_removed(self):
+        layer = os.path.join(self.base, "warm-k-1-1")  # made with plain file calls, as a merged (flattened) layer is
+        os.makedirs(os.path.join(layer, "d", "sub"))
+        for name in ("a", os.path.join("sub", "b")):
+            open(os.path.join(layer, "d", name), "w").close()
+        warm_build.publish(self.base, "k", ["warm-k-1-1"])
+        out = self.build("rm -r $M/d; mkdir -p $M/d/new; echo 3 > $M/d/new/c; find $M/d -type f", promote=False)
+        self.assertEqual(out.split("/")[-2:], ["new", "c\n"])
 
     def test_a_run_that_is_not_main_is_never_the_base_even_with_no_stack(self):
         self.build("echo x > $M/f", promote=False)

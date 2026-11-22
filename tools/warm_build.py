@@ -38,7 +38,7 @@ WARM_MAX_LAYERS = 8
 WARM_MOUNT_FAILED = 125
 WARM_DRAIN_WAIT = 60.0
 DRAIN_STALE_SECONDS = 600
-_MOUNT_SCRIPT = 'mount -t overlay overlay -o "lowerdir=$1,upperdir=$2,workdir=$3" "$4" || exit %d; shift 4; exec "$@"' % WARM_MOUNT_FAILED
+_MOUNT_SCRIPT = 'mount -t overlay overlay -o "lowerdir=$1,upperdir=$2,workdir=$3,userxattr" "$4" || exit %d; shift 4; exec "$@"' % WARM_MOUNT_FAILED
 
 
 def _layer_prefix(key):
