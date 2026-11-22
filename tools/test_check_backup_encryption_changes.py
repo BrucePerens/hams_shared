@@ -218,5 +218,18 @@ class RepoTests(unittest.TestCase):
         self.assertIn("cipher", done.stdout)
 
 
+class UnreadableDiffTests(unittest.TestCase):
+    def test_a_diff_that_cannot_be_read_is_a_problem_not_a_pass(self):
+        def fake(repo, *args):
+            return (0, "abc123def456\n") if args[0] == "merge-base" else (127, "")
+
+        original = chk.run_git
+        chk.run_git = fake
+        self.addCleanup(setattr, chk, "run_git", original)
+        problems = chk.check_repo("/x")
+        self.assertEqual(len(problems), 1)
+        self.assertIn("could not be read", problems[0])
+
+
 if __name__ == "__main__":
     unittest.main()
