@@ -47,7 +47,7 @@ def parse_dpkg_status(text: str) -> set[str]:
     names = set()
     for block in text.strip().split("\n\n"):
         fields = dict(line.split(": ", 1) for line in block.splitlines() if ": " in line and not line.startswith(" "))
-        if fields.get("Status", "").endswith("installed") and "Package" in fields:
+        if fields.get("Status", "").split()[-1:] == ["installed"] and "Package" in fields:
             names.add(fields["Package"])
     return names
 
