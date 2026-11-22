@@ -434,6 +434,25 @@ async function foo(a, b) { // trailing
         self.assertNotIn("gg", cn.anchored_texts(src, "javascript")["t:x"])
 
 
+class JavaScriptRestrictedProductionTests(unittest.TestCase):
+    """`return` NEWLINE value is `return;` then a dead statement (automatic semicolon insertion), not `return value`."""
+
+    def h(self, body):
+        return anchor_hash("javascript", "// [@ANCHOR: t:x]\nfunction foo(a) {\n" + body + "}\n")
+
+    def test_a_line_break_after_return_changes_the_hash(self):
+        self.assertNotEqual(self.h("  return a;\n"), self.h("  return\n  a;\n"))
+        self.assertNotEqual(self.h("  if (a) { return a; }\n"), self.h("  if (a) { return\n a; }\n"))
+        self.assertNotEqual(self.h("  for (;;) { break a; }\n"), self.h("  for (;;) { break\n a; }\n"))
+
+    def test_an_explicit_semicolon_is_the_same_as_the_inserted_one(self):
+        self.assertEqual(self.h("  return\n  a;\n"), self.h("  return;\n  a;\n"))
+
+    def test_formatting_that_keeps_the_value_on_the_line_is_unchanged(self):
+        self.assertEqual(self.h("  return a;\n"), self.h("  return a\n"))
+        self.assertEqual(self.h("  if (a) { return; }\n"), self.h("  if (a) { return\n }\n"))
+
+
 class XmlTests(LanguageCase, unittest.TestCase):
     language = "xml"
     BASE = '''<odoo>

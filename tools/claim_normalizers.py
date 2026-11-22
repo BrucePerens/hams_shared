@@ -679,6 +679,9 @@ def _drop_trailing_commas(toks, language):
     return out
 
 
+_JS_RESTRICTED = frozenset({"return", "break", "continue", "yield"})
+
+
 def _js_drop_semicolons(toks):
     """A `;` that automatic semicolon insertion would supply anyway (before `}`, at the end of the
     text, or at a line end whose next token cannot continue the statement) is formatting. A `;`
@@ -694,6 +697,10 @@ def _js_drop_semicolons(toks):
             nxt = toks[k + 1] if k + 1 < len(toks) else None
             if nxt is None or nxt.is_p("}", ";"):
                 continue
+            if out and out[-1].kind == "ident" and out[-1].text in _JS_RESTRICTED:
+                # `return;` followed by a statement on the next line is `return` with no value, never `return value`.
+                out.append(t)
+                continue
             continues = (
                 (nxt.kind == "punct" and nxt.text in _JS_CONT_START)
                 or nxt.kind in ("tpl", "tpl_head")
@@ -702,6 +709,14 @@ def _js_drop_semicolons(toks):
             if nxt.nl and not continues:
                 continue
         out.append(t)
+        nxt = toks[k + 1] if k + 1 < len(toks) else None
+        if (
+            t.kind == "ident" and t.text in _JS_RESTRICTED
+            and nxt is not None and nxt.nl and not nxt.is_p("}", ";")
+        ):
+            # A line break right after `return` (and the other restricted words) ends the statement by automatic semicolon
+            # insertion: `return` NEWLINE `a` is not `return a`. Make that semicolon a token so the two never hash alike.
+            out.append(Tok("punct", ";", t.end, t.end))
     return out
 
 
