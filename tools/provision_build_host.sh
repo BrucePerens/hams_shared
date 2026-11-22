@@ -149,7 +149,8 @@ do_apt() {
   sudo -n env DEBIAN_FRONTEND=noninteractive apt-get update -qq || say "apt-get update failed (continuing with the cached lists)"
   # shellcheck disable=SC2086
   # No package started here may start a service (pdns-server would try port 53): policy-rc.d refuses during the install.
-  local made_policy=0 rc=0 pol
+  local made_policy=0 rc=0 pol pdns_before=0
+  apt_installed pdns-server && pdns_before=1
   if [ ! -e /usr/sbin/policy-rc.d ]; then
     pol="$(mktemp)"; printf '#!/bin/sh\nexit 101\n' >"$pol"
     sudo -n install -m 0755 "$pol" /usr/sbin/policy-rc.d && made_policy=1
@@ -159,7 +160,8 @@ do_apt() {
   [ "$made_policy" = 1 ] && sudo -n rm -f /usr/sbin/policy-rc.d
   [ $rc -eq 0 ] || return 1
   local p; for p in $miss; do record apt-installed.txt "$p"; done
-  case " $miss " in *" pdns-backend-sqlite3 "*) apt_installed pdns-server && sudo -n systemctl disable --now pdns >/dev/null 2>&1; record apt-installed.txt pdns-server ;; esac
+  # pdns-server comes in as a dependency of the backend: it is this script's own (and undo's to remove) only when it was not there before.
+  case " $miss " in *" pdns-backend-sqlite3 "*) apt_installed pdns-server && sudo -n systemctl disable --now pdns >/dev/null 2>&1; [ "$pdns_before" = 1 ] || record apt-installed.txt pdns-server ;; esac
   case " $miss " in *" smartmontools "*) sudo -n systemctl disable --now smartmontools >/dev/null 2>&1 ;; esac  # the tests call smartctl; no S.M.A.R.T. daemon is wanted
   rm -rf "$HOME"/hams-lint-mirror/*/.mypy_cache 2>/dev/null
   return 0
@@ -471,12 +473,15 @@ do_undo() {
   say "undone: only what apply recorded in $STATE"
 }
 
-case "${1:-plan}" in
-  plan) do_plan ;;
-  apply) do_apply ;;
-  apply-user) do_apply_user ;;
-  verify) do_verify ;;
-  versions) do_versions ;;
-  undo) do_undo ;;
-  *) say "usage: $0 plan|apply|apply-user|verify|versions|undo"; exit 2 ;;
-esac
+# Sourcing the file (the tests do) defines the functions without running a mode.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  case "${1:-plan}" in
+    plan) do_plan ;;
+    apply) do_apply ;;
+    apply-user) do_apply_user ;;
+    verify) do_verify ;;
+    versions) do_versions ;;
+    undo) do_undo ;;
+    *) say "usage: $0 plan|apply|apply-user|verify|versions|undo"; exit 2 ;;
+  esac
+fi
