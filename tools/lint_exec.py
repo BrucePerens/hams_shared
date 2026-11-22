@@ -142,6 +142,8 @@ class Step:
     gated       a step with no argv (`static_output`, always a failure) that `--changed` runs only
                 when one of its inputs changed, instead of always: a missing toolchain fails the
                 step only when there is something for it to check.
+    scoped      a checker-tooling change (`run_all`) does not force this step: it runs only when one of its own inputs changed (list the
+                checker's own files among `roots` when they matter). For a slow step whose tooling is not shared with the others.
     needs       names of steps that must have ENDED (passed or failed: a failure never stops
                 other steps) before this one starts; a name not in the run is ignored.
     """
@@ -160,6 +162,7 @@ class Step:
     cacheable: bool = True
     always: bool = False
     gated: bool = False
+    scoped: bool = False
     aliases: tuple = ()
     needs: tuple = ()  # names of steps that must have ended before this one starts (ignored when not in the run); see `execute`
 
@@ -677,7 +680,7 @@ def select_for_changed(steps, changed_paths, run_all):
     to_run = []
     skipped = []
     for step in steps:
-        if run_all or step.always or (step.argv is None and not step.gated):
+        if (run_all and not step.scoped) or step.always or (step.argv is None and not step.gated):
             to_run.append(step)
             continue
         if _touches(step, changed_paths):

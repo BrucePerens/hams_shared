@@ -703,6 +703,10 @@ def dependents_closure(changed_modules, module_dirs):
     return result
 
 
+# The checker files the relay structural step is made of: a change to one of them reruns it even though the step is `scoped`.
+RELAY_STEP_TOOLS = ("relay_structural.py", "rust_impact.py", "lint_cache.py", "lint_exec.py")
+
+
 def _collect_changed(base, repo_root, sibling_dir, tools_dir):
     """(set of changed absolute real paths in all three repos, whether the checker tooling
     itself changed)."""
@@ -2745,8 +2749,9 @@ def main():
         _add(
             "relay structural tests",
             [python_exec, os.path.join(dir_path, "tools", "relay_structural.py"), repo_root],
-            inputs=(tuple(relay_dirs), None),
+            inputs=(tuple(relay_dirs) + tuple(os.path.realpath(os.path.join(tools_dir, name)) for name in RELAY_STEP_TOOLS), None),
             cacheable=False,
+            scoped=True,  # a tooling change elsewhere in tools/ does not rerun the cargo tests: the relay's own inputs and these tool files do
         )
 
     # 51c. console sources -- the build-script validation of daemons/shack_console (check_console_sources.py), without a build of the crate. Round 112's
