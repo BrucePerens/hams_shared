@@ -44,7 +44,7 @@ free-space floor of a RAM directory is the RAM minimum (`HAMS_RAM_MIN_FREE_GB`, 
 lint build: least recently used whole directories go first, never one a live run holds (its `<dir>.lock`) nor the one about to be built. The 37 GB seen that day was
 four `relay-export-test` copies (4.5 GB each, all `debug/deps` and `build/`; incremental was already off), four `hams_com` slots (3.5 GB) and three `hams_open` (up to 3.7 GB);
 in RAM the relay export test now uses one directory for every slot (its lock already makes builds take turns). Each lint run prints `lint cache: RAM cache X GB of Y GB budget`
-and `/dev/shm/hams-ram-usage.json` carries the same numbers (`ram_dirs.py usage`). Documentation of every function: `tools/README.md`, "Build and test scratch directories in RAM".
+and `/dev/shm/hams-ram-usage.json` carries the same numbers (`ram_dirs.py usage`). Documentation of every function: `tools/README.md`, "Build and test scratch directories in RAM". **Relay structural tests (2026-11-22):** they no longer take turns on one directory: each run mounts its own overlay (`warm_build.py`, `unshare -rm`) over a read-only warm stack of main's builds, its upper (a few GB at most) lives in this RAM cache and counts in the budget, and a passing run that built exactly main becomes the next layer; `HAMS_LINT_RELAY_OVERLAY=0` returns to the single shared directory. Details: `tools/README.md`, "Warm build directories for parallel runs".
 
 ### Budgets
 

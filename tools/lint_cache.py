@@ -791,7 +791,7 @@ def trace_marker(word):
 
 
 # [@ANCHOR: lint_cache:work_checkout]
-def work_checkout(repo_root, name, target, environ=None, log=None):
+def work_checkout(repo_root, name, target, environ=None, log=None, work=None):
     """A copy of the checkout `repo_root` at a FIXED path, `<cache>/hams-lint/work/<target directory name>/<name>`, or None when the
     build should run in `repo_root` itself. Cargo hashes absolute paths into the fingerprints and build-script outputs of the
     workspace crates, so a build run in a different worktree each time (every lint run is one) recompiles the relay and its path
@@ -804,12 +804,13 @@ def work_checkout(repo_root, name, target, environ=None, log=None):
     the copy fails (full disk): the caller then builds in place as before. `name` tells repositories apart (hams_com, hams_open).
     Full entry: tools/README.md."""
     environ = os.environ if environ is None else environ
-    if not target or environ.get("HAMS_LINT_NO_CACHE") == "1":
-        return None
-    target = os.path.abspath(target)
-    if not (in_ram(target, environ) or any(_under(target, os.path.abspath(base)) for base in cargo_bases(environ))):
-        return None
-    work = os.path.join(cache_root(environ), "hams-lint", "work", os.path.basename(target), name)
+    if work is None:  # `work` names the destination outright (a warm_build overlay's mount): no target lock or managed directory is involved
+        if not target or environ.get("HAMS_LINT_NO_CACHE") == "1":
+            return None
+        target = os.path.abspath(target)
+        if not (in_ram(target, environ) or any(_under(target, os.path.abspath(base)) for base in cargo_bases(environ))):
+            return None
+        work = os.path.join(cache_root(environ), "hams-lint", "work", os.path.basename(target), name)
     try:
         import tree_files
 

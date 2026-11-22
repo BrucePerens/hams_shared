@@ -18,15 +18,19 @@ quietly smaller. The build goes to `lint_cache.named_cargo_session("relay-struct
 It is built and run from a copy of the checkout at a fixed path (`lint_cache.work_checkout`): cargo hashes absolute paths into its fingerprints, so the relay was recompiled for every worktree.
 """
 
+import fcntl
 import hashlib
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 
 import lint_cache
 import lint_exec
 import rust_impact
+import warm_build
 
 RELAY_REL = os.path.join("daemons", "hams_local_relay")
 FEATURES = "radioctl,shared_receiver"
@@ -145,18 +149,98 @@ def main(argv):
     if _run(["cargo", "--version"], relay, None).returncode != 0:
         print("❌ cargo is not installed: the relay's structural tests cannot run")
         return 1
+    mount = next((arg.split("=", 1)[1] for arg in argv if arg.startswith("--overlay-mnt=")), None)
+    if mount:
+        return _run_in_overlay(argv, positional[0], mount)
     key = None if "--list" in argv or os.environ.get("HAMS_LINT_NO_CACHE") == "1" else input_key(positional[0])
     if key and os.path.exists(_stamp_path(key)):
         print("relay structural tests: reused the recorded pass for identical relay inputs and toolchain (key %s)" % key[:12])
         return 0
-    try:
-        code = _run_group(argv, positional[0], relay)
-        if code == 0 and key and "--list" not in argv:
-            _record_pass(key)
-        return code
-    except lint_cache.LockTimeout as error:
-        print("❌ relay structural tests did not run: %s\nAnother lint run holds the relay build directory; rerun when the box is quieter." % error)
-        return 1
+    code = None if "--list" in argv else _overlay_group(positional[0])
+    if code is None:
+        try:
+            code = _run_group(argv, positional[0], relay)
+        except lint_cache.LockTimeout as error:
+            print("❌ relay structural tests did not run: %s\nAnother lint run holds the relay build directory; rerun when the box is quieter." % error)
+            return 1
+    if code == 0 and key and "--list" not in argv:
+        _record_pass(key)
+    return code
+
+
+def _builds_main(repo_root):
+    """True when `repo_root` is a clean checkout of exactly `origin/main`: the one kind of run whose build directory is worth keeping as a warm layer."""
+    head = _run(["git", "rev-parse", "HEAD", "origin/main"], repo_root, None)
+    dirty = _run(["git", "status", "--porcelain"], repo_root, None)
+    shas = head.stdout.split()
+    return head.returncode == 0 and dirty.returncode == 0 and not dirty.stdout.strip() and len(shas) == 2 and shas[0] == shas[1]
+
+
+def _overlay_group(repo_root):
+    """Run the group in a `warm_build` overlay over the warm layers of main, parallel with other runs (no shared lock). The exit code, or None to use the
+    single shared directory as before (overlay off or not available, an explicit CARGO_TARGET_DIR, `HAMS_LINT_NO_CACHE=1`, or the mount failed)."""
+    environ = os.environ
+    if environ.get("CARGO_TARGET_DIR") or environ.get("HAMS_LINT_NO_CACHE") == "1" or environ.get("HAMS_LINT_RELAY_OVERLAY") == "0":
+        return None
+    base = lint_cache.cargo_base(environ)
+    if environ.get("HAMS_LINT_RELAY_OVERLAY") != "1" and not lint_cache.in_ram(base, environ):
+        return None
+    os.makedirs(base, exist_ok=True)
+    if lint_cache.ram_dirs and lint_cache.in_ram(base, environ):
+        lint_cache.ram_dirs.prune_lint_cache(base, environ=environ)
+    if not warm_build.available(base, environ):
+        return None
+    key = "relay" + hashlib.sha256(("%s|%s|%s" % (lint_exec.repo_name(repo_root), lint_cache.toolchain_id(environ), FEATURES)).encode()).hexdigest()[:12]
+    promote = _builds_main(repo_root)
+    if not promote and not warm_build.current_stack(base, key):
+        _bootstrap_base(base, key, repo_root, environ)
+    return _overlay_run(base, key, repo_root, environ, promote)
+
+
+def _overlay_run(base, key, repo_root, environ, promote):
+    with warm_build.Run(base, key, promote) as run:
+        done = subprocess.run(run.argv([sys.executable, os.path.abspath(__file__), repo_root, "--overlay-mnt=" + run.mount]), env=environ)
+        if done.returncode == warm_build.WARM_MOUNT_FAILED:
+            return None
+        run.passed = done.returncode == 0
+        return done.returncode
+
+
+def _bootstrap_base(base, key, repo_root, environ):
+    """No warm base exists and this run is not main: build the base from `origin/main` first (a detached worktree of it, beside the sibling repositories of
+    `repo_root`), under one exclusive lock so that runs arriving together build it once, and never from this run's own tree. A failure leaves no base and the run goes on cold."""
+    sha = _run(["git", "rev-parse", "--verify", "origin/main"], repo_root, None)
+    if sha.returncode != 0:
+        return
+    with open(os.path.join(base, key + ".bootstrap.lock"), "a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if warm_build.current_stack(base, key):
+            return  # another run built it while this one waited
+        parent = os.path.dirname(os.path.abspath(repo_root))
+        scratch = tempfile.mkdtemp(prefix="hams-relay-base-", dir=os.path.dirname(os.path.abspath(base)) if lint_cache.in_ram(base, environ) else None)
+        main_root = os.path.join(scratch, os.path.basename(os.path.abspath(repo_root)))
+        try:
+            if _run(["git", "worktree", "add", "--detach", main_root, sha.stdout.strip()], repo_root, None).returncode != 0:
+                return
+            for name in os.listdir(parent):  # the sibling repositories the tests reach (hams_open, hams_shared): the same links as the checkout has
+                link = os.path.join(scratch, name)
+                if not os.path.exists(link) and name != os.path.basename(os.path.abspath(repo_root)):
+                    os.symlink(os.path.join(parent, name), link)
+            print("relay structural tests: no warm base yet: building it from origin/main (%s)" % sha.stdout.strip()[:12])
+            _overlay_run(base, key, main_root, environ, True)
+        finally:
+            _run(["git", "worktree", "remove", "--force", main_root], repo_root, None)
+            shutil.rmtree(scratch, ignore_errors=True)
+
+
+def _run_in_overlay(argv, repo_root, mount):
+    """The group inside the overlay mounted at `mount`: the checkout is synced to `<mount>/work`, cargo builds in `<mount>/target` (made first: cargo creates it by
+    renaming a temporary directory, which an overlay refuses)."""
+    os.makedirs(os.path.join(mount, "target"), exist_ok=True)
+    env = dict(os.environ, CARGO_INCREMENTAL="0", CARGO_TARGET_DIR=os.path.join(mount, "target"))
+    work = lint_cache.work_checkout(repo_root, lint_exec.repo_name(repo_root) or "checkout", None, log=print, work=os.path.join(mount, "work"))
+    relay = os.path.join(work or repo_root, RELAY_REL)
+    return _build_and_test(argv, repo_root, relay, env, work)
 
 
 def _record_pass(key):
@@ -179,21 +263,26 @@ def _run_group(argv, repo_root, relay):
         work = lint_cache.work_checkout(repo_root, lint_exec.repo_name(repo_root) or "checkout", target, log=print)
         if work:
             relay = os.path.join(work, RELAY_REL)
-        shown = (lambda text: text.replace(work, os.path.abspath(repo_root))) if work else (lambda text: text)
-        listing = _run(cargo_command(filters=(), list_only=True), relay, env)  # every test of the binary: the filters are checked against it
-        if listing.returncode != 0:
-            print("❌ the relay's tests did not build:\n" + shown(listing.stdout + listing.stderr))
-            return 1
-        tests = listed_tests(listing.stdout)
-        if "--list" in argv:
-            print("\n".join(name for name in tests if any(pattern in name for pattern in STRUCTURAL_FILTERS)))
-            return 0
-        missing = unmatched_filters(tests)
-        if missing:
-            print("❌ relay structural tests: these filters match no test, so the group shrank (a renamed or deleted module?): " + ", ".join(missing)
-                  + "\nFix STRUCTURAL_FILTERS in tools/relay_structural.py.")
-            return 1
-        done = _run(cargo_command(), relay, env)
+        return _build_and_test(argv, repo_root, relay, env, work)
+
+
+def _build_and_test(argv, repo_root, relay, env, work):
+    """List the relay's tests, check the filters against them and run the group with `env`; `work` is the synced copy the build runs in (None: the checkout itself)."""
+    shown = (lambda text: text.replace(work, os.path.abspath(repo_root))) if work else (lambda text: text)
+    listing = _run(cargo_command(filters=(), list_only=True), relay, env)  # every test of the binary: the filters are checked against it
+    if listing.returncode != 0:
+        print("❌ the relay's tests did not build:\n" + shown(listing.stdout + listing.stderr))
+        return 1
+    tests = listed_tests(listing.stdout)
+    if "--list" in argv:
+        print("\n".join(name for name in tests if any(pattern in name for pattern in STRUCTURAL_FILTERS)))
+        return 0
+    missing = unmatched_filters(tests)
+    if missing:
+        print("❌ relay structural tests: these filters match no test, so the group shrank (a renamed or deleted module?): " + ", ".join(missing)
+              + "\nFix STRUCTURAL_FILTERS in tools/relay_structural.py.")
+        return 1
+    done = _run(cargo_command(), relay, env)
     chosen = [name for name in tests if any(pattern in name for pattern in STRUCTURAL_FILTERS)]
     if done.returncode != 0:
         print("❌ relay structural tests failed:\n" + shown(done.stdout[-12000:] + done.stderr[-4000:]))

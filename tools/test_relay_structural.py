@@ -98,6 +98,110 @@ class ReuseTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
 
 
+FAKE_CARGO = """#!/bin/sh
+case "$1" in
+  --version) echo cargo-fake; exit 0;;
+esac
+echo "$@" >> "$CARGO_TARGET_DIR/log"
+if echo "$@" | grep -q -- --list; then
+cat <<'EOT'
+%s
+EOT
+else
+  echo "test result: ok. 10 passed; 0 failed"
+fi
+"""
+
+
+class OverlayTests(unittest.TestCase):
+    """The group run through a warm_build overlay with a fake `cargo` that logs its calls into its target directory."""
+
+    def setUp(self):
+        import warm_build
+
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.cache = os.path.join(self.tmp, "cache")
+        os.makedirs(self.cache)
+        if not self._probe(warm_build):
+            self.skipTest("unprivileged overlay mounts are not available here")
+        self.repo = os.path.join(self.tmp, "repo")
+        os.makedirs(os.path.join(self.repo, rs.RELAY_REL, "src"))
+        with open(os.path.join(self.repo, rs.RELAY_REL, "Cargo.toml"), "w") as handle:
+            handle.write("[package]\nname='hams_local_relay'\nversion='0.1.0'\n")
+        with open(os.path.join(self.repo, rs.RELAY_REL, "src", "main.rs"), "w") as handle:
+            handle.write("fn main() {}\n")
+        self.git("init", "-q")
+        self.git("add", ".")
+        self.git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x")
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        self.bin = os.path.join(self.tmp, "bin")
+        os.makedirs(self.bin)
+        with open(os.path.join(self.bin, "cargo"), "w") as handle:
+            handle.write(FAKE_CARGO % LISTING.strip())
+        os.chmod(os.path.join(self.bin, "cargo"), 0o755)
+        self.env = dict(os.environ, XDG_CACHE_HOME=self.cache, HAMS_LINT_RELAY_OVERLAY="1", PATH=self.bin + os.pathsep + os.environ["PATH"])
+        self.base = os.path.join(self.cache, "hams-lint-cargo")
+
+    def _probe(self, warm_build):
+        os.makedirs(os.path.join(self.cache, "hams-lint-cargo"), exist_ok=True)
+        return warm_build.available(os.path.join(self.cache, "hams-lint-cargo"))
+
+    def git(self, *args):
+        subprocess.run(["git", "-C", self.repo, *args], check=True, capture_output=True)
+
+    def run_step(self):
+        return subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "relay_structural.py"), self.repo],
+                              env=self.env, capture_output=True, text=True)
+
+    def stack(self):
+        names = os.listdir(self.base) if os.path.isdir(self.base) else []
+        return [n for n in names if n.startswith("warm-relay") and not n.endswith((".lock", "-current"))]
+
+    def test_main_runs_stack_up_in_the_overlay_and_a_pr_run_is_discarded(self):
+        first = self.run_step()
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        self.assertIn("passed", first.stdout)
+        self.assertEqual(len(self.stack()), 1)
+        with open(os.path.join(self.repo, rs.RELAY_REL, "src", "main.rs"), "a") as handle:
+            handle.write("// main moved\n")  # a new main commit (an identical tree would reuse the recorded pass instead)
+        self.git("commit", "-qam", "next", "--author=t <t@t>")
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        second = self.run_step()  # exactly origin/main: promoted too
+        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+        layers = self.stack()
+        self.assertEqual(len(layers), 2)
+        with open(os.path.join(self.repo, rs.RELAY_REL, "src", "main.rs"), "a") as handle:
+            handle.write("// a pull request edit\n")
+        third = self.run_step()
+        self.assertEqual(third.returncode, 0, third.stdout + third.stderr)
+        self.assertEqual(sorted(self.stack()), sorted(layers))  # not main: its upper was thrown away
+
+    def test_with_no_base_a_pr_run_builds_the_base_from_origin_main_not_from_itself(self):
+        main_rs = os.path.join(self.repo, rs.RELAY_REL, "src", "main.rs")
+        with open(main_rs, "a") as handle:
+            handle.write("// a pull request edit\n")
+        done = self.run_step()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("building it from origin/main", done.stdout)
+        layers = self.stack()
+        self.assertEqual(len(layers), 1)
+        built = os.path.join(self.base, layers[0], "work", rs.RELAY_REL, "src", "main.rs")
+        self.assertTrue(os.path.exists(built))
+        self.assertNotIn("pull request edit", open(built).read())
+        self.assertEqual(self.git_worktrees(), 1)  # the temporary main checkout is gone again
+
+    def git_worktrees(self):
+        out = subprocess.run(["git", "-C", self.repo, "worktree", "list"], capture_output=True, text=True).stdout
+        return len(out.strip().splitlines())
+
+    def test_the_overlay_can_be_turned_off(self):
+        self.env["HAMS_LINT_RELAY_OVERLAY"] = "0"
+        done = self.run_step()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertFalse([n for n in os.listdir(self.base) if n.startswith("warm-")] if os.path.isdir(self.base) else [])
+
+
 class PureTests(unittest.TestCase):
     def test_the_command_names_the_features_the_binary_and_every_filter(self):
         command = rs.cargo_command()
