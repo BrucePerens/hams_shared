@@ -967,8 +967,8 @@ is not slot-scoped and `tmpdir` is in RAM. A scoped run's globs and kill pattern
 Bruce, 2026-11-08: "we aren't limited by those less powerful machines." The dev box (32 cores, 125 GB) runs the lint itself, every step
 including `check_cargo_fmt`, `check_cargo_clippy` and `check_cargo_deny`, with several heavy runs side by side. Its toolchain is the
 repositories' pinned Rust (rustup, user level, `provision_build_host.sh apply-user`: rustfmt, clippy, the `wasm32-unknown-unknown` target).
-`lint_machines.json` gives it `"lint_slots": 4`: four runs at once, one lock file per slot (`lint_lock.py`), each run at `nice` 10 with its own
-TMPDIR (slots above 1: `<TMPDIR>/s<K>`) and its own warm Cargo target directory (`-sK`). A fifth run takes one of the **burst slots** (`lint_burst_slots`: 8) while the processors are mostly idle (`burst_headroom`, one new burst slot per 20 s) and otherwise queues in the same FIFO. The other machines
+`lint_machines.json` gives it `"lint_slots": 6`: six runs at once, one lock file per slot (`lint_lock.py`), each run at `nice` 10 with its own
+TMPDIR (slots above 1: `<TMPDIR>/s<K>`) and its own warm Cargo target directory (`-sK`). A seventh run takes one of the **burst slots** (`lint_burst_slots`: 8) while the processors are mostly idle (`burst_headroom`, one new burst slot per 20 s) and otherwise queues in the same FIFO. The other machines
 keep one slot. `--remote auto` no longer spreads steps to idle machines: another machine takes a **whole** run only as overflow, when every slot
 is taken or a run waits (a high load alone does not send it away: the run waits at the load gate, whose limit is 1.5 per core here), and a run whose overflow machine is claimed or unreachable simply waits for a
 slot here: it always ends with a real result and a stamp.
@@ -1040,7 +1040,7 @@ default). Argument `environ`: dict or `None` for `os.environ`. No side effects. 
 
 ### `[@ANCHOR: lint_lock:jobs_per_slot]` `jobs_per_slot(cpu_count, slots)`
 
-Purpose: the default `-j` of a lint run. A lone run starts half the CPUs of parallel steps; with several slots each run takes its share of three quarters of the CPUs (the dev box: 32 threads, 4 slots, 6 each; 4 until 2026-11-08, when a hams_shared run was measured
+Purpose: the default `-j` of a lint run. A lone run starts half the CPUs of parallel steps; with several slots each run takes its share of three quarters of the CPUs (the dev box: 32 threads, 6 slots, 4 each; 6 with 4 slots until 2026-11-21; 4 until 2026-11-08, when a hams_shared run was measured
 at 445 s wall against a 225 s longest step because its fifth heavy step waited for a free job). The runs are niced and start only when the processors are not saturated. Arguments: `cpu_count` int, `slots` int. Returns an int, at least 2 with several slots, at least 1 always.
 `$HAMS_LINT_JOBS` and `-j` still override. Pure. Tests: `test_jobs_are_shared_out_so_all_slots_together_stay_at_three_quarters_of_the_cpus` in `test_lint_lock.py`.
 

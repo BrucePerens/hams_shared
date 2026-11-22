@@ -4,12 +4,12 @@
     "devbox": {
       "local": true,
       "os": "linux",
-      "lint_slots": 4,
+      "lint_slots": 6,
       "lint_burst_slots": 8,
       "lint_load_ratio": 1.5,
       "nice": 10,
       "max_load_ratio": 1.0,
-      "note": "This development machine (32 cores, 125 GB): the PRIMARY lint runner (Bruce, 2026-11-08), with the full toolchain (rustup 1.98.1 with rustfmt and clippy, cargo-deny, the pytest stack). `lint_slots` heavy lint runs go at once (tools/lint_lock.py), each in its own Cargo target directory and TMPDIR at nice 10; the other machines take a whole run only as overflow when every slot is busy or the load is above the limit. All other machines are optional."
+      "note": "This development machine (32 cores, 125 GB): the PRIMARY lint runner (Bruce, 2026-11-08), with the full toolchain (rustup 1.98.1 with rustfmt and clippy, cargo-deny, the pytest stack). `lint_slots` heavy lint runs go at once (6 since 2026-11-21: the merge queue waited with the load near 28 on 32 cores; burst 8 and the load ratios still throttle under load; each run's default -j is 4) (tools/lint_lock.py), each in its own Cargo target directory and TMPDIR at nice 10; the other machines take a whole run only as overflow when every slot is busy or the load is above the limit. All other machines are optional."
     },
     "mac1-vm": {
       "ssh": {
