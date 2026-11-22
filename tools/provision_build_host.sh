@@ -130,7 +130,8 @@ do_plan() {
   local miss; miss="$(missing_apt | tr '\n' ' ')"
   say "apt packages to install (sudo -n): ${miss:-none}"
   if rustup_has_toolchain; then say "rust: toolchain $TOOLCHAIN already installed"; else say "rust: rustup + toolchain $TOOLCHAIN with rustfmt and clippy (user level)"; fi
-  local pm; pm="$(pip_missing | tr '\n' ' ')"
+  local pm
+  if pm="$(pip_missing)"; then pm="$(printf '%s' "$pm" | tr '\n' ' ')"; else pm="UNKNOWN (cannot read the pins in $REQS)"; fi
   say "python packages (user level, hash-pinned): ${pm:-none}"
   has_chrome && say "browser: $(chrome_bin) already present" || say "browser: chromium (apt)"
   apt_installed "postgresql-$PG_VERSION" && say "postgresql: $PG_VERSION already installed" || say "postgresql: $PG_VERSION from apt.postgresql.org (key fingerprint pinned)"
@@ -194,7 +195,9 @@ do_rust() {
 }
 
 do_pip() {
-  local pm; pm="$(pip_missing)"
+  local pm
+  # An unreadable requirements file makes pip_missing fail with nothing on stdout: that is not "nothing missing".
+  pm="$(pip_missing)" || { say "python: cannot read the pins in $REQS"; return 1; }
   [ -z "$pm" ] && { say "python: nothing missing"; return 0; }
   say "python: installing $(echo "$pm" | tr '\n' ' ')"
   # --ignore-installed: a copy already on the system (even a broken or overlapping one) must not make pip skip the pinned wheel; --no-deps: the file pins the whole closure.
