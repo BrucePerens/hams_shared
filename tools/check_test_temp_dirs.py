@@ -92,14 +92,17 @@ def check_text(text, whole_file_is_test):
     return found
 
 
-def scan(roots):
-    """{"<path relative to its repository>": [line, ...]} for every file with findings."""
+def scan(roots, unread=None):
+    """{"<path relative to its repository>": [line, ...]} for every file with findings. A file that cannot be read is
+    described in the list `unread` when the caller passes one: its tests were not checked."""
     out = {}
     for root in roots:
         for path in find_rust_files(root):
             try:
                 text = open(path, encoding="utf-8").read()
-            except (OSError, UnicodeDecodeError):
+            except (OSError, UnicodeDecodeError) as error:
+                if unread is not None:
+                    unread.append(f"{os.path.relpath(path, root)} ({type(error).__name__})")
                 continue
             hits = check_text(text, is_test_file(os.path.relpath(path, root)))
             if hits:
@@ -124,7 +127,11 @@ def main(argv=None):
     check_target.require_scanned(
         sum(len(list(find_rust_files(r))) for r in roots), ", ".join(roots), "check_test_temp_dirs", "Rust files"
     )
-    found = scan(roots)
+    unread = []
+    found = scan(roots, unread)
+    if unread:
+        print("❌ Rust files that could not be read (their tests were not checked): " + ", ".join(unread))
+        return 1
     if args.generate_baseline:
         with open(args.baseline, "w", encoding="utf-8") as f:
             json.dump({k: len(v) for k, v in sorted(found.items())}, f, indent=1, sort_keys=True)
