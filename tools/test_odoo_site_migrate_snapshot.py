@@ -245,6 +245,13 @@ class SnapshotSourceTests(unittest.TestCase):
         self.assertEqual(self.src.call("website.page", "search", [[("url", "=", "/about")]]), [2])
         self.assertEqual([r["id"] for r in self.read("website.page", order="id desc", limit=2)], [3, 2])
 
+    def test_an_archived_row_stays_hidden_when_a_value_merely_contains_the_word_active(self):
+        self.db.run("INSERT INTO website (id, name, domain, active) VALUES (2,'inactive','https://old.example',0)")
+        # no active_test context: Odoo hides the archived website unless the domain filters on the `active` field itself
+        self.assertEqual(self.src.call("website", "search", [[("name", "=", "inactive")]]), [])
+        self.assertEqual(self.src.call("website", "search", [[("active", "=", False)]]), [2])
+        self.assertEqual(self.src.call("website", "search", [["|", ("name", "=", "x"), ("active", "=", False)]]), [2])
+
     def test_negation_keeps_empty_values_like_odoo(self):
         # attachments 1 and 2 have no url at all: Odoo's `!=` and `!` keep them, plain SQL would drop them
         self.assertEqual([r["id"] for r in self.read("ir.attachment", [("url", "!=", "/web/static/x.png")])], [1, 2])
