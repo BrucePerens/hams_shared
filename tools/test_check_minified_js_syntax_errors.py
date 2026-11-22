@@ -93,6 +93,24 @@ class CollectMinifiedJsAssetsTests(unittest.TestCase):
         self.assertEqual(result, {})
 
 
+class UnparsableManifestTests(unittest.TestCase):
+    """A manifest that does not parse leaves its bundled assets unchecked: that must fail the run."""
+
+    def test_the_collector_reports_the_manifest_and_main_fails(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        _write(os.path.join(tmp, "mod_a", "__manifest__.py"), "{'assets': {'b': ['mod_a/static/a.js']}\n")
+        _write(os.path.join(tmp, "mod_b", "__manifest__.py"), "{'assets': {'b': ['mod_b/static/b.js']}}\n")
+        errors = []
+        result = chk.collect_minified_js_assets(tmp, errors)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("mod_b/static/b.js", result)
+        from unittest import mock
+        with mock.patch.object(sys, "argv", ["x", tmp]), self.assertRaises(SystemExit) as raised:
+            chk.main()
+        self.assertEqual(raised.exception.code, 1)
+
+
 class ResolveAssetPathTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
