@@ -231,6 +231,12 @@ class SchedulerTests(unittest.TestCase):
         with open(log) as handle:
             self.assertEqual(handle.read().split(), ["slowest", "quick", "needs_quick"])
 
+    def test_a_silent_step_makes_the_run_print_a_heartbeat_line(self):
+        out = io.StringIO()
+        with mock.patch.object(lint_exec, "HEARTBEAT_SECONDS", 0.2):
+            lint_exec.execute([lint_exec.Step("slow", [PY, "-c", "import time; time.sleep(1)"])], 1, out=out)
+        self.assertIn("[*] still running (1 steps left, e.g. slow)", out.getvalue())
+
     def test_locked_steps_never_overlap_with_more_workers_than_steps(self):
         tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, tmp, True)

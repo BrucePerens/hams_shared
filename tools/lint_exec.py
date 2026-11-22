@@ -824,6 +824,9 @@ class _Scheduler:
 
 
 ELASTIC_POLL_SECONDS = 10.0
+# A step can sit silent and CPU-idle for the half hour of its cargo-lock wait or a queued run; a parent that kills a run after 1800 s without
+# output or CPU (merge_pr.py) then killed "run_linters strict" on ~20 PRs (2026-11-21). The main thread says so every few minutes.
+HEARTBEAT_SECONDS = 300.0
 
 
 # [@ANCHOR: lint_exec:elastic_jobs]
@@ -1011,7 +1014,14 @@ def execute(steps, jobs, cache=None, fingerprints=None, out=None, durations=None
         for _ in range(extra):
             pool.submit(extra_worker)
         for _ in range(len(steps)):
-            index, result, key = finished.get()
+            while True:
+                try:
+                    index, result, key = finished.get(timeout=HEARTBEAT_SECONDS)
+                    break
+                except queue.Empty:
+                    waiting = [s.name for i, s in enumerate(steps) if results[i] is None]
+                    out.write("[*] still running (%d steps left, e.g. %s)\n" % (len(waiting), ", ".join(waiting[:3])))
+                    out.flush()
             if isinstance(result, BaseException):
                 raise result
             results[index] = result
