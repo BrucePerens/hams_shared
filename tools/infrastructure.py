@@ -1366,6 +1366,7 @@ ROTATED_KEY_RELOAD_POLICY = {
     "ham.dx.daemon.service": ("hams_config", "daemons/ham_dx_daemon/main.py: one client for the flusher, short call timeout."),
     "noaa-swpc-sync.service": ("hams_config", "daemons/noaa_swpc_sync/main.py."),
     "pdns.sync.service": ("hams_config", "daemons/pdns_sync/main.py (its PowerDNS key is a different credential, from pdns.env)."),
+    "member.cert.service": ("hams_config", "daemons/member_cert/main.py: one get_odoo_client() for the poll loop and the download handler."),
     "backup.worker.service": (
         "own_reload", "backup_management/daemon/main.py _reload_odoo_key(); the unit still loads backup_worker.env, which only seeds the "
                       "first key (hams_open #1204)."),
@@ -1613,6 +1614,12 @@ FAMILY_ACCOUNT_UNITS = {
     "pdns.sync.service": {
         "user": "hamsd_dns_sync",
         "environment_files": frozenset({"common.env", "pdns.env", "rabbitmq.env"}),
+        "no_state": True,
+    },
+    # member.cert shares pdns.sync's account and Odoo key: a second DNS-zone daemon of the same family, not a new credential.
+    "member.cert.service": {
+        "user": "hamsd_dns_sync",
+        "environment_files": frozenset({"common.env"}),
         "no_state": True,
     },
     # callbook.dns.export writes PowerDNS's own database directory, which belongs to `pdns`: `group_write` names the one path it may
@@ -4571,6 +4578,65 @@ WantedBy=multi-user.target
             "owner": "root:root",
             "mode": "644",
             "environments": ["prod", "test"],
+        },
+        {
+            "path": "/opt/hams/systemd/member.cert.service",
+            "external_fetch": "talks to Let's Encrypt's ACME API to issue a member's one-click certificate",
+            "opt_in": "needs read access to the Let's Encrypt account certbot registered under /var/lib/hams-acme/config and an nginx route for /api/v1/member_cert/; see docs/proposals/MEMBER_CERTIFICATES.md",
+            "content": """\
+[Unit]
+Description=Ham Radio Member Certificate Daemon (one-click Let's Encrypt certificate, nothing stored)
+After=network.target pdns.service
+
+[Service]
+# ADR-0070 OS-Level Daemon Restriction
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+# The pdns.sync account (hamsd_dns_sync): the same DNS-zone family and the same Odoo key. It makes each key and certificate in memory and writes no file, so the unit has no writable path.
+ProtectProc=invisible
+ProcSubset=pid
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+Type=simple
+User=hamsd_dns_sync
+Group=hamsd_dns_sync
+WorkingDirectory=/opt/hams/daemons/member_cert
+
+# daemons/member_cert/main.py reads the HAMS_ACME_* settings and MEMBER_CERT_* limits (defaults in code), reads certbot's ACME account under HAMS_ACME_CONFIG_DIR and reaches Odoo through hams_config (ODOO_URL, DB_NAME, the key file).
+EnvironmentFile=/opt/hams/etc/common.env
+Environment="ODOO_USER=dns_api_service_internal"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/dns_sync/dns_api_service_internal.key"
+Environment="PYTHONPATH=/opt/hams/daemons"
+
+# Execution via system Python
+ExecStart=/usr/bin/python3 /opt/hams/daemons/member_cert/main.py
+
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=member.cert
+
+[Install]
+WantedBy=multi-user.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
         },
         {
             "path": "/opt/hams/systemd/amsat.tle.sync.service",
