@@ -4686,6 +4686,10 @@ module must be fixed in the list. Pure. Tests: `PureTests`, `MainTests`.
 
 Purpose: the number of tests that passed. Returns the sum of the `N passed` of every `test result:` line of `cargo test` output, 0 when there is none. Pure. Tests: `PureTests`.
 
+### `[@ANCHOR: relay_structural:input_key]` `input_key(repo_root, environ=None)`
+
+Purpose: the key under which a passing run is recorded and reused. Returns the SHA-256 of the git index entries (mode, blob, path) of every watched directory plus `docs` and `daemons/relay_ca` (what the tests read outside the crate), of `rustc -vV`, of `STRUCTURAL_FILTERS`, `FEATURES` and this file; None (never reuse) when one of those directories has an uncommitted or untracked change, or git or rustc cannot be read. A pass is stored as `<cache>/hams-relay-structural/<key>`; the next run with the same key prints `reused the recorded pass` and exits 0 without a cargo run. A failure is never recorded; `HAMS_LINT_NO_CACHE=1` and `--list` never reuse. Tests: `ReuseTests`.
+
 The step's build goes to `lint_cache.named_cargo_session("relay-structural")`: one warm Cargo directory per lint slot (`-sK`), in RAM when `/dev/shm` has room, under the machine's disk budget, locked while it builds. Exit 0 and `relay structural tests: N tests of M filters
 passed` on success; 1 and the test output on failure, on a build failure, or on a shrunken group; 0 and a line saying so when the repository has no relay crate.
 
