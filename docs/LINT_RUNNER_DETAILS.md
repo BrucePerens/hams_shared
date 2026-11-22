@@ -46,7 +46,7 @@ agents who are not working on the lint machinery do not carry it in their contex
   `tools/README.md` "Boundary hazards").
   `tools/lint_step_inventory.py compare` proves a restructuring kept every test (`docs/LINT_STEP_ANALYSIS.md`).
 * **Remote execution** (`--remote auto|HOST|local`, `--where`; `tools/lint_remote.py`,
-  `tools/lint_machines.json`). `--remote auto` runs everything on the dev box and uses the other lint runners only as overflow (above);
+  `tools/lint_machines.json`). `--remote auto` runs everything on the dev box and uses the other lint runners only as overflow (above); `devbox_tools/merge_pr.py` passes `--remote auto` to both of its lint passes (it was `local` until 2026-11-22, so merges never overflowed);
   `--remote HOST` sends each heavy step that machine can run (>= 60 s; never a step that needs git history, the network, this
   checkout or this login session) there. Runners are probed over ssh (read-only: cores, load, which of python3, flake8, pytest, xdist, node,
   eslint, cargo with clippy and rustfmt, chrome, odoo exist). `--where` prints the routing plan and runs nothing. Machines (versions are recorded in the inventory):
