@@ -5601,7 +5601,7 @@ class SharedOdooAccountRatchetTests(unittest.TestCase):
     # The pinned final list. Deliberately a literal in the test as well as the map in infrastructure.py: a unit cannot join the
     # shared odoo account by editing one place. When a unit moves to its own account, delete it here in the same change.
     PINNED_ODOO_UNITS = (
-        "adif.ingress.service", "adif.processor.service", "backup.worker.service",
+        "backup.worker.service",
         "code.review.sweep.service", "credential.touch.timer.service", "event.ai.enrichment.service",
         "hams-exception-report@.service", "hams.daemon.keys.service", "hams.data.relay.service",
         "hams.relay.bridge.service", "pager-os-monitor.service", "stray.odoo.shell.detector.service",
@@ -5848,18 +5848,16 @@ class OdooUnitSecondTierTests(unittest.TestCase):
         "RestrictRealtime": ["true"], "RestrictSUIDSGID": ["true"], "LockPersonality": ["true"],
         "SystemCallArchitectures": ["native"],
     }
-    UNITS = ("adif.ingress.service", "adif.processor.service", "hams-exception-report@.service",
-             "stray.odoo.shell.detector.service")
+    UNITS = ("hams-exception-report@.service", "stray.odoo.shell.detector.service")
 
-    def test_the_four_units_carry_the_second_tier(self):
+    def test_the_two_units_carry_the_second_tier(self):
         for unit in self.UNITS:
             for directive, value in self.SECOND_TIER.items():
                 with self.subTest(unit=unit, directive=directive):
                     self.assertEqual(infra.systemd_unit_directive_values(infra.MANIFEST, unit, directive), value)
 
     def test_they_still_share_odoo_so_no_proc_hiding_or_umask(self):
-        # adif.* share hams_com 770 directories with Odoo (a narrower umask would lock Odoo out of their files), and the stray
-        # detector must see every odoo process (ps -eo).
+        # hams-exception-report@ shares Odoo's key file, and the stray detector must see every odoo process (ps -eo).
         for unit in self.UNITS:
             with self.subTest(unit=unit):
                 self.assertEqual(infra.systemd_unit_directive_values(infra.MANIFEST, unit, "User"), ["odoo"])
@@ -5872,6 +5870,48 @@ class OdooUnitSecondTierTests(unittest.TestCase):
                      "hams.relay.bridge.service"):
             with self.subTest(unit=unit):
                 self.assertEqual(infra.systemd_unit_directive_values(infra.MANIFEST, unit, "RestrictNamespaces"), [])
+
+
+class AdifPipelineAccountTests(unittest.TestCase):
+    """adif.ingress and adif.processor on one account, hamsd_adif (daemon OS isolation, family adif_pipeline): the three spool
+    directories were hams_com 770, shared with Odoo; they are now the account's, and Odoo reaches the upload spool through the group."""
+
+    UNITS = ("adif.ingress.service", "adif.processor.service")
+
+    def _values(self, unit, directive):
+        return infra.systemd_unit_directive_values(infra.MANIFEST, unit, directive)
+
+    def test_both_units_run_as_the_account_and_left_the_shared_odoo_list(self):
+        for unit in self.UNITS:
+            with self.subTest(unit=unit):
+                self.assertEqual((self._values(unit, "User"), self._values(unit, "Group")), (["hamsd_adif"], ["hamsd_adif"]))
+                self.assertEqual(infra.FAMILY_ACCOUNT_UNITS[unit]["user"], "hamsd_adif")
+                self.assertNotIn(unit, infra.SHARED_ODOO_ACCOUNT_UNITS)
+
+    def test_the_spool_directories_belong_to_the_account_and_only_the_upload_spool_is_open_to_odoo(self):
+        modes = {d["path"]: (d["owner"], d["provision_mode"]) for d in infra.MANIFEST["directories"]}
+        self.assertEqual(modes["/opt/hams/spool/adif_uploads"], ("hamsd_adif:hamsd_adif", "2770"))
+        self.assertEqual(modes["/opt/hams/spool/adif_queue"], ("hamsd_adif:hamsd_adif", "750"))
+        self.assertEqual(modes["/opt/hams/failed_input"], ("hamsd_adif:hamsd_adif", "750"))
+        self.assertEqual(modes["/opt/hams/etc/keys/adif"], ("odoo:hamsd_adif", "750"))
+
+    def test_the_writable_paths_are_the_spool_directories_and_nothing_wider(self):
+        self.assertEqual(self._values("adif.ingress.service", "ReadWritePaths"), ["/opt/hams/spool/adif_uploads"])
+        self.assertEqual(sorted(self._values("adif.processor.service", "ReadWritePaths")),
+                         ["/opt/hams/failed_input", "/opt/hams/spool/adif_queue"])
+
+    def test_each_unit_reads_its_own_key_from_the_family_directory_and_no_wide_environment_file(self):
+        keys = {
+            "adif.ingress.service": "/opt/hams/etc/keys/adif/logbook_api_service_internal.key",
+            "adif.processor.service": "/opt/hams/etc/keys/adif/logbook_sync_service_internal.key",
+        }
+        for unit, key in keys.items():
+            with self.subTest(unit=unit):
+                self.assertIn(f'"ODOO_KEY_FILE={key}"', self._values(unit, "Environment"))
+                loaded = {os.path.basename(v.lstrip("-")) for v in self._values(unit, "EnvironmentFile")}
+                self.assertEqual(loaded, {"common.env", "rabbitmq.env"})
+                self.assertEqual(self._values(unit, "UMask"), ["0027"])
+                self.assertEqual(self._values(unit, "ProtectProc"), ["invisible"])
 
 
 class SimulatedBandAccountTests(unittest.TestCase):
@@ -6094,7 +6134,9 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
                 with self.subTest(unit=unit, path=path):
                     entry = [d for d in infra.MANIFEST["directories"] if d["path"] == path][0]
                     self.assertEqual(entry["owner"], f"{rules['user']}:{rules['user']}")
-                    self.assertEqual(entry["provision_mode"], "755" if path in rules.get("public_dirs", []) else "750")
+                    # `odoo_writes`: Odoo (in the account's group) writes into it too: setgid and group-writable, never other-writable.
+                    expected_mode = "2770" if path in rules.get("odoo_writes", ()) else "755" if path in rules.get("public_dirs", []) else "750"
+                    self.assertEqual(entry["provision_mode"], expected_mode)
                     self.assertTrue(entry["recursive_owner"])
                     self.assertEqual(entry["environments"], ["prod", "test"])
 
