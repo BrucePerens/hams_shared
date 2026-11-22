@@ -258,6 +258,18 @@ class MainTests(unittest.TestCase):
         code, _ = self._run({}, allowlist={"repo/tests/test_a.py"})
         self.assertEqual(code, 0)
 
+    def test_an_unreadable_test_file_fails_the_run(self):
+        locked = os.path.join(self.root, "tests", "test_locked.py")
+        with open(locked, "w", encoding="utf-8") as f:
+            f.write("def test_b():\n    pass\n")
+        os.chmod(locked, 0)
+        try:
+            code, out = self._run({"repo/tests/test_a.py": 1})
+        finally:
+            os.chmod(locked, 0o600)
+        self.assertEqual(code, 1)
+        self.assertIn("test_locked.py: cannot read", out)
+
     def test_real_allowlist_file_parses(self):
         self.assertIsInstance(chk.read_allowlist(), set)
         self.assertIsInstance(chk.read_baseline(), dict)
