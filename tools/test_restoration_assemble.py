@@ -120,3 +120,8 @@ def test_enablement_plan_keeps_restored_links_and_enables_the_rest(tmp_path):
 
 # Class anchors (ADR 0113) exercised by the tests above.
 # Tests [@ANCHOR: assemble:assemble_chroot_class]
+
+
+def test_parse_dpkg_status_ignores_a_purged_package_listed_as_not_installed():
+    text = STATUS + "\nPackage: purged\nStatus: purge ok not-installed\n"
+    assert asm.parse_dpkg_status(text) == {"nginx"}
