@@ -2998,6 +2998,20 @@ class OdooLogrotateTests(unittest.TestCase):
         self.assertIn("/var/log/odoo/", self._entry()["content"])
 
 
+class NginxLogrotateTests(unittest.TestCase):
+    """Logs are permanent (Bruce 2026-11-20): nginx logs rotate and compress but old files are never deleted."""
+
+    def test_nginx_logs_rotate_but_are_never_deleted(self):
+        entry = next(s for s in infra.MANIFEST["static_files"] if s["path"] == "/etc/logrotate.d/nginx")
+        text = infra.format_env(entry["content"], {})
+        directives = {line.strip() for line in text.splitlines()}
+        for wanted in ("daily", "rotate 36500", "compress", "delaycompress", "missingok", "notifempty"):
+            self.assertIn(wanted, directives)
+        self.assertNotIn("maxage", text)
+        self.assertTrue(text.startswith("/var/log/nginx/*.log {\n"), text)
+        self.assertEqual(entry["environments"], ["prod"])
+
+
 class StaticFilesRenderTests(unittest.TestCase):
     """Every MANIFEST static_files entry is a str.format template; the text written to disk is the rendered one.
 

@@ -3852,6 +3852,34 @@ end
             "environments": ["prod"],
         },
         {
+            # nginx access and error logs carry visitor addresses; log files are permanent (Bruce 2026-11-20), so old
+            # rotations are never deleted (rotate 36500 is 100 years). Replaces the Debian package's /etc/logrotate.d/nginx
+            # (rotate 14). Daily, compressed, delaycompress; the postrotate is the Debian one (nginx reopens its logs on
+            # USR1 via its init script). Braces are doubled for str.format.
+            "path": "/etc/logrotate.d/nginx",
+            "content": """\
+/var/log/nginx/*.log {{
+    daily
+    rotate 36500
+    dateext
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 www-data adm
+    sharedscripts
+    postrotate
+        if [ -f /run/nginx.pid ]; then
+            kill -USR1 `cat /run/nginx.pid`
+        fi
+    endscript
+}}
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+        },
+        {
             "path": "/etc/hosts",
             "content": """\
 127.0.0.1 localhost
