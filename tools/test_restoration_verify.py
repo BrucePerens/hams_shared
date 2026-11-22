@@ -280,3 +280,11 @@ def test_verify_with_a_missing_or_bad_expected_file_exits_2_not_a_traceback(tmp_
 # Tests [@ANCHOR: verify:verify_report_class]
 # Tests [@ANCHOR: guest_agent:guest_agent_no_redirect_class]
 # Tests [@ANCHOR: verify:verify_check_class]
+
+
+def test_missing_http_results_fail_instead_of_being_skipped():
+    ph = phases()
+    del ph["http"]
+    report = judge(ph)
+    assert not report.ok
+    assert any(c.name.startswith("every site check reported") and c.status == "FAIL" for c in report.checks)

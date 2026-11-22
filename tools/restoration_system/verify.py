@@ -347,7 +347,10 @@ def evaluate(phases: dict[str, Any], hits: int, profile: dict[str, Any], meta: d
         report.add("row counts equal the backup's metadata", not diff, json.dumps(diff))
         if expected_counts.get("newest"):
             report.add("newest transaction time equals the backup's metadata", db.get("newest") == expected_counts["newest"], "%s vs %s" % (db.get("newest"), expected_counts["newest"]))
-    for want, got in zip(profile["verify"].get("http_checks", []), phases.get("http", {}).get("checks", [])):
+    got_checks = phases.get("http", {}).get("checks", [])
+    wanted_checks = profile["verify"].get("http_checks", [])
+    report.add("every site check reported a result (%d)" % len(wanted_checks), len(got_checks) >= len(wanted_checks), "%d of %d reported" % (len(got_checks), len(wanted_checks)))
+    for want, got in zip(wanted_checks, got_checks):
         accepted = want.get("status_in") or [want.get("status", 200)]
         ok = got["status"] in accepted and got["found"] is not False
         report.add("site answers %s" % got["url"], ok, "status %s, wanted %s" % (got["status"], accepted))
