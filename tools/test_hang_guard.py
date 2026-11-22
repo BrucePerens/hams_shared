@@ -125,6 +125,25 @@ class Stopping(unittest.TestCase):
         left = agent_procs.read_proc(grandchild)
         self.assertTrue(left is None or left.state == "Z")
 
+    def test_lock_wait_does_not_count_against_the_limit(self):
+        script = ("import os,time; p=os.environ['HAMS_LINT_LOCK_WAIT_FILE']; open(p,'w').write(str(time.time())); time.sleep(3); "
+                  "open(p,'a').write(' '+str(time.time())); time.sleep(0.5); print('ok')")
+        done, report, timed_out = hang_guard.run_limited([sys.executable, "-c", script], 2, "waits", extend_for_lock_wait=True)
+        self.assertEqual((done.returncode, done.stdout.strip(), timed_out), (0, "ok", False))
+        done, report, timed_out = hang_guard.run_limited([sys.executable, "-c", "import time; time.sleep(30)"], 2, "hang", tempfile.mkdtemp(),
+                                                         extend_for_lock_wait=True)
+        self.assertTrue(timed_out)  # work after (or without) a wait still counts
+
+    def test_lock_wait_seconds_reads_open_and_closed_waits(self):
+        with tempfile.NamedTemporaryFile("w", delete=False) as handle:
+            handle.write("100 130")
+        self.addCleanup(os.unlink, handle.name)
+        self.assertEqual(hang_guard.lock_wait_seconds(handle.name), 30.0)
+        with open(handle.name, "w", encoding="utf-8") as again:
+            again.write("100")
+        self.assertEqual(hang_guard.lock_wait_seconds(handle.name, now=140), 40.0)
+        self.assertEqual(hang_guard.lock_wait_seconds("/nonexistent/wait"), 0.0)
+
 
 class StepUse(unittest.TestCase):
     def test_a_step_over_its_limit_is_timed_out_and_never_rerun(self):
