@@ -4232,6 +4232,19 @@ class LocalDatabaseBackupUnitTests(_TmpDirTestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual([n for n in os.listdir(backup_dir) if n.endswith(".dump")], [])
 
+class OneshotStreakStateDirTests(unittest.TestCase):
+    """Daemon audit D6: oneshot_streak keeps its count under /var/lib/hams/oneshot_failures unless HAMS_ONESHOT_FAILURE_DIR says
+    otherwise, and the sandboxed units cannot write there. Each unit whose sync calls record_outcome points the count at its own spool."""
+
+    def test_each_streak_unit_keeps_its_count_in_a_path_it_may_write(self):
+        for name, spool in (("amsat.tle.sync.service", "/opt/hams/spool/amsat_tle_sync"),
+                            ("skimmer.list.sync.service", "/opt/hams/spool/skimmer_list_sync")):
+            (spec,) = [s for s in infra.MANIFEST["static_files"] if s["path"] == f"/opt/hams/systemd/{name}"]
+            text = spec["content"]
+            self.assertIn(f'Environment="HAMS_ONESHOT_FAILURE_DIR={spool}"', text, name)
+            self.assertIn(spool, infra._unit_directives(text)["ReadWritePaths"], name)
+
+
 class OneshotRunTimeoutTests(unittest.TestCase):
     """A Type=oneshot service has no start timeout by default, so a hung timer-driven sync ran forever, silenced its timer and
     never failed (hams1, 2026-10-30: 45 oneshots with TimeoutStartUSec=infinity). Every oneshot either sets TimeoutStartSec
