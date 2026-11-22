@@ -197,7 +197,10 @@ def lock_wait_seconds(path, now=None):
         with open(path, encoding="utf-8") as handle:
             parts = handle.read().split()
         begin = float(parts[0])
-        return max(0.0, (float(parts[1]) if len(parts) > 1 else (time.time() if now is None else now)) - begin)
+        end = float(parts[1]) if len(parts) > 1 else (time.time() if now is None else now)
+        if not (math.isfinite(begin) and math.isfinite(end)):
+            return 0.0
+        return max(0.0, end - begin)
     except (OSError, ValueError, IndexError):
         return 0.0
 
