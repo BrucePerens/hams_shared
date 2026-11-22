@@ -70,6 +70,16 @@ class CheckTestTempDirs(unittest.TestCase):
         self.write("daemons/a/tests/new.rs", "fn t() {\n" + HAND_BUILT + HAND_BUILT + "}\n")
         self.assertEqual(chk.main([self.tmp, "--baseline", baseline]), 1, "a second use in a listed file fails")
 
+    def test_an_unreadable_rust_file_fails_the_run(self):
+        path = self.write("daemons/a/tests/bad.rs", "")
+        with open(path, "wb") as f:
+            f.write(b"fn t() {}\n\xff\xfe\n")
+        unread = []
+        chk.scan([self.tmp], unread)
+        self.assertEqual(len(unread), 1)
+        baseline = os.path.join(self.tmp, "baseline.json")
+        self.assertEqual(chk.main([self.tmp, "--baseline", baseline]), 1)
+
     def git(self, *args, cwd=None):
         subprocess.run(["git", *args], cwd=cwd or self.tmp, check=True, capture_output=True,
                        env={**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
