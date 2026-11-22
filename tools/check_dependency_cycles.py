@@ -67,7 +67,7 @@ def _find_sibling_repo(repo_root):
     return lint_exec.sibling_repo_root(repo_root, lint_exec.has_odoo_module)
 
 
-def _build_graph(roots):
+def _build_graph(roots, errors=None):
     # Without the "not d.startswith('.')" filter just below, this walk descends into
     # ".claude/worktrees/<session>/": agent sessions run in isolated git worktrees nested inside
     # the repo root under that path. That is worse than merely wasted work:
@@ -90,7 +90,10 @@ def _build_graph(roots):
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     tree = ast.parse(f.read(), filename=path)
-            except (SyntaxError, OSError):
+            except (SyntaxError, OSError) as error:
+                # The module is then absent from the graph and its cycles are unseen: the caller must fail.
+                if errors is not None:
+                    errors.append(f"❌ ERROR: UNREADABLE manifest {path}: {error}")
                 continue
             for node in ast.walk(tree):
                 if isinstance(node, ast.Dict):
@@ -200,10 +203,11 @@ def main():
     if sibling:
         roots.append(sibling)
 
-    graph, depends_cycle = _build_graph(roots)
+    manifest_errors = []
+    graph, depends_cycle = _build_graph(roots, manifest_errors)
     check_target.require_scanned(len(graph), ", ".join(roots), "check_dependency_cycles", "Odoo modules (directories holding __manifest__.py)")
     cycles = _find_cycles(graph)
-    entry_errors = _check_depends_cycle_entries(graph, depends_cycle)
+    entry_errors = manifest_errors + _check_depends_cycle_entries(graph, depends_cycle)
 
     total_errors = 0
 

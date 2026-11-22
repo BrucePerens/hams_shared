@@ -34,6 +34,27 @@ def _write_manifest(repo_root, module_name, depends=None, depends_cycle=None):
         f.write("\n".join(lines) + "\n")
 
 
+class UnparsableManifestTests(unittest.TestCase):
+    def test_an_unparsable_manifest_is_an_error_not_a_skipped_module(self):
+        import sys
+        from unittest import mock
+
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        repo = os.path.join(tmp, "hams_open")
+        _write_manifest(repo, "mod_ok", depends=[])
+        os.makedirs(os.path.join(repo, "mod_bad"))
+        with open(os.path.join(repo, "mod_bad", "__manifest__.py"), "w") as f:
+            f.write("{'depends': ['mod_ok'\n")
+        errors = []
+        graph, _ = cdc._build_graph([repo], errors)
+        self.assertNotIn("mod_bad", graph)
+        self.assertEqual(len(errors), 1)
+        with mock.patch.object(sys, "argv", ["x", repo]), self.assertRaises(SystemExit) as raised:
+            cdc.main()
+        self.assertEqual(raised.exception.code, 1)
+
+
 class BuildGraphTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
