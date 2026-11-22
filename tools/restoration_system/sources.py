@@ -225,8 +225,8 @@ class PgBackRestRepo:
     def fetch_wal(self, backup: dict[str, Any], stanza_info: dict[str, Any], wal_dir: str) -> list[str]:
         """Pre-fetch every WAL segment and timeline history file from the backup's first segment to the newest archived one.
 
-        Returns the list of file names fetched. RestorationError when the segment the backup starts from is missing: the point-in-time
-        restore would not reach consistency."""
+        Returns the list of file names fetched. RestorationError when the segment the backup starts from is missing (the point-in-time
+        restore would not reach consistency) or when any segment number in the range exists on no timeline (recovery would stop at the gap)."""
         os.makedirs(wal_dir, exist_ok=True)
         first = backup["archive"]["start"]
         last = stanza_info["archive"][-1]["max"]
@@ -243,6 +243,11 @@ class PgBackRestRepo:
                     fetched.append(name)
         if first not in fetched:
             raise RestorationError("WAL segment %s, where the base backup starts, is not in the archive: point-in-time recovery cannot work" % first)
+        have = {segment_number(n) for n in fetched if WAL_RE.match(n)}
+        gaps = [segment_name(start_tl, n) for n in range(segment_number(first), segment_number(last) + 1) if n not in have]
+        if gaps:
+            raise RestorationError("%d WAL segment(s) between %s and %s are missing from the archive (first: %s): recovery would stop at the gap"
+                                   % (len(gaps), first, last, gaps[0]))
         return fetched
 
 
