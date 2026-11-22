@@ -4695,6 +4695,8 @@ ExecStartPre=/usr/bin/python3 /opt/hams/daemons/amsat_tle_sync/main.py --start-t
 ReadWritePaths=/opt/hams/spool/web_bot_auth_keys/hamsd_satellite_sync
 Environment="HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/hamsd_satellite_sync/hamsd_satellite_sync.key"
 ExecStartPre=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py ensure-key --key-file /opt/hams/spool/web_bot_auth_keys/hamsd_satellite_sync/hamsd_satellite_sync.key --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_satellite_sync/hamsd_satellite_sync.jwk
+# The consecutive-failure count (daemons/oneshot_streak.py, audit D6) lives in this unit's own spool directory, the only place the sandbox lets it write.
+Environment="HAMS_ONESHOT_FAILURE_DIR=/opt/hams/spool/amsat_tle_sync"
 ExecStart=/usr/bin/python3 /opt/hams/daemons/amsat_tle_sync/main.py $DAEMON_ARGS
 
 StandardOutput=journal
@@ -8071,6 +8073,8 @@ Environment="DAEMON_ARGS="
 ReadWritePaths=/opt/hams/spool/web_bot_auth_keys/hamsd_dx_daemon
 Environment="HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/hamsd_dx_daemon/hamsd_dx_daemon.key"
 ExecStartPre=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py ensure-key --key-file /opt/hams/spool/web_bot_auth_keys/hamsd_dx_daemon/hamsd_dx_daemon.key --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_dx_daemon/hamsd_dx_daemon.jwk
+# The consecutive-failure count (daemons/oneshot_streak.py, audit D6) lives in this unit's own spool directory, the only place the sandbox lets it write.
+Environment="HAMS_ONESHOT_FAILURE_DIR=/opt/hams/spool/skimmer_list_sync"
 ExecStart=/usr/bin/python3 /opt/hams/daemons/skimmer_list_sync/main.py $DAEMON_ARGS
 
 StandardOutput=journal
