@@ -8,6 +8,7 @@ import shutil
 import socket
 import tempfile
 import threading
+import time
 import types
 import unittest
 import urllib.request
@@ -45,6 +46,22 @@ class ForwarderTests(unittest.TestCase):
             forwarder.stop()
             echo.close()
         self.assertFalse(forwarder.running)
+
+
+class ForwarderStopTests(unittest.TestCase):
+    def test_stop_refuses_new_connections_at_once_and_the_port_can_be_started_again(self):
+        port = free_port()
+        forwarder = ons.TcpForwarder("127.0.0.1", port, "127.0.0.1", free_port(), "test")
+        forwarder.start()
+        time.sleep(0.2)  # the accept thread is blocked in accept()
+        forwarder.stop()
+        with self.assertRaises(ConnectionRefusedError):
+            socket.create_connection(("127.0.0.1", port), timeout=5)
+        forwarder.start()
+        try:
+            self.assertTrue(forwarder.running)
+        finally:
+            forwarder.stop()
 
 
 class RelayStubTests(unittest.TestCase):
