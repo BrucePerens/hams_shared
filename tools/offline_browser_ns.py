@@ -1031,6 +1031,18 @@ def _wait_for_file(path, timeout, what):
     raise RuntimeError(f"timed out waiting for {what} ({path})")
 
 
+def _prepare_work_dir(work_dir):
+    """Create the run's directory for the root broker's files, searchable but not writable by the test user.
+
+    Root writes the config, shim, log and ready files here and the broker unlinks and binds the socket. A directory the unprivileged
+    `odoo` user could write to (the old 0777) let it replace any of those names with a link and have root write or chmod
+    the link's target. The test user only has to reach the socket, which needs the directory searchable (0755) and the socket
+    itself writable.
+    """
+    os.makedirs(work_dir, exist_ok=True)
+    os.chmod(work_dir, 0o755)
+
+
 def setup(work_dir, chrome_binary=None, odoo_user="odoo"):
     """Stand up the nested browser namespace. Returns (env_additions, cleanup).
 
@@ -1038,24 +1050,16 @@ def setup(work_dir, chrome_binary=None, odoo_user="odoo"):
     unshared network namespace, before the Odoo test process is started. The
     returned dict is meant to be merged into that process's environment.
     """
-    os.makedirs(work_dir, exist_ok=True)
-    try:
-        os.chmod(work_dir, 0o777)
-    except OSError as exc:
-        # Best-effort: the directory only has to be traversable by the
-        # unprivileged `odoo` user. If it already is (the usual case on a
-        # re-run, where we do not own it), the run is fine; if it is not, the
-        # failure surfaces loudly a moment later when the shim cannot reach
-        # the control socket.
-        _logger.debug("could not widen permissions on %s: %s", work_dir, exc)
+    _prepare_work_dir(work_dir)
     ctl_sock = os.path.join(work_dir, "offline_ns_ctl.sock")
     ready_file = os.path.join(work_dir, "offline_ns_ready")
     parent_ready = os.path.join(work_dir, "offline_ns_parent_ready")
     config_path = os.path.join(work_dir, "offline_ns_config.json")
     shim_path = os.path.join(work_dir, "hams_offline_chrome")
-    for stale in (ctl_sock, ready_file, parent_ready):
-        if os.path.exists(stale):
-            os.unlink(stale)
+    log_file = os.path.join(work_dir, "offline_ns_chrome.log")
+    for stale in (ctl_sock, ready_file, parent_ready, config_path, shim_path, log_file):
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(stale)  # a link is removed itself, never followed
 
     if chrome_binary is None:
         for candidate in (
@@ -1070,7 +1074,6 @@ def setup(work_dir, chrome_binary=None, odoo_user="odoo"):
     if not chrome_binary:
         raise RuntimeError("no Chrome/Chromium binary found for the offline browser namespace")
 
-    log_file = os.path.join(work_dir, "offline_ns_chrome.log")
     config = {
         "ctl_sock": ctl_sock,
         "ready_file": ready_file,

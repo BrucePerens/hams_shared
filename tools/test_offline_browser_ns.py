@@ -176,6 +176,23 @@ class PortFileReadTests(unittest.TestCase):
     def test_a_missing_file_is_none(self):
         self.assertIsNone(ons._Broker._read_port_file(os.path.join(self.tmp, "none"), self.user))
 
+class WorkDirTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(dir=os.path.expanduser("~/.cache"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_the_directory_for_the_root_brokers_files_is_not_writable_by_others(self):
+        work = os.path.join(self.tmp, "offline_ns")
+        os.mkdir(work)
+        os.chmod(work, 0o777)  # what an earlier run left behind
+        ons._prepare_work_dir(work)
+        self.assertEqual(os.stat(work).st_mode & 0o777, 0o755)
+
+    def test_a_missing_directory_is_created_searchable(self):
+        work = os.path.join(self.tmp, "new", "offline_ns")
+        ons._prepare_work_dir(work)
+        self.assertEqual(os.stat(work).st_mode & 0o777, 0o755)
+
 
 # Class anchors (ADR 0113) exercised by the tests above.
 # Tests [@ANCHOR: offline_browser_ns:offline_browser_ns_tcp_forwarder_class]
