@@ -125,3 +125,11 @@ def test_enablement_plan_keeps_restored_links_and_enables_the_rest(tmp_path):
 def test_parse_dpkg_status_ignores_a_purged_package_listed_as_not_installed():
     text = STATUS + "\nPackage: purged\nStatus: purge ok not-installed\n"
     assert asm.parse_dpkg_status(text) == {"nginx"}
+
+
+def test_dpkg_merge_keeps_two_architectures_of_one_package():
+    image = "Package: libc6\nArchitecture: i386\nStatus: install ok installed\n"
+    target = "Package: libc6\nArchitecture: amd64\nStatus: install ok installed\n"
+    merged = post.merge_dpkg(image, target)
+    assert "Architecture: i386" in merged and "Architecture: amd64" in merged
+    assert len(post.stanzas(merged)) == 2
