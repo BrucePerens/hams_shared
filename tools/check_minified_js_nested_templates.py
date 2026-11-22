@@ -183,7 +183,7 @@ def find_nested_template_literals(code):
     return findings
 
 
-def collect_minified_js_assets(repo_root):
+def collect_minified_js_assets(repo_root, errors=None):
     """Map every .js path listed under any manifest "assets" bundle key
     to the list of bundle names it appears in. All such files are
     re-minified by Odoo's asset pipeline uniformly (assetsbundle.py's
@@ -201,6 +201,9 @@ def collect_minified_js_assets(repo_root):
                 tree = ast.parse(f.read(), filename=manifest_path)
         except (SyntaxError, OSError) as e:
             print(f"❌ ERROR parsing {manifest_path}: {e}")
+            # Its bundled assets are unchecked: the caller must fail, not pass.
+            if errors is not None:
+                errors.append(manifest_path)
             continue
         for node in tree.body:
             if not (isinstance(node, ast.Expr) and isinstance(node.value, ast.Dict)):
@@ -245,7 +248,11 @@ def main():
     if computed_sibling and computed_sibling not in search_roots:
         search_roots.append(computed_sibling)
 
-    asset_to_bundles = collect_minified_js_assets(repo_root)
+    manifest_errors = []
+    asset_to_bundles = collect_minified_js_assets(repo_root, manifest_errors)
+    if manifest_errors:
+        print(f"🛑 {len(manifest_errors)} manifest(s) could not be parsed, so their bundled JS assets were not checked: this is not a pass.")
+        sys.exit(1)
     # Bundled .js assets are what this checker reads (named by the manifests under repo_root); none at all is an empty scan.
     check_target.require_scanned(len(asset_to_bundles), repo_root, "check_minified_js_nested_templates", "bundled .js assets listed in manifests")
     if not asset_to_bundles:
