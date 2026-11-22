@@ -102,6 +102,13 @@ class MainTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("~%6d tokens (chars/4)" % round(len(OLD) / 4), out)
 
+    def test_main_fails_when_the_old_text_has_no_units(self):
+        empty = self.path("empty.md", "\n\n")
+        new = self.path("new.md", OLD)
+        code, out = self.run_main("--before", empty, "--after", new)
+        self.assertEqual(code, 1, out)
+        self.assertIn("holds no units", out)
+
     def test_read_source_reads_git_revisions(self):
         repo = self.tmp.name
         for args in (["init", "-q"], ["config", "user.email", "t@example.com"], ["config", "user.name", "T"]):
