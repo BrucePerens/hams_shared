@@ -143,6 +143,10 @@ class Stopping(unittest.TestCase):
             again.write("100")
         self.assertEqual(hang_guard.lock_wait_seconds(handle.name, now=140), 40.0)
         self.assertEqual(hang_guard.lock_wait_seconds("/nonexistent/wait"), 0.0)
+        for text in ("nan 130", "100 inf", "inf"):
+            with open(handle.name, "w", encoding="utf-8") as again:
+                again.write(text)
+            self.assertEqual(hang_guard.lock_wait_seconds(handle.name, now=140), 0.0)
 
 
 class StepUse(unittest.TestCase):
