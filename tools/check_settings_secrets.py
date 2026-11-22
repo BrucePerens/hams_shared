@@ -120,8 +120,9 @@ def _python_files(repo_root):
                 yield os.path.join(dirpath, filename)
 
 
-def scan_repo(repo_root):
-    """`{key: line}` for every unmasked secret-looking settings field under `repo_root`."""
+def scan_repo(repo_root, unread=None):
+    """`{key: line}` for every unmasked secret-looking settings field under `repo_root`. A file that cannot be read or parsed is
+    described in the list `unread` when the caller passes one: its fields were not checked."""
     found = {}
     for full in _python_files(repo_root):
         try:
@@ -131,7 +132,9 @@ def scan_repo(repo_root):
                 continue
             for key, line in scan_source(source, os.path.relpath(full, repo_root)):
                 found[key] = line
-        except (OSError, SyntaxError, UnicodeDecodeError):
+        except (OSError, SyntaxError, UnicodeDecodeError) as error:
+            if unread is not None:
+                unread.append("%s (%s)" % (os.path.relpath(full, repo_root), type(error).__name__))
             continue
     return found
 
@@ -169,7 +172,11 @@ def main(argv=None):
     args = parser.parse_args(argv)
     root = check_target.require_directory(args.repo_root, "check_settings_secrets")
     check_target.require_scanned(sum(1 for _ in _python_files(root)), root, "check_settings_secrets", "Python files")
-    found = scan_repo(root)
+    unread = []
+    found = scan_repo(root, unread)
+    if unread:
+        sys.stdout.write("[!] CI/CD FAILURE: Python files that could not be read or parsed (their settings fields were not checked): %s\n" % ", ".join(unread))
+        return 1
     baseline = load_baseline(args.baseline)
     if args.write_baseline:
         text = render_baseline(found, baseline) if baseline or not found else render_baseline(found, {})
