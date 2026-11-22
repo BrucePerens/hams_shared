@@ -1342,6 +1342,46 @@ def oneshot_run_timeout_dropin_entries(manifest):
     return entries
 
 
+# [@ANCHOR: infrastructure:progress_watchdog]
+# A long-running daemon that hangs (not crashes) keeps its unit "active" for ever. The daemons that call hams_config.ProgressWatchdog
+# (noaa_swpc_sync, aprs_is_sync; daemons/WATCHDOG_UNITS.md in hams_com) send READY=1 and a WATCHDOG=1 ping only while their own loop is
+# making progress, so the unit must be Type=notify with WatchdogSec= or systemd would reject the pings. Anything not listed here
+# does not use the class and must NOT get the drop-in (a Type=notify unit whose daemon never sends READY=1 never finishes starting).
+# ham_dx_daemon has its own watchdog task and its unit is not generated here. WatchdogSec is half-judged by the daemon (its
+# stale_after), so a short value is safe: the ping thread keeps it fed during a long poll sleep.
+PROGRESS_WATCHDOG_DROPIN_NAME = "hams-watchdog.conf"
+PROGRESS_WATCHDOG_UNITS = {
+    "noaa-swpc-sync.service": 300,
+    "aprs.is.sync.service": 300,
+}
+
+
+# [@ANCHOR: infrastructure:progress_watchdog_dropin_entries]
+def progress_watchdog_dropin_entries(manifest):
+    """The MANIFEST static_files entries (one Type=notify + WatchdogSec drop-in each) for the PROGRESS_WATCHDOG_UNITS found in `manifest`."""
+    entries = []
+    for spec in manifest["static_files"]:
+        path = spec["path"]
+        name = os.path.basename(path)
+        if os.path.dirname(path) != "/opt/hams/systemd" or name not in PROGRESS_WATCHDOG_UNITS:
+            continue
+        entry = {
+            "path": f"/etc/systemd/system/{name}.d/{PROGRESS_WATCHDOG_DROPIN_NAME}",
+            "content": (
+                "# Written by hams_shared tools/infrastructure.py (MANIFEST). The daemon pings the watchdog only while its loop makes\n"
+                "# progress (hams_config.ProgressWatchdog), so a hang ends in a restart and a report instead of a silent stall.\n"
+                f"[Service]\nType=notify\nWatchdogSec={PROGRESS_WATCHDOG_UNITS[name]}\n"
+            ),
+            "owner": "root:root",
+            "mode": "644",
+            "environments": list(spec.get("environments", ["prod", "test"])),
+        }
+        if spec.get("host_class"):
+            entry["host_class"] = spec["host_class"]
+        entries.append(entry)
+    return entries
+
+
 # [@ANCHOR: infrastructure:rotated_key_reload_policy]
 # daemon_key_manager rotates every daemon's Odoo API key (the monthly cron, and every start of hams.daemon.keys.service, which runs
 # action_force_provision_all): it writes the new key to the daemon's key file, revokes the old key, and restarts nothing (Odoo may not
@@ -11312,6 +11352,7 @@ expand_manifest_tokens(MANIFEST)
 MANIFEST["static_files"].extend(exception_report_dropin_entries(MANIFEST))
 # One start-timeout drop-in per oneshot service that has none of its own (see oneshot_run_timeout_dropin_entries).
 MANIFEST["static_files"].extend(oneshot_run_timeout_dropin_entries(MANIFEST))
+MANIFEST["static_files"].extend(progress_watchdog_dropin_entries(MANIFEST))
 
 
 # [@ANCHOR: infrastructure:scaffold_test_environment]

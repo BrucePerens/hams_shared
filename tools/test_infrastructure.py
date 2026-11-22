@@ -4232,6 +4232,35 @@ class LocalDatabaseBackupUnitTests(_TmpDirTestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual([n for n in os.listdir(backup_dir) if n.endswith(".dump")], [])
 
+class ProgressWatchdogDropinTests(unittest.TestCase):
+    """Daemon audit D3: the units of the daemons that use hams_config.ProgressWatchdog get Type=notify and WatchdogSec= (without it the
+    class does nothing), and no other unit does."""
+
+    def _specs(self, name):
+        return [s for s in infra.MANIFEST["static_files"]
+                if s["path"] == f"/etc/systemd/system/{name}.d/hams-watchdog.conf"]
+
+    # Tests [@ANCHOR: infrastructure:progress_watchdog]
+    # Tests [@ANCHOR: infrastructure:progress_watchdog_dropin_entries]
+    def test_each_progress_watchdog_daemon_gets_a_notify_drop_in(self):
+        self.assertEqual(set(infra.PROGRESS_WATCHDOG_UNITS), {"noaa-swpc-sync.service", "aprs.is.sync.service"})
+        for name, seconds in infra.PROGRESS_WATCHDOG_UNITS.items():
+            (spec,) = self._specs(name)
+            lines = [line for line in spec["content"].splitlines() if not line.startswith("#")]
+            self.assertEqual(lines, ["[Service]", "Type=notify", f"WatchdogSec={seconds}"], name)
+            self.assertEqual(spec["environments"], ["prod", "test"], name)
+
+    def test_only_listed_services_are_given_one(self):
+        manifest = {"static_files": [
+            {"path": "/opt/hams/systemd/noaa-swpc-sync.service", "content": "Type=simple\n", "environments": ["prod"]},
+            {"path": "/opt/hams/systemd/other.service", "content": "Type=simple\n", "environments": ["prod"]},
+            {"path": "/etc/systemd/system/aprs.is.sync.service", "content": "x", "environments": ["prod"]},
+        ]}
+        entries = infra.progress_watchdog_dropin_entries(manifest)
+        self.assertEqual([e["path"] for e in entries], ["/etc/systemd/system/noaa-swpc-sync.service.d/hams-watchdog.conf"])
+        self.assertEqual(entries[0]["environments"], ["prod"])
+
+
 class OneshotRunTimeoutTests(unittest.TestCase):
     """A Type=oneshot service has no start timeout by default, so a hung timer-driven sync ran forever, silenced its timer and
     never failed (hams1, 2026-10-30: 45 oneshots with TimeoutStartUSec=infinity). Every oneshot either sets TimeoutStartSec
