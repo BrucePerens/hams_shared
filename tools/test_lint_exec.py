@@ -476,6 +476,14 @@ class ChangedSelectionTests(unittest.TestCase):
         self.assertEqual(self.names(run), self.names(self.steps))
         self.assertEqual(skipped, [])
 
+    def test_a_scoped_step_ignores_a_checker_tooling_change(self):
+        scoped = lint_exec.Step(name="relay", argv=["x"], roots=("/ws/relay",), scoped=True)
+        run, skipped = lint_exec.select_for_changed([scoped], {"/ws/tools/other.py"}, run_all=True)
+        self.assertEqual(run, [])
+        self.assertEqual([s.name for s, _ in skipped], ["relay"])
+        run, _ = lint_exec.select_for_changed([scoped], {"/ws/relay/src/main.rs"}, run_all=True)
+        self.assertEqual(self.names(run), ["relay"])
+
     def test_a_sibling_prefix_directory_is_not_a_match(self):
         run, _ = lint_exec.select_for_changed(
             self.steps, {"/ws/hams_open_extra/a.py"}, run_all=False

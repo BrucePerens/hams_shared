@@ -31,6 +31,15 @@ LISTING = "\n".join("%s: test" % name for name in (
     "data_dir::tests::h", "other::unrelated")) + "\n\n10 tests, 0 benchmarks\n"
 
 
+class StepScopeTests(unittest.TestCase):
+    def test_the_step_files_named_in_run_linters_exist(self):
+        import run_linters
+
+        here = os.path.dirname(os.path.abspath(__file__))
+        for name in run_linters.RELAY_STEP_TOOLS:
+            self.assertTrue(os.path.isfile(os.path.join(here, name)), name)
+
+
 class PureTests(unittest.TestCase):
     def test_the_command_names_the_features_the_binary_and_every_filter(self):
         command = rs.cargo_command()
