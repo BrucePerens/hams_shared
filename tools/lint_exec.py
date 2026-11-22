@@ -506,7 +506,8 @@ def run_step(step, locks, recent=(), deadline=None, wrap=None):
                     env["PYTEST_ADDOPTS"] = (env.get("PYTEST_ADDOPTS", "") + f" -o faulthandler_timeout={int(min(limit, 600))}").strip()
                 argv = with_xdist(step, _xdist_workers[0])
                 res, report, timed_out = hang_guard.run_limited(
-                    wrap(argv) if wrap else argv, limit, step.name, hang_guard.report_dir(environ), cwd=step.cwd, env=env)
+                    wrap(argv) if wrap else argv, limit, step.name, hang_guard.report_dir(environ), extend_for_lock_wait=not capped,
+                    cwd=step.cwd, env=env)
         except FileNotFoundError:
             if step.missing_msg is None:
                 raise

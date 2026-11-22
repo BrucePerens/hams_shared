@@ -24,6 +24,7 @@ import signal
 import statistics
 import subprocess
 import sys
+import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -187,17 +188,55 @@ def stop_own_group(pid, start_ticks, grace=STOP_GRACE, snapshot=agent_procs.snap
     return False
 
 
+LOCK_WAIT_ENV = "HAMS_LINT_LOCK_WAIT_FILE"  # a file the child writes "<wait start epoch> [<wait end epoch>]" to while it waits for a shared lock
+
+
+def lock_wait_seconds(path, now=None):
+    """Seconds the child has spent (or spent) waiting for a shared lock, from its wait file; 0 when it never waited or the file is unreadable. Pure."""
+    try:
+        with open(path, encoding="utf-8") as handle:
+            parts = handle.read().split()
+        begin = float(parts[0])
+        return max(0.0, (float(parts[1]) if len(parts) > 1 else (time.time() if now is None else now)) - begin)
+    except (OSError, ValueError, IndexError):
+        return 0.0
+
+
 # [@ANCHOR: hang_guard:run_limited]
-def run_limited(argv, limit, label, directory=None, **popen_kwargs):
+def run_limited(argv, limit, label, directory=None, extend_for_lock_wait=False, **popen_kwargs):
     """`subprocess.run(argv, capture_output, text)` with a wall-clock `limit` in seconds. Returns (completed process, report path or None,
     timed_out). On timeout: the hang report is written first, then the child's own group is stopped (`stop_own_group`); the output read so
-    far is returned with returncode 124."""
+    far is returned with returncode 124. With `extend_for_lock_wait` the time the child spends waiting for a shared lock (lint_cache's
+    named cargo session reports it through HAMS_LINT_LOCK_WAIT_FILE) does not count against `limit`: only its own work does."""
+    wait_file = None
+    if extend_for_lock_wait:
+        handle, wait_file = tempfile.mkstemp(prefix="hams-lockwait-")
+        os.close(handle)
+        popen_kwargs["env"] = dict(popen_kwargs.get("env") or os.environ, **{LOCK_WAIT_ENV: wait_file})
+    try:
+        return _run_limited(argv, limit, label, directory, wait_file, popen_kwargs)
+    finally:
+        if wait_file:
+            os.unlink(wait_file)
+
+
+def _run_limited(argv, limit, label, directory, wait_file, popen_kwargs):
     proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors="replace", start_new_session=True, **popen_kwargs)
     info = agent_procs.read_proc(proc.pid)
     start_ticks = info.start_ticks if info else 0
+    started = time.monotonic()
     try:
-        out, err = proc.communicate(timeout=limit)
-        return subprocess.CompletedProcess(argv, proc.returncode, out, err), None, False
+        while True:
+            allowed = limit + (lock_wait_seconds(wait_file) if wait_file else 0.0)
+            left = started + allowed - time.monotonic()
+            if left <= 0:
+                raise subprocess.TimeoutExpired(argv, limit)
+            try:
+                out, err = proc.communicate(timeout=min(left, 5.0) if wait_file else left)
+                return subprocess.CompletedProcess(argv, proc.returncode, out, err), None, False
+            except subprocess.TimeoutExpired:
+                if not wait_file:
+                    raise
     except subprocess.TimeoutExpired:
         pass
     path = write_hang_report(proc.pid, label, f"still running after {limit:.0f} s (wall-clock limit)", directory)

@@ -637,6 +637,17 @@ def cargo_session(environ=None, log=None):
         yield target
 
 
+def _note_lock_wait(path, begin, end=None):
+    """Tell the parent (hang_guard.run_limited) when this process began (`begin`) and stopped (`end`) waiting for a shared lock; no file, no-op."""
+    if not path:
+        return
+    try:
+        with open(path, "w" if begin is not None else "a", encoding="utf-8") as handle:
+            handle.write(f"{begin}" if begin is not None else f" {end}")
+    except OSError:
+        pass
+
+
 # [@ANCHOR: lint_cache:named_cargo_session]
 @contextlib.contextmanager
 def named_cargo_session(name, environ=None, log=None):
@@ -666,7 +677,10 @@ def named_cargo_session(name, environ=None, log=None):
         target = cargo_target_dir(name, dict(environ, HAMS_LINT_SLOT="1"))
     limit = float(environ.get("HAMS_LINT_CARGO_LOCK_WAIT") or CARGO_LOCK_WAIT_SECONDS)
     started = time.monotonic()
+    wait_file = environ.get("HAMS_LINT_LOCK_WAIT_FILE")  # the parent step's wall limit does not count the wait (hang_guard.run_limited)
+    _note_lock_wait(wait_file, time.time())
     with locked(target, exclusive=True, timeout=limit) as held:
+        _note_lock_wait(wait_file, None, time.time())
         if not held and time.monotonic() - started < limit:
             _require_lock(held, target)  # flock failed before the wait ran out
         if not held:
