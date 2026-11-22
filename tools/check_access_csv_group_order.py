@@ -76,13 +76,16 @@ def _find_modules(roots):
                 yield entry, module_dir, manifest_path
 
 
-def _extract_data_list(manifest_path):
+def _extract_data_list(manifest_path, problems=None):
     """AST-only extraction of the manifest's own 'data' list, in file order. Returns [] if the
     manifest doesn't parse or has no 'data' key -- never executes the manifest."""
     try:
         with open(manifest_path, "r", encoding="utf-8") as f:
             tree = ast.parse(f.read(), filename=manifest_path)
-    except (SyntaxError, UnicodeDecodeError, OSError):
+    except (SyntaxError, UnicodeDecodeError, OSError) as error:
+        # No data list means no order was checked: say so, when the caller wants to know.
+        if problems is not None:
+            problems.append(f"{manifest_path}: the manifest could not be read or parsed ({error}), so its data order was not checked")
         return []
 
     for node in ast.walk(tree):
@@ -150,8 +153,8 @@ def _defined_group_ids(xml_path):
 
 def _check_module(module_name, module_dir, manifest_path):
     """Returns a list of error strings for this one module, or an empty list if it's clean."""
-    data_files = _extract_data_list(manifest_path)
     errors = []
+    data_files = _extract_data_list(manifest_path, errors)
 
     for i, rel_path in enumerate(data_files):
         if not rel_path.endswith(".csv"):

@@ -130,6 +130,20 @@ class CheckModuleTests(unittest.TestCase):
         self.assertEqual(errors, [])
 
 
+class UnparsableManifestTests(unittest.TestCase):
+    def test_a_manifest_that_does_not_parse_is_reported_not_passed(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        module_dir = os.path.join(tmp, "bad_mod")
+        os.makedirs(module_dir)
+        manifest = os.path.join(module_dir, "__manifest__.py")
+        with open(manifest, "w") as f:
+            f.write("{'data': ['a.csv'\n")
+        errors = chk._check_module("bad_mod", module_dir, manifest)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("could not be read or parsed", errors[0])
+
+
 class DefinedGroupIdsTests(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
