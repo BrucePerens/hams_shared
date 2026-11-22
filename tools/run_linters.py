@@ -1277,6 +1277,7 @@ HOST_BOUND_TOOL_TESTS = frozenset(
 
 # [@ANCHOR: run_linters:main_orchestrator]
 def main():
+    sys.stdout.reconfigure(line_buffering=True)  # piped, the lock-queue and load-gate wait notes sat in the buffer and the parent's idle watchdog saw a silent run
     lint_remote.prefer_user_toolchain()
     if "--run-bundle" in sys.argv:
         sys.exit(run_bundle(sys.argv[1:]))

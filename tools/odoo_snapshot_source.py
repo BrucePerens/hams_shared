@@ -231,12 +231,24 @@ class SnapshotSource:
         columns = self.columns(table)
         terms = self._tree(list(domain or []))
         context = kwargs.get("context") or {}
-        mentions_active = "active" in str(domain)
+        mentions_active = self._names_field(terms, "active")
         params = []
         clauses = [self._sql(model, columns, node, params) for node in terms]
         if "active" in columns and context.get("active_test") is not False and not mentions_active:
             clauses.append('"active" IS TRUE')
         return (" WHERE " + " AND ".join(clauses)) if clauses else "", tuple(params)
+
+    @classmethod
+    def _names_field(cls, nodes, field):
+        """True when a leaf of the parsed domain filters on `field` (Odoo's own test for skipping the `active` filter; a value
+        that merely contains the word, such as 'inactive', does not count)."""
+        for node in nodes:
+            if node[0] == "t":
+                if node[1][0] == field:
+                    return True
+            elif cls._names_field(node[1:], field):
+                return True
+        return False
 
     def _tree(self, terms):
         nodes = []

@@ -109,6 +109,7 @@ import os
 import pwd
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import threading
@@ -529,11 +530,26 @@ class _Broker:
         out.insert(1, "--remote-debugging-address=127.0.0.1")
         return out, odoo_profile, ns_profile
 
-    def launch_chrome(self, argv, env_overrides):
-        cmd, _odoo_profile, ns_profile = self._sanitize_chrome_argv(argv)
-        user = pwd.getpwnam(self.odoo_user)
+    @staticmethod
+    def _prepare_profile(odoo_profile, ns_profile, user):
+        """Create the browser's profile directory and hand it to the test user.
+
+        The path comes from the unprivileged caller and this runs as root, so it must not be steered through a symlink onto a
+        directory the caller does not own: the profile base has to be a real directory the test user owns, and the chown does
+        not follow a link at the final component.
+        """
+        base = os.lstat(odoo_profile)
+        if not stat.S_ISDIR(base.st_mode) or base.st_uid != user.pw_uid:
+            raise ValueError(f"{odoo_profile} is not a directory owned by the test user")
+        if os.path.islink(ns_profile):
+            raise ValueError(f"{ns_profile} is a symlink")
         os.makedirs(ns_profile, exist_ok=True)
-        os.chown(ns_profile, user.pw_uid, user.pw_gid)
+        os.chown(ns_profile, user.pw_uid, user.pw_gid, follow_symlinks=False)
+
+    def launch_chrome(self, argv, env_overrides):
+        cmd, odoo_profile, ns_profile = self._sanitize_chrome_argv(argv)
+        user = pwd.getpwnam(self.odoo_user)
+        self._prepare_profile(odoo_profile, ns_profile, user)
         port_file = os.path.join(ns_profile, "DevToolsActivePort")
         if os.path.exists(port_file):
             os.unlink(port_file)

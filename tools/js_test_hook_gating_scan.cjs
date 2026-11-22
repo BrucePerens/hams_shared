@@ -20,7 +20,14 @@
 // top-level block, and this deliberately narrow scope keeps the check exact rather than
 // heuristic-guessing across arbitrary nesting.
 
-const acorn = require(require("path").join(__dirname, "..", "node_modules", "acorn"));
+// Own node_modules first; a worktree of hams_shared has none, and its caller then points NODE_PATH
+// at the main checkout's (check_js_test_hook_gating.py).
+let acorn;
+try {
+  acorn = require(require("path").join(__dirname, "..", "node_modules", "acorn"));
+} catch (error) {
+  acorn = require("acorn");
+}
 const fs = require("fs");
 
 // Recursively searches `node` (an expression subtree, e.g. an IfStatement's own `.test`) for a

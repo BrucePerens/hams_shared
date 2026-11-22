@@ -130,7 +130,8 @@ do_plan() {
   local miss; miss="$(missing_apt | tr '\n' ' ')"
   say "apt packages to install (sudo -n): ${miss:-none}"
   if rustup_has_toolchain; then say "rust: toolchain $TOOLCHAIN already installed"; else say "rust: rustup + toolchain $TOOLCHAIN with rustfmt and clippy (user level)"; fi
-  local pm; pm="$(pip_missing | tr '\n' ' ')"
+  local pm
+  if pm="$(pip_missing)"; then pm="$(printf '%s' "$pm" | tr '\n' ' ')"; else pm="UNKNOWN (cannot read the pins in $REQS)"; fi
   say "python packages (user level, hash-pinned): ${pm:-none}"
   has_chrome && say "browser: $(chrome_bin) already present" || say "browser: chromium (apt)"
   apt_installed "postgresql-$PG_VERSION" && say "postgresql: $PG_VERSION already installed" || say "postgresql: $PG_VERSION from apt.postgresql.org (key fingerprint pinned)"
@@ -149,7 +150,8 @@ do_apt() {
   sudo -n env DEBIAN_FRONTEND=noninteractive apt-get update -qq || say "apt-get update failed (continuing with the cached lists)"
   # shellcheck disable=SC2086
   # No package started here may start a service (pdns-server would try port 53): policy-rc.d refuses during the install.
-  local made_policy=0 rc=0 pol
+  local made_policy=0 rc=0 pol pdns_before=0
+  apt_installed pdns-server && pdns_before=1
   if [ ! -e /usr/sbin/policy-rc.d ]; then
     pol="$(mktemp)"; printf '#!/bin/sh\nexit 101\n' >"$pol"
     sudo -n install -m 0755 "$pol" /usr/sbin/policy-rc.d && made_policy=1
@@ -159,7 +161,8 @@ do_apt() {
   [ "$made_policy" = 1 ] && sudo -n rm -f /usr/sbin/policy-rc.d
   [ $rc -eq 0 ] || return 1
   local p; for p in $miss; do record apt-installed.txt "$p"; done
-  case " $miss " in *" pdns-backend-sqlite3 "*) apt_installed pdns-server && sudo -n systemctl disable --now pdns >/dev/null 2>&1; record apt-installed.txt pdns-server ;; esac
+  # pdns-server comes in as a dependency of the backend: it is this script's own (and undo's to remove) only when it was not there before.
+  case " $miss " in *" pdns-backend-sqlite3 "*) apt_installed pdns-server && sudo -n systemctl disable --now pdns >/dev/null 2>&1; [ "$pdns_before" = 1 ] || record apt-installed.txt pdns-server ;; esac
   case " $miss " in *" smartmontools "*) sudo -n systemctl disable --now smartmontools >/dev/null 2>&1 ;; esac  # the tests call smartctl; no S.M.A.R.T. daemon is wanted
   rm -rf "$HOME"/hams-lint-mirror/*/.mypy_cache 2>/dev/null
   return 0
@@ -194,7 +197,9 @@ do_rust() {
 }
 
 do_pip() {
-  local pm; pm="$(pip_missing)"
+  local pm
+  # An unreadable requirements file makes pip_missing fail with nothing on stdout: that is not "nothing missing".
+  pm="$(pip_missing)" || { say "python: cannot read the pins in $REQS"; return 1; }
   [ -z "$pm" ] && { say "python: nothing missing"; return 0; }
   say "python: installing $(echo "$pm" | tr '\n' ' ')"
   # --ignore-installed: a copy already on the system (even a broken or overlapping one) must not make pip skip the pinned wheel; --no-deps: the file pins the whole closure.
@@ -401,6 +406,9 @@ do_verify() {
   local rc=0 d
   d="$(mktemp -d)"
   trap 'rm -rf "$d"' RETURN
+  # A failing cargo, node or pytest run is piped through tail/grep below: without pipefail the pipeline reports the status of
+  # tail/grep, and VERIFY OK would be printed for a machine whose tests fail.
+  set -o pipefail
   say "== cargo test of a small crate"
   ( cd "$d" && cargo new --lib --vcs none -q smoke && cd smoke \
     && printf '#[cfg(test)]\nmod t {\n    #[test]\n    fn adds() {\n        assert_eq!(2 + 2, 4);\n    }\n}\n' >>src/lib.rs \
@@ -420,7 +428,7 @@ do_verify() {
     local db="tmp_verify_$$"
     ( createdb "$db" && psql -qAtc 'select 1' "$db" >/dev/null && dropdb "$db" && echo "ok: scratch database created and dropped" ) || { dropdb --if-exists "$db" 2>/dev/null; say "FAIL scratch database (the lint user needs a createdb role)"; rc=1; }
   else say "FAIL psql missing"; rc=1; fi
-  kopia --version 2>/dev/null | head -1 || { say "FAIL kopia"; rc=1; }
+  local kv; kv="$(kopia --version 2>/dev/null | head -1)" && [ -n "$kv" ] && say "$kv" || { say "FAIL kopia"; rc=1; }
   { go version 2>/dev/null || /usr/lib/go-1.24/bin/go version; } || { say "FAIL go"; rc=1; }
   [ -f /usr/share/pdns-backend-sqlite3/schema/schema.sqlite3.sql ] || { say "FAIL pdns sqlite schema"; rc=1; }
   say "== headless browser screenshot"
@@ -468,12 +476,15 @@ do_undo() {
   say "undone: only what apply recorded in $STATE"
 }
 
-case "${1:-plan}" in
-  plan) do_plan ;;
-  apply) do_apply ;;
-  apply-user) do_apply_user ;;
-  verify) do_verify ;;
-  versions) do_versions ;;
-  undo) do_undo ;;
-  *) say "usage: $0 plan|apply|apply-user|verify|versions|undo"; exit 2 ;;
-esac
+# Sourcing the file (the tests do) defines the functions without running a mode.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  case "${1:-plan}" in
+    plan) do_plan ;;
+    apply) do_apply ;;
+    apply-user) do_apply_user ;;
+    verify) do_verify ;;
+    versions) do_versions ;;
+    undo) do_undo ;;
+    *) say "usage: $0 plan|apply|apply-user|verify|versions|undo"; exit 2 ;;
+  esac
+fi

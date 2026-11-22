@@ -27,6 +27,7 @@ import os
 import subprocess
 import sys
 
+import check_js_function_test_anchors
 import check_target
 from tree_files import git_listed  # noqa: E402
 
@@ -76,18 +77,26 @@ def _run_js_scan(filepaths):
     failed to parse (a real syntax error is check_js_syntax.py's job to catch, not this one's)."""
     if not filepaths:
         return {}
-    proc = subprocess.run(
-        ["node", _JS_SCAN_SCRIPT],
-        input=json.dumps(filepaths),
-        capture_output=True,
-        text=True,
-    )
+    try:
+        proc = subprocess.run(
+            ["node", _JS_SCAN_SCRIPT],
+            input=json.dumps(filepaths),
+            capture_output=True,
+            text=True,
+            env=check_js_function_test_anchors._node_environment(),
+        )
+    except OSError as error:
+        raise SystemExit(f"[!] JS test-hook scan could not start node: {error}")
+    # A scanner that did not run is not a clean scan: say so and fail, never report "no violations".
     if proc.returncode != 0 or not proc.stdout:
-        return {}
+        raise SystemExit(
+            f"[!] JS test-hook scan failed (node exit {proc.returncode}); the acorn parser comes "
+            f"from hams_shared/node_modules (npm install). {proc.stderr.strip()[:500]}"
+        )
     try:
         results = json.loads(proc.stdout)
-    except json.JSONDecodeError:
-        return {}
+    except json.JSONDecodeError as error:
+        raise SystemExit(f"[!] JS test-hook scan printed output that is not JSON: {error}")
     return {entry["file"]: entry["violations"] for entry in results}
 
 

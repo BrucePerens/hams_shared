@@ -133,3 +133,10 @@ def test_dpkg_merge_keeps_two_architectures_of_one_package():
     merged = post.merge_dpkg(image, target)
     assert "Architecture: i386" in merged and "Architecture: amd64" in merged
     assert len(post.stanzas(merged)) == 2
+
+
+def test_config_archive_excludes_every_account_file_in_bare_and_dot_form():
+    from restoration_system import build as bld
+    ex = bld.config_excludes()
+    for name in ("etc/shadow", "etc/gshadow", "etc/passwd", "etc/group", "etc/subuid", "etc/subgid", "etc/shadow-", "etc/gshadow-", "var/lib/dpkg"):
+        assert "--exclude=" + name in ex and "--exclude=./" + name in ex, name
