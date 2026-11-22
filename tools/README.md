@@ -4684,7 +4684,7 @@ module must be fixed in the list. Pure. Tests: `PureTests`, `MainTests`.
 
 ### `[@ANCHOR: relay_structural:passed_count]` `passed_count(text)`
 
-Purpose: the number of tests that passed. Returns the sum of the `N passed` of every `test result:` line of `cargo test` output, 0 when there is none. Pure. Tests: `PureTests`.
+Purpose: the number of tests that passed, so the step can print a count and the recorded-pass cache can refuse an empty run. Argument: `text`, the combined stdout of the `cargo test` run(s). Returns the sum of the `N passed` figures of every `test result:` line in it, as an int, and 0 when there is no such line (a build failure, a filtered-out run, empty output). Errors: none are raised; text it cannot parse simply adds nothing. Special concerns: pure, no I/O; it matches the pattern `test result: <status>. N passed` anywhere in the text, so any `test result:` line counts whatever its status word. Tests: `PureTests`.
 
 ### `[@ANCHOR: relay_structural:input_key]` `input_key(repo_root, environ=None)`
 
