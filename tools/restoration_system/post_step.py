@@ -62,13 +62,19 @@ def plan_accounts(wanted: dict[str, Any], etc: str = "/etc") -> tuple[list[list[
 
 
 def stanzas(text: str) -> dict[str, str]:
-    """{package: stanza text} of a dpkg status file."""
+    """{package or package:architecture: stanza text} of a dpkg status file. A stanza with an `Architecture:` other than all/none is keyed
+    `name:arch`, so two architectures of one package (multiarch) stay two entries."""
     out = {}
     for block in text.strip().split("\n\n"):
+        name, arch = None, None
         for line in block.splitlines():
             if line.startswith("Package: "):
-                out[line[9:].strip()] = block.strip() + "\n"
-                break
+                name = line[9:].strip()
+            elif line.startswith("Architecture: "):
+                arch = line[14:].strip()
+        if name is not None:
+            key = "%s:%s" % (name, arch) if arch and arch not in ("all", "none") else name
+            out[key] = block.strip() + "\n"
     return out
 
 
