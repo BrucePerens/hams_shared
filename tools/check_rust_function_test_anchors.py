@@ -151,20 +151,26 @@ def _run_rust_scan(filepaths):
     is_trivial)]}, silently omitting any file the real `syn` parser
     itself failed to parse (matching `_run_js_scan`'s own SyntaxError-skip
     behavior)."""
-    if not filepaths or not _ensure_scan_binary_built():
+    if not filepaths:
         return {}
-    proc = subprocess.run(
-        [_SCAN_BINARY],
-        input=json.dumps(filepaths),
-        capture_output=True,
-        text=True,
-    )
+    # A scanner that did not build or run is not a clean scan (and must never write an empty baseline): fail with the reason.
+    if not _ensure_scan_binary_built():
+        raise SystemExit("[!] Rust function scan: rust_function_scan could not be built (cargo build --release in tools/rust_function_scan)")
+    try:
+        proc = subprocess.run(
+            [_SCAN_BINARY],
+            input=json.dumps(filepaths),
+            capture_output=True,
+            text=True,
+        )
+    except OSError as error:
+        raise SystemExit(f"[!] Rust function scan could not start {_SCAN_BINARY}: {error}")
     if proc.returncode != 0 or not proc.stdout:
-        return {}
+        raise SystemExit(f"[!] Rust function scan failed (exit {proc.returncode}): {proc.stderr.strip()[:500]}")
     try:
         results = json.loads(proc.stdout)
-    except json.JSONDecodeError:
-        return {}
+    except json.JSONDecodeError as error:
+        raise SystemExit(f"[!] Rust function scan printed output that is not JSON: {error}")
     return {
         entry["file"]: [
             (f["name"], f["start"], f["end"], f["is_trivial"]) for f in entry["functions"]
