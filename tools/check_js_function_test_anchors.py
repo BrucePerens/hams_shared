@@ -72,13 +72,30 @@ DEFAULT_BASELINE_FILENAME = "js_function_test_anchor_baseline.json"
 _JS_SCAN_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "js_function_scan.cjs")
 
 
+def _not_checked(message):
+    """Print why nothing was checked and exit 2 ("could not check", check_target.py), never a pass."""
+    print(message, file=sys.stderr)
+    sys.exit(check_target.EXIT_NOT_CHECKED)
+
+
+def _git_names(repo_root, pattern, what):
+    """Repository-relative tracked names matching `pattern`. A directory that is not a git work tree has none (the empty-scan rule of
+    check_target.py decides what that means); a git that is missing, times out or fails inside a work tree (a corrupt index) is not
+    "no files" and stops the run."""
+    try:
+        return git_listed(repo_root, "ls-files", pattern)
+    except subprocess.CalledProcessError as error:
+        if b"not a git repository" in (error.stderr or b""):
+            return []
+        _not_checked(f"[!] cannot list the tracked {what} of {repo_root} ({error}); scanned 0 files, so this is not a pass.")
+    except (OSError, subprocess.TimeoutExpired) as error:
+        _not_checked(f"[!] cannot list the tracked {what} of {repo_root} ({error}); scanned 0 files, so this is not a pass.")
+
+
 def _git_tracked_js_files(repo_root):
     """Only git-tracked .js files -- same real-world-safety reason
     `_git_tracked_python_files` uses `git ls-files` over a raw `os.walk`."""
-    try:
-        names = git_listed(repo_root, "ls-files", "*.js")
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return []
+    names = _git_names(repo_root, "*.js", ".js files")
     files = []
     for rel in names:
         parts = rel.split("/")
@@ -139,11 +156,7 @@ def _web_assets_tests_files(repo_root):
 
 
 def _git_tracked_manifest_files(repo_root):
-    try:
-        names = git_listed(repo_root, "ls-files", "*__manifest__.py")
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return []
-    return names
+    return _git_names(repo_root, "*__manifest__.py", "manifests")
 
 
 def _extend_span_backward_over_comments(start, lines):
