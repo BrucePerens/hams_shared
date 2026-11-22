@@ -164,3 +164,33 @@ def test_parse_timestamp_reads_an_epoch_and_an_rfc3339_time():
 # Tests [@ANCHOR: sourceset:sourceset_db_plan_class]
 # Tests [@ANCHOR: sourceset:sourceset_file_item_class]
 # Tests [@ANCHOR: runner:runner_runner_class]
+
+
+def _fetch_wal_repo(present):
+    repo = src.PgBackRestRepo(FakeRunner({}), si.Secrets({}), "/nonexistent", "s", "aes-256-cbc", {"type": "posix", "path": "/r"}, "/p")
+
+    def call(*args, check=True, capture=True):
+        name = args[1]
+        return subprocess.CompletedProcess(args, 0 if name in present else 1, stdout="", stderr="")
+    repo.call = call
+    return repo
+
+
+def test_fetch_wal_refuses_a_gap_in_the_middle(tmp_path):
+    names = ["000000010000000000000010", "000000010000000000000011", "000000010000000000000013"]
+    repo = _fetch_wal_repo(set(names))
+    with pytest.raises(RestorationError, match="missing"):
+        repo.fetch_wal({"archive": {"start": names[0]}}, {"archive": [{"max": names[-1]}]}, str(tmp_path))
+
+
+def test_fetch_wal_accepts_a_contiguous_range(tmp_path):
+    names = ["000000010000000000000010", "000000010000000000000011", "000000010000000000000012"]
+    repo = _fetch_wal_repo(set(names))
+    assert repo.fetch_wal({"archive": {"start": names[0]}}, {"archive": [{"max": names[-1]}]}, str(tmp_path)) == names
+
+
+def test_fetch_wal_accepts_a_timeline_switch(tmp_path):
+    present = {"000000010000000000000010", "000000010000000000000011", "000000020000000000000011", "000000020000000000000012", "00000002.history"}
+    repo = _fetch_wal_repo(present)
+    got = repo.fetch_wal({"archive": {"start": "000000010000000000000010"}}, {"archive": [{"max": "000000020000000000000012"}]}, str(tmp_path))
+    assert "000000020000000000000012" in got
