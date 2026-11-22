@@ -72,6 +72,15 @@ class RepoTests(unittest.TestCase):
                     handle.write(HEAD + "    shop_secret = fields.Char()\n")
             self.assertEqual(list(css.scan_repo(root)), [os.path.join("mod", "s.py") + ":S.shop_secret"])
 
+    def test_a_file_that_does_not_parse_fails_the_run(self):
+        with tempfile.TemporaryDirectory() as root:
+            with open(os.path.join(root, "s.py"), "w", encoding="utf-8") as handle:
+                handle.write("# res.config.settings\ndef broken(:\n")
+            unread = []
+            css.scan_repo(root, unread)
+            self.assertEqual(len(unread), 1)
+            self.assertEqual(css.main([root]), 1)
+
     def test_main_exit_codes(self):
         with tempfile.TemporaryDirectory() as root:
             with open(os.path.join(root, "s.py"), "w", encoding="utf-8") as handle:
