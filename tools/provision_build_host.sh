@@ -401,6 +401,9 @@ do_verify() {
   local rc=0 d
   d="$(mktemp -d)"
   trap 'rm -rf "$d"' RETURN
+  # A failing cargo, node or pytest run is piped through tail/grep below: without pipefail the pipeline reports the status of
+  # tail/grep, and VERIFY OK would be printed for a machine whose tests fail.
+  set -o pipefail
   say "== cargo test of a small crate"
   ( cd "$d" && cargo new --lib --vcs none -q smoke && cd smoke \
     && printf '#[cfg(test)]\nmod t {\n    #[test]\n    fn adds() {\n        assert_eq!(2 + 2, 4);\n    }\n}\n' >>src/lib.rs \
@@ -420,7 +423,7 @@ do_verify() {
     local db="tmp_verify_$$"
     ( createdb "$db" && psql -qAtc 'select 1' "$db" >/dev/null && dropdb "$db" && echo "ok: scratch database created and dropped" ) || { dropdb --if-exists "$db" 2>/dev/null; say "FAIL scratch database (the lint user needs a createdb role)"; rc=1; }
   else say "FAIL psql missing"; rc=1; fi
-  kopia --version 2>/dev/null | head -1 || { say "FAIL kopia"; rc=1; }
+  local kv; kv="$(kopia --version 2>/dev/null | head -1)" && [ -n "$kv" ] && say "$kv" || { say "FAIL kopia"; rc=1; }
   { go version 2>/dev/null || /usr/lib/go-1.24/bin/go version; } || { say "FAIL go"; rc=1; }
   [ -f /usr/share/pdns-backend-sqlite3/schema/schema.sqlite3.sql ] || { say "FAIL pdns sqlite schema"; rc=1; }
   say "== headless browser screenshot"
