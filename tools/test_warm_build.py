@@ -50,9 +50,9 @@ class StackTests(Base):
         self.assertEqual(len(self.layers()), 2)
         self.assertEqual(self.build("ls $M/t", promote=False).split(), ["a", "c"])
 
-    def test_the_first_passing_run_becomes_the_base_whatever_it_is(self):
+    def test_a_run_that_is_not_main_is_never_the_base_even_with_no_stack(self):
         self.build("echo x > $M/f", promote=False)
-        self.assertEqual(len(self.layers()), 1)
+        self.assertEqual(self.layers(), [])
 
     def test_a_failed_run_is_not_promoted_and_leaves_no_directory(self):
         with warm_build.Run(self.base, "k", True) as run:

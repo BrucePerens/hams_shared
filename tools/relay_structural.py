@@ -18,11 +18,14 @@ quietly smaller. The build goes to `lint_cache.named_cargo_session("relay-struct
 It is built and run from a copy of the checkout at a fixed path (`lint_cache.work_checkout`): cargo hashes absolute paths into its fingerprints, so the relay was recompiled for every worktree.
 """
 
+import fcntl
 import hashlib
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 
 import lint_cache
 import lint_exec
@@ -149,12 +152,46 @@ def _overlay_group(repo_root):
     if not warm_build.available(base, environ):
         return None
     key = "relay" + hashlib.sha256(("%s|%s|%s" % (lint_exec.repo_name(repo_root), lint_cache.toolchain_id(environ), FEATURES)).encode()).hexdigest()[:12]
-    with warm_build.Run(base, key, _builds_main(repo_root)) as run:
+    promote = _builds_main(repo_root)
+    if not promote and not warm_build.current_stack(base, key):
+        _bootstrap_base(base, key, repo_root, environ)
+    return _overlay_run(base, key, repo_root, environ, promote)
+
+
+def _overlay_run(base, key, repo_root, environ, promote):
+    with warm_build.Run(base, key, promote) as run:
         done = subprocess.run(run.argv([sys.executable, os.path.abspath(__file__), repo_root, "--overlay-mnt=" + run.mount]), env=environ)
         if done.returncode == warm_build.WARM_MOUNT_FAILED:
             return None
         run.passed = done.returncode == 0
         return done.returncode
+
+
+def _bootstrap_base(base, key, repo_root, environ):
+    """No warm base exists and this run is not main: build the base from `origin/main` first (a detached worktree of it, beside the sibling repositories of
+    `repo_root`), under one exclusive lock so that runs arriving together build it once, and never from this run's own tree. A failure leaves no base and the run goes on cold."""
+    sha = _run(["git", "rev-parse", "--verify", "origin/main"], repo_root, None)
+    if sha.returncode != 0:
+        return
+    with open(os.path.join(base, key + ".bootstrap.lock"), "a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if warm_build.current_stack(base, key):
+            return  # another run built it while this one waited
+        parent = os.path.dirname(os.path.abspath(repo_root))
+        scratch = tempfile.mkdtemp(prefix="hams-relay-base-", dir=os.path.dirname(os.path.abspath(base)) if lint_cache.in_ram(base, environ) else None)
+        main_root = os.path.join(scratch, os.path.basename(os.path.abspath(repo_root)))
+        try:
+            if _run(["git", "worktree", "add", "--detach", main_root, sha.stdout.strip()], repo_root, None).returncode != 0:
+                return
+            for name in os.listdir(parent):  # the sibling repositories the tests reach (hams_open, hams_shared): the same links as the checkout has
+                link = os.path.join(scratch, name)
+                if not os.path.exists(link) and name != os.path.basename(os.path.abspath(repo_root)):
+                    os.symlink(os.path.join(parent, name), link)
+            print("relay structural tests: no warm base yet: building it from origin/main (%s)" % sha.stdout.strip()[:12])
+            _overlay_run(base, key, main_root, environ, True)
+        finally:
+            _run(["git", "worktree", "remove", "--force", main_root], repo_root, None)
+            shutil.rmtree(scratch, ignore_errors=True)
 
 
 def _run_in_overlay(argv, repo_root, mount):

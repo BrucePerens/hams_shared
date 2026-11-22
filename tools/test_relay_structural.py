@@ -106,6 +106,24 @@ class OverlayTests(unittest.TestCase):
         self.assertEqual(third.returncode, 0, third.stdout + third.stderr)
         self.assertEqual(sorted(self.stack()), sorted(layers))  # not main: its upper was thrown away
 
+    def test_with_no_base_a_pr_run_builds_the_base_from_origin_main_not_from_itself(self):
+        main_rs = os.path.join(self.repo, rs.RELAY_REL, "src", "main.rs")
+        with open(main_rs, "a") as handle:
+            handle.write("// a pull request edit\n")
+        done = self.run_step()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("building it from origin/main", done.stdout)
+        layers = self.stack()
+        self.assertEqual(len(layers), 1)
+        built = os.path.join(self.base, layers[0], "work", rs.RELAY_REL, "src", "main.rs")
+        self.assertTrue(os.path.exists(built))
+        self.assertNotIn("pull request edit", open(built).read())
+        self.assertEqual(self.git_worktrees(), 1)  # the temporary main checkout is gone again
+
+    def git_worktrees(self):
+        out = subprocess.run(["git", "-C", self.repo, "worktree", "list"], capture_output=True, text=True).stdout
+        return len(out.strip().splitlines())
+
     def test_the_overlay_can_be_turned_off(self):
         self.env["HAMS_LINT_RELAY_OVERLAY"] = "0"
         done = self.run_step()

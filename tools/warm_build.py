@@ -19,7 +19,7 @@ path for every run of a key (tools hash absolute paths into their fingerprints) 
 Stack: layers named `warm-<key>-<id>` directly in `base` (so the RAM budget of `ram_dirs.prune_lint_cache` counts them), newest first, published as the TARGET TEXT of the
 symlink `warm-<key>-current` (`layer:layer:...`). A run reads the link once and holds a SHARED flock on every layer it mounts; publishing replaces the link with
 `os.replace` (atomic), so it never disturbs a mounted run. A passing run that builds exactly main keeps its upper as the new top layer (promotion: nothing is copied; a
-lower layer never changes while mounted); a pull-request run's upper is always discarded. With no stack yet the first passing run becomes the base (bootstrap).
+lower layer never changes while mounted); any other run's upper is always discarded. With no stack yet the CALLER builds the base from a main checkout first (`promote=True`).
 
 Flatten: at WARM_MAX_LAYERS a `<key>.draining` flag makes new runs wait briefly (WARM_DRAIN_WAIT seconds) so the mounts end, and whenever a run ends it tries, without
 waiting, to take the EXCLUSIVE flock of every layer; when it has them all it merges the layers into the bottom one in place (renaming files over, applying whiteouts and
@@ -257,7 +257,6 @@ class Run:
             os.makedirs(os.path.join(self.dir, name))
         self.layer_locks, self.lowers = [], []
         stack = current_stack(base, key)
-        self.bootstrap = not stack
         for name in stack:
             handle = open(os.path.join(base, name) + ".lock", "a+")
             fcntl.flock(handle, fcntl.LOCK_SH)  # a mounted layer is never deleted or merged: both need the exclusive lock
@@ -277,7 +276,7 @@ class Run:
 
     def __exit__(self, exc_type, exc, tb):
         try:
-            if exc_type is None and self.passed and (self.promote or self.bootstrap):
+            if exc_type is None and self.passed and self.promote:
                 self._promote()
         finally:
             for handle in self.layer_locks:
