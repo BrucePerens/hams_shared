@@ -74,6 +74,15 @@ def config_member_text(runner: Runner, archive: str, member: str) -> str | None:
     return runner.run(["tar", "--zstd", "-xOf", archive, member], capture=True).stdout
 
 
+CONFIG_EXCLUDED = ("var/lib/dpkg", "etc/passwd", "etc/passwd-", "etc/group", "etc/group-", "etc/shadow", "etc/shadow-", "etc/gshadow", "etc/gshadow-",
+                   "etc/subuid", "etc/subuid-", "etc/subgid", "etc/subgid-")
+
+
+def config_excludes() -> list[str]:
+    """tar --exclude options for the package database and account files of a config archive, in the bare and the `./` form (an archive may use either)."""
+    return ["--exclude=" + prefix + path for path in CONFIG_EXCLUDED for prefix in ("", "./")]
+
+
 def restore_files(bs: ss.BackupSet, items: Iterable[ss.FileItem], stage: str, work: str, runner: Runner, say: Callable[[str], object]) -> list[str]:
     """Restore every FileItem into the staging tree (a mirror of /). Config archives are extracted there too, except the package database and
     the account files, which stay the image's own. Returns the archive paths (their member lists are read again for owners)."""
@@ -88,8 +97,7 @@ def restore_files(bs: ss.BackupSet, items: Iterable[ss.FileItem], stage: str, wo
             if not found:
                 raise RestorationError("%s holds no config archive" % item.label)
             archive = os.path.join(dest, found[-1])
-            ex = ["--exclude=./var/lib/dpkg", "--exclude=./etc/passwd", "--exclude=./etc/group", "--exclude=./etc/shadow", "--exclude=./etc/gshadow",
-                  "--exclude=var/lib/dpkg", "--exclude=etc/passwd", "--exclude=etc/group", "--exclude=etc/subuid", "--exclude=etc/subgid"]
+            ex = config_excludes()
             runner.run(["tar", "--zstd", "-xpf", archive, "--numeric-owner", "--xattrs", "--same-owner", *ex, "-C", stage])
             archives.append(archive)
             say("config archive %s extracted" % found[-1])
