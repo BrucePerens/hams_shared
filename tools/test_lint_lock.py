@@ -315,22 +315,24 @@ class SlotTests(Base):
     def setUp(self):
         super().setUp()
         self.env3 = dict(self.env, HAMS_LINT_SLOTS="3")
+        # A real /opt/hams/etc/lint_slots or ~/.config/hams-lint/slots must not leak in: point the setting file at a path that does not exist.
+        self.no_file = {"HAMS_LINT_SLOTS_FILE": os.path.join(self.cache, "no_such_slots_file")}
 
     def test_slot_count_comes_from_the_environment_then_the_machine_entry_then_one(self):
         table = os.path.join(self.cache, "machines.json")
         with open(table, "w", encoding="utf-8") as handle:
             json.dump({"machines": {"devbox": {"lint_slots": 4}, "other": {}}}, handle)
-        self.assertEqual(lint_lock.slot_count({"HAMS_LINT_SLOTS": "6"}, table), 6)
-        self.assertEqual(lint_lock.slot_count({}, table), 4)  # devbox is what an unknown host name resolves to
-        self.assertEqual(lint_lock.slot_count({"HAMS_LINT_MACHINE": "other"}, table), 1)
+        self.assertEqual(lint_lock.slot_count(dict(self.no_file, HAMS_LINT_SLOTS="6"), table), 6)
+        self.assertEqual(lint_lock.slot_count(self.no_file, table), 4)  # devbox is what an unknown host name resolves to
+        self.assertEqual(lint_lock.slot_count(dict(self.no_file, HAMS_LINT_MACHINE="other"), table), 1)
         for bad in ("0", "99", "x", "-1", "2.5"):
-            self.assertEqual(lint_lock.slot_count({"HAMS_LINT_SLOTS": bad}, table), 1, bad)
-        self.assertEqual(lint_lock.slot_count({}, os.path.join(self.cache, "missing.json")), 1)
+            self.assertEqual(lint_lock.slot_count(dict(self.no_file, HAMS_LINT_SLOTS=bad), table), 1, bad)
+        self.assertEqual(lint_lock.slot_count(self.no_file, os.path.join(self.cache, "missing.json")), 1)
 
     def test_the_committed_inventory_gives_the_dev_box_several_slots_and_the_small_machines_one(self):
-        self.assertGreaterEqual(lint_lock.slot_count({"HAMS_LINT_MACHINE": "devbox"}), 4)
+        self.assertGreaterEqual(lint_lock.slot_count(dict(self.no_file, HAMS_LINT_MACHINE="devbox")), 4)
         for name in ("mac1-vm", "bruce17", "bruce-yoga"):
-            self.assertEqual(lint_lock.slot_count({"HAMS_LINT_MACHINE": name}), 1, name)
+            self.assertEqual(lint_lock.slot_count(dict(self.no_file, HAMS_LINT_MACHINE=name)), 1, name)
 
     def test_slot_one_is_the_original_lock_file(self):
         self.assertEqual(lint_lock.slot_lock_path(1, self.env), lint_lock.lock_path(self.env))
@@ -515,18 +517,19 @@ class BurstSlotTests(Base):
         os.makedirs(lint_lock.cache_dir(self.env), exist_ok=True)
 
     def test_burst_slots_come_from_the_environment_then_the_machine_entry_then_none(self):
+        no_file = {"HAMS_LINT_SLOTS_FILE": os.path.join(self.cache, "no_such_slots_file")}  # a real slots file must not leak in
         table = os.path.join(self.cache, "machines.json")
         with open(table, "w", encoding="utf-8") as handle:
             json.dump({"machines": {"devbox": {"lint_slots": 4, "lint_burst_slots": 8}, "other": {"lint_slots": 2}}}, handle)
-        self.assertEqual(lint_lock.burst_slot_count({}, table), 8)
-        self.assertEqual(lint_lock.total_slot_count({}, table), 12)
-        self.assertEqual(lint_lock.burst_slot_count({"HAMS_LINT_BURST_SLOTS": "3"}, table), 3)
-        self.assertEqual(lint_lock.burst_slot_count({"HAMS_LINT_BURST_SLOTS": "0"}, table), 0)
-        self.assertEqual(lint_lock.burst_slot_count({"HAMS_LINT_MACHINE": "other"}, table), 0, "no entry: no burst")
+        self.assertEqual(lint_lock.burst_slot_count(no_file, table), 8)
+        self.assertEqual(lint_lock.total_slot_count(no_file, table), 12)
+        self.assertEqual(lint_lock.burst_slot_count(dict(no_file, HAMS_LINT_BURST_SLOTS="3"), table), 3)
+        self.assertEqual(lint_lock.burst_slot_count(dict(no_file, HAMS_LINT_BURST_SLOTS="0"), table), 0)
+        self.assertEqual(lint_lock.burst_slot_count(dict(no_file, HAMS_LINT_MACHINE="other"), table), 0, "no entry: no burst")
         for bad in ("x", "-1", "2.5", ""):
-            self.assertEqual(lint_lock.burst_slot_count({"HAMS_LINT_BURST_SLOTS": bad}, table), 0, bad)
-        self.assertEqual(lint_lock.burst_slot_count({"HAMS_LINT_BURST_SLOTS": "99"}, table), 11, "base plus burst never passes the 15 slots")
-        self.assertEqual(lint_lock.burst_slot_count({}, os.path.join(self.cache, "missing.json")), 0)
+            self.assertEqual(lint_lock.burst_slot_count(dict(no_file, HAMS_LINT_BURST_SLOTS=bad), table), 0, bad)
+        self.assertEqual(lint_lock.burst_slot_count(dict(no_file, HAMS_LINT_BURST_SLOTS="99"), table), 11, "base plus burst never passes the 15 slots")
+        self.assertEqual(lint_lock.burst_slot_count(no_file, os.path.join(self.cache, "missing.json")), 0)
 
     def test_the_committed_inventory_opens_burst_slots_on_the_dev_box_only(self):
         self.assertGreater(lint_lock.burst_slot_count({"HAMS_LINT_MACHINE": "devbox"}), 0)
