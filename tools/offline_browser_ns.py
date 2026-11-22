@@ -242,6 +242,13 @@ class TcpForwarder:
             self._running = False
             listener, self._listener = self._listener, None
             live, self._live = list(self._live), set()
+        # close() alone does not wake the accept thread blocked in accept() on Linux: the socket stays listening until one more
+        # client connects, so "offline" accepted that client instead of refusing it and "online" right after failed with
+        # EADDRINUSE. shutdown() ends the accept and the listen at once.
+        try:
+            listener.shutdown(socket.SHUT_RDWR)
+        except OSError as exc:
+            _logger.debug("forwarder %s: shutdown of the listener failed: %s", self.name, exc)
         try:
             listener.close()
         except OSError as exc:
