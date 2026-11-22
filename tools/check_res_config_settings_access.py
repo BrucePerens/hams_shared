@@ -86,19 +86,23 @@ def _check_csv(module_name, csv_path):
     try:
         with open(csv_path, "r", encoding="utf-8") as f:
             content = f.read()
-    except OSError:
-        return []
+    except (OSError, UnicodeDecodeError) as error:
+        # A file this check cannot read is not a clean file: it may hold the grant.
+        return [f"{module_name}: '{csv_path}' could not be read ({error}), so its res.config.settings grants are unchecked"]
 
     reader = csv.DictReader(io.StringIO(content))
-    if not reader.fieldnames or "model_id:id" not in reader.fieldnames:
-        return []
+    # Odoo reads `field:id` and `field/id` headers alike, so both spell the same column.
+    model_col = next((c for c in (reader.fieldnames or ()) if c in ("model_id:id", "model_id/id")), None)
+    if model_col is None:
+        return [f"{module_name}: '{csv_path}' has no model_id:id (or model_id/id) column, so its res.config.settings grants are unchecked"]
+    group_col = next((c for c in reader.fieldnames if c in ("group_id:id", "group_id/id")), "group_id:id")
 
     errors = []
     for row in reader:
-        model_id = (row.get("model_id:id") or "").strip()
+        model_id = (row.get(model_col) or "").strip()
         if model_id not in TARGET_MODEL_IDS:
             continue
-        group = (row.get("group_id:id") or "").strip()
+        group = (row.get(group_col) or "").strip()
         if group != ALLOWED_GROUP:
             errors.append(
                 f"{module_name}: '{csv_path}' row '{row.get('id', '?')}' grants "
