@@ -6705,6 +6705,7 @@ class WebBotAuthSigningUnitTests(_SafePatchTestCase):
         "pager-os-monitor.service": "monitoring probes of our own sites and the DNS roots",
         "hams-auth-cert-renew.service": "ACME to Let's Encrypt, authenticated by the account key",
         "hams-turn-cert-renew.service": "ACME to Let's Encrypt, authenticated by the account key",
+        "member.cert.service": "ACME to Let's Encrypt, authenticated by the account key (one-click member certificates)",
     }
 
     def test_every_external_fetch_service_unit_is_either_a_signing_unit_or_a_listed_non_crawler(self):
@@ -8488,6 +8489,33 @@ class TurnOwnAddressTests(unittest.TestCase):
         # fails and the daemon EXITS (status 1, tested), and only a restart policy brings the login back.
         self.assertEqual(self._directive("hams-auth-gateway.service", "Restart"), ["always"])
         self.assertEqual(self._directive("hams-auth-gateway.service", "RestartSec"), ["5"])
+
+
+class MemberCertUnitTests(unittest.TestCase):
+    """The one-click member certificate daemon (hams_com daemons/member_cert, docs/proposals/MEMBER_CERTIFICATES.md)."""
+
+    def _unit(self):
+        for spec in infra.MANIFEST["static_files"]:
+            if spec["path"] == "/opt/hams/systemd/member.cert.service":
+                return spec
+        self.fail("member.cert.service is not in the MANIFEST")
+
+    def test_unit_is_external_fetch_and_opt_in_on_production_only(self):
+        spec = self._unit()
+        self.assertTrue(spec.get("external_fetch"))
+        self.assertTrue(spec.get("opt_in"))
+        self.assertEqual(spec["environments"], ["prod"])
+        self.assertIn("member.cert.service", infra.external_fetch_unit_names())
+        self.assertIn("member.cert.service", infra.opt_in_unit_names())
+
+    def test_unit_runs_as_the_dns_sync_account_with_its_odoo_key_and_writes_no_file(self):
+        content = self._unit()["content"]
+        self.assertIn("User=hamsd_dns_sync", content)
+        self.assertIn('Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/dns_sync/dns_api_service_internal.key"', content)
+        self.assertIn("ExecStart=/usr/bin/python3 /opt/hams/daemons/member_cert/main.py", content)
+        self.assertIn("ProtectSystem=strict", content)
+        self.assertNotIn("ReadWritePaths", content, "the daemon keeps every key and certificate in memory and writes no file")
+        self.assertEqual(infra.ROTATED_KEY_RELOAD_POLICY["member.cert.service"][0], "hams_config")
 
 
 class AuthCertRenewUnitTests(unittest.TestCase):
