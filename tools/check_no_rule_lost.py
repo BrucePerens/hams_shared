@@ -138,6 +138,9 @@ def main(argv=None):
     before = [read_source(spec) for spec in options.before]
     after = [read_source(spec) for spec in options.after]
     total = sum(len(units(text)) for text in before)
+    if total == 0:
+        print("check_no_rule_lost: FAIL, the old text %s holds no units, so nothing was compared (an empty or wrong file or revision)" % ", ".join(options.before))
+        return 1
     missing = missing_units(before, after)
     if not missing:
         print("check_no_rule_lost: OK, all %d units of %s are present verbatim in %s" % (total, ", ".join(options.before), ", ".join(options.after)))
