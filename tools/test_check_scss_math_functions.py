@@ -186,6 +186,17 @@ class ScssTreeTests(unittest.TestCase):
         self.assertEqual(len(found), 1)
         self.assertTrue(found[0].startswith(os.path.join("mod_b", "static", "src", "scss", "bad.scss") + ":1:"))
 
+    def test_an_unreadable_scss_file_is_reported_not_skipped(self):
+        path = os.path.join(self.tmp, "mod_a", "static", "src", "scss", "bad.scss")
+        os.makedirs(os.path.dirname(path))
+        with open(path, "wb") as handle:
+            handle.write(b"a { w: min(12rem, 100%) }\xff\xfe\n")
+        found = chk.check_scss_math_functions(self.tmp)
+        self.assertEqual(len(found), 1)
+        self.assertIn("could not be read", found[0])
+        res = subprocess.run([sys.executable, _SCRIPT, self.tmp], capture_output=True, text=True)
+        self.assertEqual(res.returncode, 1, res.stdout)
+
     def test_cli_scans_every_given_root_and_sets_the_exit_status(self):
         other = tempfile.mkdtemp()
         try:

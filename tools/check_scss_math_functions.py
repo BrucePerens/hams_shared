@@ -409,7 +409,7 @@ def check_scss_math_functions(repo_root):
             with open(path, "r", encoding="utf-8") as handle:
                 text = handle.read()
         except (UnicodeDecodeError, OSError) as error:
-            print(f"Warning: could not read {path}: {error}")
+            violations.append(f"{os.path.relpath(path, repo_root)}: could not be read ({type(error).__name__}): its SCSS was not checked")
             continue
         violations.extend(check_scss_text(text, os.path.relpath(path, repo_root)))
     return violations
