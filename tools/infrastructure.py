@@ -8525,8 +8525,8 @@ ExecStart=/opt/hams/daemons/hams_auth_gateway/target/release/hams_auth_gateway /
 Restart=always
 RestartSec=5
 
-# Own journal namespace so its logs (client address on handshake and refusal lines) keep to the
-# 14-day cap in /etc/systemd/journald@hams-auth.conf without shortening any other service's logs.
+# Own journal namespace so its logs (client address on handshake and refusal lines) are kept permanently
+# (no retention cap in /etc/systemd/journald@hams-auth.conf) without changing any other service's logs.
 # Read them with: journalctl --namespace=hams-auth -u hams-auth-gateway
 LogNamespace=hams-auth
 
