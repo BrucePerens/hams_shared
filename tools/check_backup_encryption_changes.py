@@ -146,13 +146,14 @@ def is_approved(path, rule, approvals):
 # [@ANCHOR: check_backup_encryption_changes:check_repo]
 def check_repo(repo, base="origin/main", today=None):
     """The problems of the change in `repo` against `merge-base(base, HEAD)`: a list of sentences (empty: clean). An unavailable git or base
-    is reported on standard error by `main` and gives no problems."""
+    is reported on standard error by `main` and gives no problems; a diff that cannot be read is a problem."""
     code, merge_base = run_git(repo, "merge-base", base, "HEAD")
     if code != 0 or not merge_base.strip():
         return []
     code, diff = run_git(repo, "-c", "core.quotepath=off", "diff", "-U0", "--no-color", "--no-ext-diff", merge_base.strip())
     if code != 0:
-        return []
+        # The base exists but its diff could not be read (a timeout, a git error): nothing was looked at, so this is not a clean result.
+        return [f"the diff against {merge_base.strip()[:12]} could not be read (git exit {code}), so no backup-encryption change was checked"]
     files = parse_diff(diff)
     code, untracked = run_git(repo, "ls-files", "--others", "--exclude-standard", "-z")
     for name in (n for n in untracked.split("\0") if n) if code == 0 else []:
