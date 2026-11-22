@@ -1086,14 +1086,6 @@ def hook_migrate_subcarrier_signing_key(env_vars, dest_dir, path, run_cmd_func):
 # (a new daemon must get its own account or be added here in a reviewed change), and when a listed unit no
 # longer runs as `odoo` (remove it, so the list only shrinks as units move to their own accounts).
 SHARED_ODOO_ACCOUNT_UNITS = {
-    "adif.ingress.service": (
-        "Writes the hams_com 770 directories adif_queue, adif_uploads and failed_input, which Odoo (a hams_com member) also "
-        "uses. Moving it needs those directories' ownership and the Odoo side's access redesigned: not mechanical (plan section 13)."
-    ),
-    "adif.processor.service": (
-        "Same directories as adif.ingress (adif_queue, adif_uploads, failed_input, hams_com 770, shared with Odoo): "
-        "migrates together with it, after the ownership redesign (plan section 13)."
-    ),
     "backup.worker.service": (
         "Writes /opt/hams/etc/keys today, so a family account cannot hold it until its key-directory write access is removed; "
         "its own phase, the pgbackrest sidecar (ADR-0103) already took the root part (plan section 13)."
@@ -1605,6 +1597,18 @@ FAMILY_ACCOUNT_UNITS = {
         "user": "hamsd_dx_daemon",
         "environment_files": frozenset({"common.env"}),
         "no_state": True,
+    },
+    # The ADIF pipeline (plan section 13 family adif_pipeline): the two units share one account and its three spool directories.
+    # `odoo_writes` names the directory Odoo itself writes (the logbook upload route spools into it and Odoo removes a finished
+    # file): group-writable and setgid for the account's group, which odoo joins, instead of the 750 every other state directory has.
+    "adif.ingress.service": {
+        "user": "hamsd_adif",
+        "environment_files": frozenset({"common.env", "rabbitmq.env"}),
+        "odoo_writes": frozenset({"/opt/hams/spool/adif_uploads"}),
+    },
+    "adif.processor.service": {
+        "user": "hamsd_adif",
+        "environment_files": frozenset({"common.env", "rabbitmq.env"}),
     },
     "gdpr.csv.export.service": {
         "user": "hamsd_gdpr_export",
@@ -2204,6 +2208,21 @@ MANIFEST = {
             "environments": ["prod", "test"],
         },
         {
+            # daemons/adif_ingress and daemons/adif_processor (plan section 13, family adif_pipeline): the ADIF upload ingress and the
+            # queue worker, one account for the two because they share the three spool directories. Two keys in its family key
+            # directory (logbook_api_service_internal, logbook_sync_service_internal), handed over by odoo (chgrp, never chown).
+            # odoo is in the group so it can write the upload spool and remove a finished file (Odoo owns the queue rows). Not in
+            # hams_com, so it can read nothing else that group holds.
+            "user": "hamsd_adif",
+            "group": "hamsd_adif",
+            "home": "/nonexistent",
+            "shell": "/usr/sbin/nologin",
+            "add_to_users": ["odoo"],
+            "member_of": ["hams_traverse"],
+            "not_member_of": ["hams_com"],
+            "environments": ["prod", "test"],
+        },
+        {
             # daemons/gdpr_csv_export: the GDPR export builder, which handles members' personal data. Its own account and key
             # (gdpr_export_service_internal.key) mean no other daemon reads the key or anything the unit holds. odoo joins this group for the key hand-off (chgrp, never chown). Not in hams_com: the traversal group plus the ACL entries on the directories it passes through are all it has.
             "user": "hamsd_gdpr_export",
@@ -2640,6 +2659,14 @@ MANIFEST = {
             "environments": ["prod", "test"],
         },
         {
+            # Key directory of the adif family (hamsd_adif): the two logbook service keys; see the ncvec_sync entry above.
+            "path": "/opt/hams/etc/keys/adif",
+            "owner": "odoo:hamsd_adif",
+            "provision_mode": "750",
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
             # Key directory of the gdpr_export family (hamsd_gdpr_export): owned by odoo, group = the one account that consumes
             # the keys in it, 0750 (Bruce, NIGHT_PLAN 226); see the ncvec_sync entry above for the full reasoning.
             "path": "/opt/hams/etc/keys/gdpr_export",
@@ -2982,16 +3009,20 @@ MANIFEST = {
             "environments": ["prod", "test"],
         },
         {
+            # hamsd_adif's (Odoo, in the group, may read).
             "path": "/opt/hams/spool/adif_queue",
-            "owner": "hams_com:hams_com",
-            "provision_mode": "770",
+            "owner": "hamsd_adif:hamsd_adif",
+            "provision_mode": "750",
+            "recursive_owner": True,
             "runtime_mount": "rw",
             "environments": ["prod", "test"],
         },
         {
+            # hamsd_adif's (setgid and group-writable: Odoo (in the group) spools uploads here and removes finished files).
             "path": "/opt/hams/spool/adif_uploads",
-            "owner": "hams_com:hams_com",
-            "provision_mode": "770",
+            "owner": "hamsd_adif:hamsd_adif",
+            "provision_mode": "2770",
+            "recursive_owner": True,
             "runtime_mount": "rw",
             "environments": ["prod", "test"],
         },
@@ -3171,9 +3202,11 @@ MANIFEST = {
             "environments": ["prod"],
         },
         {
+            # hamsd_adif's (Odoo, in the group, may read).
             "path": "/opt/hams/failed_input",
-            "owner": "hams_com:hams_com",
-            "provision_mode": "770",
+            "owner": "hamsd_adif:hamsd_adif",
+            "provision_mode": "750",
+            "recursive_owner": True,
             "runtime_mount": "rw",
             "environments": ["prod", "test"],
         },
@@ -4143,6 +4176,10 @@ NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
 # Second tier (hams_com DAEMON_OS_ISOLATION_PLAN.md section 5, 2026-11-07), derived from daemons/adif_processor/main.py (hams_com): RabbitMQ and Odoo over TCP, files in the ADIF directories with default modes, no subprocess: none of it sets a kernel tunable, loads a module, reads the kernel log, writes a cgroup, sets the clock, makes a namespace, asks for realtime scheduling, creates a setuid or setgid file or changes personality. Not ProtectProc= or UMask=: the unit still runs as odoo beside Odoo and shares its directories.
+ProtectProc=invisible
+ProcSubset=pid
+# Group-readable files (0640): odoo is in the account's group and reads, and removes what it must through the directory's group write.
+UMask=0027
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectKernelLogs=true
@@ -4159,15 +4196,12 @@ SystemCallArchitectures=native
 # failure, masking that failure's own error behind a second one.
 ReadWritePaths=/opt/hams/spool/adif_queue /opt/hams/failed_input
 Type=simple
-User=odoo
+User=hamsd_adif
+Group=hamsd_adif
 WorkingDirectory=/opt/hams/daemons/adif_processor
 
-EnvironmentFile=-/opt/hams/etc/core.env
-EnvironmentFile=-/opt/hams/etc/db.env
-EnvironmentFile=-/opt/hams/etc/redis.env
+EnvironmentFile=-/opt/hams/etc/common.env
 EnvironmentFile=-/opt/hams/etc/rabbitmq.env
-EnvironmentFile=-/opt/hams/etc/pdns.env
-EnvironmentFile=-/opt/hams/etc/odoo.env
 # Found live on hams1, 2026-09-23: this unit was reading logbook_api_service_internal, the
 # read-only public-API proxy account (ham_logbook.user_logbook_api_service) -- the same
 # wrong-account mistake made earlier by a since-retired QSL sync daemon. process_job() here writes ham.adif.queue.state and creates
@@ -4175,7 +4209,7 @@ EnvironmentFile=-/opt/hams/etc/odoo.env
 # ham_logbook.user_logbook_sync_service specifically; every job failed with "You are not
 # allowed to modify 'ADIF Processing Queue' records" and stayed pending forever.
 Environment="ODOO_USER=logbook_sync_service_internal"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/logbook_sync_service_internal.key"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/adif/logbook_sync_service_internal.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
@@ -8415,6 +8449,10 @@ NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
 # Second tier (hams_com DAEMON_OS_ISOLATION_PLAN.md section 5, 2026-11-07), derived from daemons/adif_ingress/main.py (hams_com): RabbitMQ and Odoo over TCP, files in its spool directories with default modes, no subprocess: none of it sets a kernel tunable, loads a module, reads the kernel log, writes a cgroup, sets the clock, makes a namespace, asks for realtime scheduling, creates a setuid or setgid file or changes personality. Not ProtectProc= or UMask=: the unit still runs as odoo beside Odoo and shares its directories.
+ProtectProc=invisible
+ProcSubset=pid
+# Group-readable files (0640): odoo is in the account's group and reads, and removes what it must through the directory's group write.
+UMask=0027
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectKernelLogs=true
@@ -8425,19 +8463,16 @@ RestrictRealtime=true
 RestrictSUIDSGID=true
 LockPersonality=true
 SystemCallArchitectures=native
-ReadWritePaths=/opt/hams/spool /opt/hams/spool/adif_uploads
+ReadWritePaths=/opt/hams/spool/adif_uploads
 Type=simple
-User=odoo
+User=hamsd_adif
+Group=hamsd_adif
 WorkingDirectory=/opt/hams/daemons/adif_ingress
 
-EnvironmentFile=-/opt/hams/etc/core.env
-EnvironmentFile=-/opt/hams/etc/db.env
-EnvironmentFile=-/opt/hams/etc/redis.env
+EnvironmentFile=-/opt/hams/etc/common.env
 EnvironmentFile=-/opt/hams/etc/rabbitmq.env
-EnvironmentFile=-/opt/hams/etc/pdns.env
-EnvironmentFile=-/opt/hams/etc/odoo.env
 Environment="ODOO_USER=logbook_api_service_internal"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/logbook_api_service_internal.key"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/adif/logbook_api_service_internal.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="DAEMON_ARGS="
 
