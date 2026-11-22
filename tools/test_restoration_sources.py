@@ -217,6 +217,8 @@ def test_file_items_refuses_a_listed_file_and_local_source_with_no_snapshot():
     local = ss.BackupSet("local", FakeRunner({}), si.Secrets({}), {"local_files_sources": {"filestore": "/f"}}, "/w")
     with pytest.raises(RestorationError, match="filestore"):
         local.file_items()
+
+
 def test_apply_rsync_stat_refuses_a_path_outside_the_tree(tmp_path):
     tree = tmp_path / "t"
     tree.mkdir()
