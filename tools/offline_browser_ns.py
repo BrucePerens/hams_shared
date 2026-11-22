@@ -546,6 +546,26 @@ class _Broker:
         os.makedirs(ns_profile, exist_ok=True)
         os.chown(ns_profile, user.pw_uid, user.pw_gid, follow_symlinks=False)
 
+    @staticmethod
+    def _read_port_file(path, user):
+        """The text of the browser's DevToolsActivePort file, or None while it is missing or is not the browser's own file.
+
+        The file sits in a directory the test user owns and this runs as root, so a link planted at that name must not make
+        the broker read (and, through the port parse error or the reply, hand back) a file only root can read. The file is
+        opened without following a link and has to be a regular file owned by the test user.
+        """
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        except OSError:
+            return None
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != user.pw_uid:
+                return None
+            return os.read(fd, 4096).decode("utf-8", "replace")
+        finally:
+            os.close(fd)
+
     def launch_chrome(self, argv, env_overrides):
         cmd, odoo_profile, ns_profile = self._sanitize_chrome_argv(argv)
         user = pwd.getpwnam(self.odoo_user)
@@ -621,14 +641,13 @@ class _Broker:
                     f"the browser exited with code {proc.returncode} before opening its "
                     f"DevTools port (see {log_path})"
                 )
-            if os.path.exists(port_file) and os.path.getsize(port_file) > 5:
+            port_file_body = self._read_port_file(port_file, user)
+            if port_file_body is not None and len(port_file_body) > 5:
                 break
             time.sleep(0.05)
         else:
             self.kill_chrome(proc)
             raise RuntimeError(f"the browser never wrote {port_file} (see {log_path})")
-        with open(port_file, encoding="utf-8") as handle:
-            port_file_body = handle.read()
         devtools_port = int(port_file_body.splitlines()[0])
 
         cdp_in = TcpForwarder(
