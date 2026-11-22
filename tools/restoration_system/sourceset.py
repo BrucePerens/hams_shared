@@ -66,25 +66,28 @@ class BackupSet:
         return out
 
     def file_items(self) -> list[FileItem]:
-        """The kopia restore actions, in the order they should run."""
+        """The kopia restore actions, in the order they should run. RestorationError when a path or file the profile lists has no snapshot."""
         items = []
         if self.kind == "b2":
             by_path = src.newest_by_path(self.kopia_snapshots)
             for path in self.profile["b2_kopia_paths"]:
-                if path in by_path:
-                    items.append(FileItem("kopia " + path, by_path[path], path, "tree"))
+                if path not in by_path:
+                    raise RestorationError("the Backblaze set has no snapshot of %s, which the profile lists: refusing a restore that would silently lack it" % path)
+                items.append(FileItem("kopia " + path, by_path[path], path, "tree"))
             for name, path in self.profile["b2_kopia_files"].items():
                 snap = by_path.get("/hams-b2-virtual/file/" + name)
-                if snap:
-                    items.append(FileItem("kopia file " + name, snap, path, "file"))
+                if not snap:
+                    raise RestorationError("the Backblaze set has no snapshot of file %s, which the profile lists: refusing a restore that would silently lack it" % name)
+                items.append(FileItem("kopia file " + name, snap, path, "file"))
         else:
             config = src.newest_by_tag(self.kopia_snapshots, "config")
             for name, snap in sorted(config.items()):
                 items.append(FileItem("config archives " + name, snap, "/", "config_tar"))
             files = src.newest_by_tag(self.kopia_snapshots, "files")
             for name, path in self.profile["local_files_sources"].items():
-                if name in files:
-                    items.append(FileItem("files " + name, files[name], path, "tree"))
+                if name not in files:
+                    raise RestorationError("the local set has no `files` snapshot named %s, which the profile lists: refusing a restore that would silently lack it" % name)
+                items.append(FileItem("files " + name, files[name], path, "tree"))
         return items
 
     def db_plan(self) -> DbPlan:

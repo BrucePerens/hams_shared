@@ -194,3 +194,26 @@ def test_fetch_wal_accepts_a_timeline_switch(tmp_path):
     repo = _fetch_wal_repo(present)
     got = repo.fetch_wal({"archive": {"start": "000000010000000000000010"}}, {"archive": [{"max": "000000020000000000000012"}]}, str(tmp_path))
     assert "000000020000000000000012" in got
+
+
+def _snap(path, start="2026-01-01T00:00:00Z"):
+    return {"id": "i" + path, "startTime": start, "source": {"path": path}}
+
+
+def test_file_items_refuses_a_listed_path_with_no_snapshot():
+    profile = {"b2_kopia_paths": ["/a", "/b"], "b2_kopia_files": {}}
+    bs = ss.BackupSet("b2", FakeRunner({}), si.Secrets({}), profile, "/w")
+    bs.kopia_snapshots = [_snap("/a")]
+    with pytest.raises(RestorationError, match="/b"):
+        bs.file_items()
+    bs.kopia_snapshots = [_snap("/a"), _snap("/b")]
+    assert [i.path for i in bs.file_items()] == ["/a", "/b"]
+
+
+def test_file_items_refuses_a_listed_file_and_local_source_with_no_snapshot():
+    bs = ss.BackupSet("b2", FakeRunner({}), si.Secrets({}), {"b2_kopia_paths": [], "b2_kopia_files": {"secret": "/s"}}, "/w")
+    with pytest.raises(RestorationError, match="secret"):
+        bs.file_items()
+    local = ss.BackupSet("local", FakeRunner({}), si.Secrets({}), {"local_files_sources": {"filestore": "/f"}}, "/w")
+    with pytest.raises(RestorationError, match="filestore"):
+        local.file_items()
