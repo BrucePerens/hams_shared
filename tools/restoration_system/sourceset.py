@@ -169,7 +169,7 @@ def open_b2(runner: Runner, secrets: Secrets, profile: dict[str, Any], work: str
 
 def apply_rsync_stat(tree: str, stat_file: str = ".hams-rsync-stat.json") -> int:
     """Apply the owners and modes the second backup kept in `<tree>/.hams-rsync-stat.json` (rsync --fake-super values `mode rdev uid:gid`)
-    and delete that file. Returns the number of entries applied. Root only."""
+    and delete that file. Returns the number of entries applied. Root only. RestorationError for an entry whose path leaves the tree (absolute, `..`, or through a symlink)."""
     path = os.path.join(tree, stat_file)
     if not os.path.isfile(path):
         return 0
@@ -179,6 +179,9 @@ def apply_rsync_stat(tree: str, stat_file: str = ".hams-rsync-stat.json") -> int
     for rel, text in values.items():
         m = STAT_RE.match(text)
         target = os.path.join(tree, rel)
+        root = os.path.realpath(tree)
+        if os.path.commonpath([root, os.path.join(os.path.realpath(os.path.dirname(target)), os.path.basename(target))]) != root:
+            raise RestorationError("the rsync stat file names %r, which is outside the restored tree %s: refusing" % (rel, tree))
         if not m or not os.path.lexists(target):
             continue
         os.lchown(target, int(m.group(4)), int(m.group(5)))

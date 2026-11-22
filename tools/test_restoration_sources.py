@@ -217,3 +217,14 @@ def test_file_items_refuses_a_listed_file_and_local_source_with_no_snapshot():
     local = ss.BackupSet("local", FakeRunner({}), si.Secrets({}), {"local_files_sources": {"filestore": "/f"}}, "/w")
     with pytest.raises(RestorationError, match="filestore"):
         local.file_items()
+def test_apply_rsync_stat_refuses_a_path_outside_the_tree(tmp_path):
+    tree = tmp_path / "t"
+    tree.mkdir()
+    outside = tmp_path / "victim"
+    outside.write_text("x")
+    link = tree / "lnk"
+    link.symlink_to(tmp_path)
+    for rel in (str(outside), "../victim", "lnk/victim"):
+        (tree / ".hams-rsync-stat.json").write_text(json.dumps({rel: "100600 0,0 0:0"}))
+        with pytest.raises(RestorationError, match="outside"):
+            ss.apply_rsync_stat(str(tree))
