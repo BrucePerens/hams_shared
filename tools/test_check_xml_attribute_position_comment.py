@@ -124,6 +124,16 @@ class CheckXmlAttributePositionCommentTests(unittest.TestCase):
         violations = cxa.check_xml_attribute_position_comment(self.tmp)
         self.assertEqual(violations, [])
 
+    def test_an_unreadable_xml_file_is_reported_not_skipped(self):
+        path = self._write("some_module/views/locked.xml", "<odoo/>")
+        os.chmod(path, 0)
+        try:
+            violations = cxa.check_xml_attribute_position_comment(self.tmp)
+        finally:
+            os.chmod(path, 0o600)
+        self.assertEqual(len(violations), 1)
+        self.assertIn("could not be read", violations[0])
+
     def test_non_xml_files_are_ignored(self):
         self._write("some_module/views/notes.txt", "<xpath position=\"attributes\"><!-- x --></xpath>")
         violations = cxa.check_xml_attribute_position_comment(self.tmp)

@@ -104,7 +104,7 @@ def check_xml_attribute_position_comment(repo_root):
                 # rather than double-reporting the same broken file two different ways.
                 continue
             except OSError as e:
-                print(f"Warning: could not read {path}: {e}")
+                violations.append(f"{os.path.relpath(path, repo_root)}: could not be read ({type(e).__name__}): its xpath blocks were not checked")
                 continue
 
             for xpath_el in tree.iter("xpath"):
