@@ -4,9 +4,11 @@ socket client and the Chrome command-line rewrite. Nothing here needs root, a na
 
 import json
 import os
+import shutil
 import socket
 import tempfile
 import threading
+import types
 import unittest
 import urllib.request
 
@@ -105,6 +107,41 @@ class BrokerTests(unittest.TestCase):
         self.assertNotIn("/evil/bin", cmd)
         with self.assertRaises(ValueError):
             broker._sanitize_chrome_argv(["x", "--headless"])
+
+
+class ProfilePreparationTests(unittest.TestCase):
+    """The broker runs as root on a path the unprivileged test user chose."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(dir=os.path.expanduser("~/.cache"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.user = types.SimpleNamespace(pw_uid=os.getuid(), pw_gid=os.getgid())
+
+    def test_a_profile_base_owned_by_someone_else_is_refused(self):
+        other = types.SimpleNamespace(pw_uid=os.getuid() + 1, pw_gid=os.getgid())
+        with self.assertRaises(ValueError):
+            ons._Broker._prepare_profile(self.tmp, os.path.join(self.tmp, ons.NS_PROFILE_SUBDIR), other)
+
+    def test_a_symlinked_profile_base_is_refused(self):
+        real = os.path.join(self.tmp, "real")
+        os.mkdir(real)
+        link = os.path.join(self.tmp, "link")
+        os.symlink(real, link)
+        with self.assertRaises(ValueError):
+            ons._Broker._prepare_profile(link, os.path.join(link, ons.NS_PROFILE_SUBDIR), self.user)
+
+    def test_a_symlinked_ns_profile_is_refused(self):
+        target = os.path.join(self.tmp, "target")
+        os.mkdir(target)
+        ns = os.path.join(self.tmp, ons.NS_PROFILE_SUBDIR)
+        os.symlink(target, ns)
+        with self.assertRaises(ValueError):
+            ons._Broker._prepare_profile(self.tmp, ns, self.user)
+
+    def test_a_normal_profile_is_created(self):
+        ns = os.path.join(self.tmp, ons.NS_PROFILE_SUBDIR)
+        ons._Broker._prepare_profile(self.tmp, ns, self.user)
+        self.assertTrue(os.path.isdir(ns))
 
 
 # Class anchors (ADR 0113) exercised by the tests above.
