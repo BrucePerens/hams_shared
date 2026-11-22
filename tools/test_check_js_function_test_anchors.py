@@ -283,6 +283,27 @@ class FailedScanTests(unittest.TestCase):
         with open(baseline, encoding="utf-8") as f:
             self.assertIn("broken.js::broken", f.read())
 
+    def test_a_repository_git_cannot_list_is_a_failure_not_zero_files(self):
+        repo = self._repo_with_a_gap()
+        with open(os.path.join(repo, ".git", "index"), "wb") as handle:
+            handle.write(b"not an index")
+        with self.assertRaises(SystemExit) as caught:
+            cjfta.scan_tree(repo)
+        self.assertEqual(caught.exception.code, 2)
+
+    def test_a_missing_git_is_a_failure_not_zero_files(self):
+        repo = self._repo_with_a_gap()
+        with unittest.mock.patch.dict(os.environ, {"PATH": os.path.join(self.tmp, "no_such_bin")}):
+            with self.assertRaises(SystemExit) as caught:
+                cjfta.scan_tree(repo)
+        self.assertEqual(caught.exception.code, 2)
+
+    def test_a_directory_that_is_not_a_work_tree_has_no_files(self):
+        plain = os.path.join(self.tmp, "plain")
+        _write(os.path.join(plain, "foo.js"), "function bar() {}\n")
+        with unittest.mock.patch.dict(os.environ, {"GIT_CEILING_DIRECTORIES": self.tmp}):
+            self.assertEqual(cjfta._git_tracked_js_files(plain), [])
+
     def test_no_files_to_scan_is_the_only_empty_result(self):
         self.assertEqual(cjfta._run_js_scan([]), {})
 
