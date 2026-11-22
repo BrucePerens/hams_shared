@@ -144,6 +144,39 @@ class ProfilePreparationTests(unittest.TestCase):
         self.assertTrue(os.path.isdir(ns))
 
 
+class PortFileReadTests(unittest.TestCase):
+    """The broker reads the browser's port file as root, from a directory the test user owns."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(dir=os.path.expanduser("~/.cache"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.user = types.SimpleNamespace(pw_uid=os.getuid(), pw_gid=os.getgid())
+
+    def test_the_browsers_own_file_is_read(self):
+        path = os.path.join(self.tmp, "DevToolsActivePort")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("41234\n/devtools/browser/x\n")
+        self.assertEqual(ons._Broker._read_port_file(path, self.user), "41234\n/devtools/browser/x\n")
+
+    def test_a_link_to_another_file_is_not_followed(self):
+        secret = os.path.join(self.tmp, "secret")
+        with open(secret, "w", encoding="utf-8") as handle:
+            handle.write("root:hash-of-a-password\n")
+        path = os.path.join(self.tmp, "DevToolsActivePort")
+        os.symlink(secret, path)
+        self.assertIsNone(ons._Broker._read_port_file(path, self.user))
+
+    def test_a_file_owned_by_someone_else_is_not_read(self):
+        path = os.path.join(self.tmp, "DevToolsActivePort")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("41234\n")
+        other = types.SimpleNamespace(pw_uid=os.getuid() + 1, pw_gid=os.getgid())
+        self.assertIsNone(ons._Broker._read_port_file(path, other))
+
+    def test_a_missing_file_is_none(self):
+        self.assertIsNone(ons._Broker._read_port_file(os.path.join(self.tmp, "none"), self.user))
+
+
 # Class anchors (ADR 0113) exercised by the tests above.
 # Tests [@ANCHOR: offline_browser_ns:offline_browser_ns_tcp_forwarder_class]
 # Tests [@ANCHOR: offline_browser_ns:offline_browser_ns__relay_stub_handler_class]
