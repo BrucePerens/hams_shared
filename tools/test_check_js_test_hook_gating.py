@@ -42,5 +42,38 @@ class TrackedFileSelectionTests(unittest.TestCase):
         self.assertEqual(self._selected(), ["m/static/src/ok.js"])
 
 
+class ScannerFailureTests(unittest.TestCase):
+    """A node/acorn scan that did not run must fail the check, never pass it."""
+
+    def _run_with(self, completed=None, error=None):
+        def fake(*_args, **_kwargs):
+            if error:
+                raise error
+            return completed
+
+        original = gating.subprocess.run
+        gating.subprocess.run = fake
+        self.addCleanup(setattr, gating.subprocess, "run", original)
+        return gating._run_js_scan(["/x/a.js"])
+
+    def test_node_exit_failure_is_not_a_clean_scan(self):
+        done = subprocess.CompletedProcess([], 1, stdout="", stderr="Cannot find module 'acorn'")
+        with self.assertRaises(SystemExit):
+            self._run_with(done)
+
+    def test_non_json_output_is_not_a_clean_scan(self):
+        with self.assertRaises(SystemExit):
+            self._run_with(subprocess.CompletedProcess([], 0, stdout="oops", stderr=""))
+
+    def test_missing_node_is_not_a_clean_scan(self):
+        with self.assertRaises(SystemExit):
+            self._run_with(error=FileNotFoundError("node"))
+
+    def test_good_output_is_returned(self):
+        out = '[{"file": "/x/a.js", "violations": [{"line": 3, "literal": "TEST_X"}]}]'
+        got = self._run_with(subprocess.CompletedProcess([], 0, stdout=out, stderr=""))
+        self.assertEqual(got, {"/x/a.js": [{"line": 3, "literal": "TEST_X"}]})
+
+
 if __name__ == "__main__":
     unittest.main()
