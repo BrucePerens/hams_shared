@@ -31,6 +31,73 @@ LISTING = "\n".join("%s: test" % name for name in (
     "data_dir::tests::h", "other::unrelated")) + "\n\n10 tests, 0 benchmarks\n"
 
 
+class StepScopeTests(unittest.TestCase):
+    def test_the_step_files_named_in_run_linters_exist(self):
+        import run_linters
+
+        here = os.path.dirname(os.path.abspath(__file__))
+        for name in run_linters.RELAY_STEP_TOOLS:
+            self.assertTrue(os.path.isfile(os.path.join(here, name)), name)
+
+
+class ReuseTests(unittest.TestCase):
+    def setUp(self):
+        self.repo = tempfile.mkdtemp()
+        self.cache = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.repo, True)
+        self.addCleanup(shutil.rmtree, self.cache, True)
+        relay = os.path.join(self.repo, rs.RELAY_REL)
+        os.makedirs(os.path.join(relay, "src"))
+        for name, text in (("Cargo.toml", "[package]\nname='hams_local_relay'\nversion='0.1.0'\n"), (os.path.join("src", "main.rs"), "fn main() {}\n")):
+            with open(os.path.join(relay, name), "w") as handle:
+                handle.write(text)
+        self.git("init", "-q")
+        self.git("add", ".")
+        self.git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x")
+        self.old_cache = os.environ.get("XDG_CACHE_HOME")
+        os.environ["XDG_CACHE_HOME"] = self.cache
+        self.addCleanup(self.restore)
+
+    def restore(self):
+        if self.old_cache is None:
+            os.environ.pop("XDG_CACHE_HOME", None)
+        else:
+            os.environ["XDG_CACHE_HOME"] = self.old_cache
+
+    def git(self, *args):
+        subprocess.run(["git", "-C", self.repo, *args], check=True, capture_output=True)
+
+    def test_the_key_follows_the_relay_content_and_refuses_a_dirty_tree(self):
+        key = rs.input_key(self.repo)
+        self.assertTrue(key)
+        self.assertEqual(rs.input_key(self.repo), key)
+        path = os.path.join(self.repo, rs.RELAY_REL, "src", "main.rs")
+        with open(path, "a") as handle:
+            handle.write("// edit\n")
+        self.assertIsNone(rs.input_key(self.repo))
+        self.git("commit", "-qam", "edit", "--author=t <t@t>")
+        self.assertNotEqual(rs.input_key(self.repo), key)
+
+    def test_a_recorded_pass_for_the_same_key_skips_the_cargo_run(self):
+        calls = []
+        original = rs._run_group
+        rs._run_group = lambda *args: calls.append(args) or 0
+        self.addCleanup(setattr, rs, "_run_group", original)
+        self.assertEqual(rs.main([self.repo]), 0)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(rs.main([self.repo]), 0)
+        self.assertEqual(len(calls), 1)  # the second run reused the pass
+
+    def test_a_failure_is_not_recorded(self):
+        calls = []
+        original = rs._run_group
+        rs._run_group = lambda *args: calls.append(args) or 1
+        self.addCleanup(setattr, rs, "_run_group", original)
+        self.assertEqual(rs.main([self.repo]), 1)
+        self.assertEqual(rs.main([self.repo]), 1)
+        self.assertEqual(len(calls), 2)
+
+
 FAKE_CARGO = """#!/bin/sh
 case "$1" in
   --version) echo cargo-fake; exit 0;;
@@ -96,7 +163,11 @@ class OverlayTests(unittest.TestCase):
         self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
         self.assertIn("passed", first.stdout)
         self.assertEqual(len(self.stack()), 1)
-        second = self.run_step()  # still exactly origin/main: promoted too
+        with open(os.path.join(self.repo, rs.RELAY_REL, "src", "main.rs"), "a") as handle:
+            handle.write("// main moved\n")  # a new main commit (an identical tree would reuse the recorded pass instead)
+        self.git("commit", "-qam", "next", "--author=t <t@t>")
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        second = self.run_step()  # exactly origin/main: promoted too
         self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
         layers = self.stack()
         self.assertEqual(len(layers), 2)

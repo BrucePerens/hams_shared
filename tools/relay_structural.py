@@ -100,6 +100,39 @@ def passed_count(text):
     return sum(int(match) for match in re.findall(r"test result: \w+\. (\d+) passed", text))
 
 
+# Paths outside the relay crate that the group's tests read (the privilege inventory and the local API table under docs/, the CA's public certificates).
+EXTRA_INPUTS = ("docs", os.path.join("daemons", "relay_ca"))
+
+
+# [@ANCHOR: relay_structural:input_key]
+def input_key(repo_root, environ=None):
+    """The reuse key of the group's last pass: a SHA-256 of the git index entries (mode, blob hash, path) of every watched directory and of EXTRA_INPUTS, of
+    `rustc -vV`, of STRUCTURAL_FILTERS and FEATURES and of this file. None (never reuse) when any of those directories has an uncommitted change or untracked
+    file, or git or rustc cannot be read. Full entry: tools/README.md."""
+    digest = hashlib.sha256()
+    here = os.path.realpath(__file__)
+    with open(here, "rb") as handle:
+        digest.update(handle.read())
+    digest.update(repr((STRUCTURAL_FILTERS, FEATURES)).encode())
+    rustc = _run(["rustc", "-vV"], repo_root, environ)
+    if rustc.returncode != 0:
+        return None
+    digest.update(rustc.stdout.encode())
+    paths = set(watched_dirs(repo_root)) | {os.path.realpath(os.path.join(repo_root, extra)) for extra in EXTRA_INPUTS}
+    for path in sorted(path for path in paths if os.path.isdir(path)):
+        dirty = _run(["git", "status", "--porcelain", "--", "."], path, environ)
+        listing = _run(["git", "ls-files", "-s", "--", "."], path, environ)
+        if dirty.returncode != 0 or dirty.stdout.strip() or listing.returncode != 0:
+            return None
+        digest.update(path.encode() + b"\0" + listing.stdout.encode())
+    return digest.hexdigest()
+
+
+def _stamp_path(key, environ=None):
+    environ = os.environ if environ is None else environ
+    return os.path.join(lint_cache.cache_root(environ), "hams-relay-structural", key)
+
+
 def _run(command, cwd, env):
     return subprocess.run(command, cwd=cwd, env=env, capture_output=True, text=True)
 
@@ -119,14 +152,20 @@ def main(argv):
     mount = next((arg.split("=", 1)[1] for arg in argv if arg.startswith("--overlay-mnt=")), None)
     if mount:
         return _run_in_overlay(argv, positional[0], mount)
+    key = None if "--list" in argv or os.environ.get("HAMS_LINT_NO_CACHE") == "1" else input_key(positional[0])
+    if key and os.path.exists(_stamp_path(key)):
+        print("relay structural tests: reused the recorded pass for identical relay inputs and toolchain (key %s)" % key[:12])
+        return 0
     code = None if "--list" in argv else _overlay_group(positional[0])
-    if code is not None:
-        return code
-    try:
-        return _run_group(argv, positional[0], relay)
-    except lint_cache.LockTimeout as error:
-        print("❌ relay structural tests did not run: %s\nAnother lint run holds the relay build directory; rerun when the box is quieter." % error)
-        return 1
+    if code is None:
+        try:
+            code = _run_group(argv, positional[0], relay)
+        except lint_cache.LockTimeout as error:
+            print("❌ relay structural tests did not run: %s\nAnother lint run holds the relay build directory; rerun when the box is quieter." % error)
+            return 1
+    if code == 0 and key and "--list" not in argv:
+        _record_pass(key)
+    return code
 
 
 def _builds_main(repo_root):
@@ -202,6 +241,16 @@ def _run_in_overlay(argv, repo_root, mount):
     work = lint_cache.work_checkout(repo_root, lint_exec.repo_name(repo_root) or "checkout", None, log=print, work=os.path.join(mount, "work"))
     relay = os.path.join(work or repo_root, RELAY_REL)
     return _build_and_test(argv, repo_root, relay, env, work)
+
+
+def _record_pass(key):
+    path = _stamp_path(key)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("passed\n")
+    except OSError:
+        pass  # a pass that cannot be recorded only costs the next run a rerun
 
 
 def _run_group(argv, repo_root, relay):

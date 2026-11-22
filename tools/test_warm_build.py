@@ -56,7 +56,7 @@ class StackTests(Base):
         for name in ("a", os.path.join("sub", "b")):
             open(os.path.join(layer, "d", name), "w").close()
         warm_build.publish(self.base, "k", ["warm-k-1-1"])
-        out = self.build("rm -r $M/d; mkdir -p $M/d/new; echo 3 > $M/d/new/c; find $M/d -type f", promote=False)
+        out = self.build("set -e; rm -r $M/d; mkdir -p $M/d/new; echo 3 > $M/d/new/c; find $M/d -type f", promote=False)
         self.assertEqual(out.split("/")[-2:], ["new", "c\n"])
 
     def test_a_run_that_is_not_main_is_never_the_base_even_with_no_stack(self):
