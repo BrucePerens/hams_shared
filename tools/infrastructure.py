@@ -1470,9 +1470,10 @@ def systemd_units_running_as(manifest, user):
 # sandbox's read-only mount is what keeps it out of them, so that list must stay narrow); and it loads
 # only the environment files its daemon uses (every other file carries secrets the daemon never needed).
 #
-# `agent_sudo` names the one documented exception to those rules: a unit whose job is to reach the Claude
-# Code CLI through `sudo -u <that account> run-hams-crawl-claude.sh` (the wrapper that pins the no-tools sandbox
-# itself, review M6 2026-10-24). `NoNewPrivileges=true` makes the
+# `agent_sudo` names the documented exception to those rules: a unit whose job is to reach the Claude
+# Code CLI through `sudo -u <agent account> <command>`. It maps each agent account the unit may become to the exact
+# sudoers command (wrapper path, and arguments when the grant pins them): club.crawl uses run-hams-crawl-claude.sh, the wrapper
+# that pins the no-tools sandbox itself (review M6 2026-10-24). `NoNewPrivileges=true` makes the
 # kernel refuse sudo's uid switch (the reason credential.touch.timer and ticket.triage keep it off), so
 # such a unit omits NoNewPrivileges, narrows CapabilityBoundingSet to CAP_SETUID/CAP_SETGID, and has the
 # agent's home as its only ReadWritePaths= (the CLI, running as the agent, writes its session state
@@ -1777,7 +1778,7 @@ FAMILY_ACCOUNT_UNITS = {
     "club.crawl.service": {
         "user": "hamsd_club_crawl",
         "environment_files": frozenset({"common.env"}),
-        "agent_sudo": "hams_ai_agent",
+        "agent_sudo": {"hams_ai_agent": "/usr/local/sbin/run-hams-crawl-claude.sh"},
     },
     # The Web Bot Auth key directory publisher (daemons/web_bot_auth.py `refresh`): signs the public key directory with its
     # own key and writes the bundle hams.com serves. It holds no Odoo key and loads no environment file; odoo is in its group
