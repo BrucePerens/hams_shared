@@ -7,8 +7,8 @@ import types
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import lint_advisory
-import lint_batch
+import lint_advisory  # noqa: E402
+import lint_batch  # noqa: E402
 
 
 def result(name, code, output=""):
