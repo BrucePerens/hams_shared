@@ -1090,11 +1090,6 @@ SHARED_ODOO_ACCOUNT_UNITS = {
         "Writes /opt/hams/etc/keys today, so a family account cannot hold it until its key-directory write access is removed; "
         "its own phase, the pgbackrest sidecar (ADR-0103) already took the root part (plan section 13)."
     ),
-    "pager-os-monitor.service": (
-        "Acts as pager_service_internal with the odoo-owned key file keys/pager_duty.env and reads the CONNECT-only PostgreSQL "
-        "login keys/pager_monitor_db.env, both odoo-owned 0600; a family account needs those files' ownership changed first "
-        "(plan section 13). Writes nothing."
-    ),
     "code.review.sweep.service": (
         "Writes into a repository checkout (/opt/hams/hams_com/docs/code_review_reports) that does not exist on hams1; "
         "opt-in, linked but never enabled in production, so there is no live exposure to close first (plan section 13)."
@@ -1703,6 +1698,19 @@ FAMILY_ACCOUNT_UNITS = {
         "socket_groups": ["hams_relay_signer"],
         "public_dirs": ["/var/lib/hams/relay_manuals"],
     },
+    # The pager monitor: its Odoo key (EnvironmentFile, re-read by the daemon after a 401) and the CONNECT-only PostgreSQL login are in
+    # its family key directory; `db_login` names the family-directory file. `no_proc_view`: its process, uptime and CPU checks read all of
+    # /proc, so it takes neither ProtectProc=invisible nor ProcSubset=pid (the rest of the family tier applies). Odoo writes the check
+    # list it reads (spool/pager_duty, group-readable for the account).
+    "pager-os-monitor.service": {
+        "user": "hamsd_pager_monitor",
+        "environment_files": frozenset({"redis.env", "rabbitmq.env", "pager_duty.env", "pager_monitor_db.env", "site_monitor.env"}),
+        "operator_env_files": frozenset({"pager_duty.env", "pager_monitor_db.env", "site_monitor.env"}),
+        "no_state": True,
+        "no_key": True,
+        "db_login": "/opt/hams/etc/keys/pager_monitor/pager_monitor_db.env",
+        "no_proc_view": True,
+    },
     "dx.firehose.service": {
         "user": "hamsd_dx_firehose",
         "environment_files": frozenset({"common.env"}),
@@ -2263,6 +2271,19 @@ MANIFEST = {
             "environments": ["prod", "test"],
         },
         {
+            # pager-os-monitor.service (hams_open pager_duty/daemon): the generalized monitor. Its own account; odoo is in the group to
+            # write the key files it reads (chgrp, never chown) and to hand it the exported check list. Not in hams_com. It still runs
+            # the checks Odoo configures (psutil, systemctl, ports, the credential scripts), now without odoo's own file rights.
+            "user": "hamsd_pager_monitor",
+            "group": "hamsd_pager_monitor",
+            "home": "/nonexistent",
+            "shell": "/usr/sbin/nologin",
+            "add_to_users": ["odoo"],
+            "member_of": ["hams_traverse"],
+            "not_member_of": ["hams_com"],
+            "environments": ["prod", "test"],
+        },
+        {
             # daemons/gdpr_csv_export: the GDPR export builder, which handles members' personal data. Its own account and key
             # (gdpr_export_service_internal.key) mean no other daemon reads the key or anything the unit holds. odoo joins this group for the key hand-off (chgrp, never chown). Not in hams_com: the traversal group plus the ACL entries on the directories it passes through are all it has.
             "user": "hamsd_gdpr_export",
@@ -2707,6 +2728,14 @@ MANIFEST = {
             "environments": ["prod", "test"],
         },
         {
+            # Key directory of the pager_monitor family (hamsd_pager_monitor): pager_duty.env (the Odoo key) and pager_monitor_db.env.
+            "path": "/opt/hams/etc/keys/pager_monitor",
+            "owner": "odoo:hamsd_pager_monitor",
+            "provision_mode": "750",
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
             # Key directory of the gdpr_export family (hamsd_gdpr_export): owned by odoo, group = the one account that consumes
             # the keys in it, 0750 (Bruce, NIGHT_PLAN 226); see the ncvec_sync entry above for the full reasoning.
             "path": "/opt/hams/etc/keys/gdpr_export",
@@ -3040,11 +3069,11 @@ MANIFEST = {
         {
             # pager_duty's exported check list (pager_config.json, written by the "Push to Daemon" button, mode 0600: it can
             # carry the passwords of checks that have their own). odoo.service may write only /opt/hams/spool, and the
-            # monitor (also odoo) reads it from here: PAGER_CONFIG_PATH in pager-os-monitor.service and the pager_duty.config_dir
-            # system parameter name this directory.
+            # monitor (hamsd_pager_monitor, through the group) reads it from here: PAGER_CONFIG_PATH in pager-os-monitor.service and the
+            # pager_duty.config_dir system parameter name this directory. Odoo owns it and writes the file 0640 with that group.
             "path": "/opt/hams/spool/pager_duty",
-            "owner": "odoo:odoo",
-            "provision_mode": "700",
+            "owner": "odoo:hamsd_pager_monitor",
+            "provision_mode": "750",
             "runtime_mount": "rw",
             "environments": ["prod", "test"],
         },
@@ -10333,22 +10362,33 @@ ProtectSystem=strict
 ProtectHome=read-only
 PrivateTmp=true
 PrivateDevices=true
+# Family tier (plan section 5) without ProtectProc/ProcSubset: the process, uptime and CPU checks read all of /proc.
+UMask=0027
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
+ProtectKernelLogs=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
 Type=simple
-User=odoo
+User=hamsd_pager_monitor
+Group=hamsd_pager_monitor
 WorkingDirectory=/opt/hams/src/hams_open/pager_duty/daemon
 
 EnvironmentFile=/opt/hams/etc/redis.env
 EnvironmentFile=-/opt/hams/etc/rabbitmq.env
-EnvironmentFile=/opt/hams/etc/keys/pager_duty.env
-EnvironmentFile=/opt/hams/etc/keys/pager_monitor_db.env
+EnvironmentFile=/opt/hams/etc/keys/pager_monitor/pager_duty.env
+EnvironmentFile=/opt/hams/etc/keys/pager_monitor/pager_monitor_db.env
 EnvironmentFile=/opt/hams/etc/site_monitor.env
 Environment=ODOO_URL=http://odoo:8069
+Environment=PAGER_KEY_ENV_FILE=/opt/hams/etc/keys/pager_monitor/pager_duty.env
 Environment=PAGER_CONFIG_PATH=/opt/hams/spool/pager_duty/pager_config.json
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONUNBUFFERED=1
@@ -14160,11 +14200,11 @@ def _provision_pager_monitor_role(run_cmd_func, db_name):
         run_cmd_func,
         db_name,
         role_name="pager_monitor_ro",
-        env_file="/opt/hams/etc/keys/pager_monitor_db.env",
+        env_file="/opt/hams/etc/keys/pager_monitor/pager_monitor_db.env",
         purpose="pager_duty's PostgreSQL ping check",
-        # pager-os-monitor.service still runs as odoo and loads this file through EnvironmentFile= (SHARED_ODOO_ACCOUNT_UNITS).
-        owner="odoo:odoo",
-        mode=0o600,
+        # pager-os-monitor.service runs as hamsd_pager_monitor: the family key directory, odoo:hamsd_pager_monitor 0640.
+        owner="odoo:hamsd_pager_monitor",
+        mode=0o640,
     )
 
 
