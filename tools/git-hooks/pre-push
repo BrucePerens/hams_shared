@@ -21,6 +21,40 @@ while IFS= read -r line; do
     updates+=("$line")
 done
 
+# NO DIRECT PUSHES TO MAIN (2026-11-23): first check, before any network call. merge_pr.py and merge_all.sh merge through the GitHub API.
+# pre_push_check.py refuses a push to main unless every changed file is a to-do note, docs/ or claims file or a plain .md (devbox_tools/direct_note.py
+# pushes those), and runs merge_pr's cheap checks on them first. HAMS_ALLOW_MAIN_PUSH=1 (set by hand by the coordinator; no tool sets it) lets anything through.
+# merge_pr discipline (2026-11-16): refuse a direct push of code to main (only to-do notes may go direct), and on any other
+# branch run merge_pr's cheap checks within about 3 minutes (a slow check only warns). Logic and limits: tools/pre_push_check.py.
+# Skipped, with a warning, when the helper cannot be found (a worktree before fix_worktree_symlinks.py).
+# Git runs a hook with GIT_DIR (in a linked worktree: the worktree's own git dir) in the environment. The checks below run tests that
+# `git init` / `git commit` in temp directories; with GIT_DIR inherited they acted on THIS repository instead: commits "init"/"seed" landed
+# on the pushed branch and `git init` wrote core.bare=true into the shared .git/config (2026-11-16, broke merge_pr.py). Drop the variables.
+unset $(git rev-parse --local-env-vars)
+root=$(git rev-parse --show-toplevel)
+common=$(cd "$root" && cd "$(git rev-parse --git-common-dir)" && pwd)
+helper=""
+for base in "$root" "$(dirname "$common")"; do
+    for sub in hams_shared/tools tools; do
+        if [ -f "$base/$sub/pre_push_check.py" ]; then helper="$base/$sub/pre_push_check.py"; break 2; fi
+    done
+done
+if [ -z "$helper" ]; then
+    for line in "${updates[@]}"; do
+        read -r _ _ remote_ref _ <<< "$line"
+        if [ "$remote_ref" = "$protected_ref" ] && [ "${HAMS_ALLOW_MAIN_PUSH:-}" != "1" ]; then
+            echo "pre-push: NO DIRECT PUSHES TO MAIN: open a PR and merge with devbox_tools/merge_pr.py (pre_push_check.py not found)" >&2
+            exit 1
+        fi
+    done
+    echo "pre-push: pre_push_check.py not found; merge_pr check skipped." >&2
+else
+    for line in "${updates[@]}"; do
+        read -r local_ref local_sha remote_ref remote_sha <<< "$line"
+        python3 "$helper" "$local_ref" "$local_sha" "$remote_ref" "$remote_sha" || exit 1
+    done
+fi
+
 for line in "${updates[@]}"; do
     read -r local_ref local_sha remote_ref remote_sha <<< "$line"
     [ "$remote_ref" = "$protected_ref" ] || continue
@@ -51,30 +85,6 @@ EOF
         exit 1
     fi
 done
-
-# merge_pr discipline (2026-11-16): refuse a direct push of code to main (only to-do notes may go direct), and on any other
-# branch run merge_pr's cheap checks within about 3 minutes (a slow check only warns). Logic and limits: tools/pre_push_check.py.
-# Skipped, with a warning, when the helper cannot be found (a worktree before fix_worktree_symlinks.py).
-# Git runs a hook with GIT_DIR (in a linked worktree: the worktree's own git dir) in the environment. The checks below run tests that
-# `git init` / `git commit` in temp directories; with GIT_DIR inherited they acted on THIS repository instead: commits "init"/"seed" landed
-# on the pushed branch and `git init` wrote core.bare=true into the shared .git/config (2026-11-16, broke merge_pr.py). Drop the variables.
-unset $(git rev-parse --local-env-vars)
-root=$(git rev-parse --show-toplevel)
-common=$(cd "$root" && cd "$(git rev-parse --git-common-dir)" && pwd)
-helper=""
-for base in "$root" "$(dirname "$common")"; do
-    for sub in hams_shared/tools tools; do
-        if [ -f "$base/$sub/pre_push_check.py" ]; then helper="$base/$sub/pre_push_check.py"; break 2; fi
-    done
-done
-if [ -z "$helper" ]; then
-    echo "pre-push: pre_push_check.py not found; merge_pr check skipped." >&2
-else
-    for line in "${updates[@]}"; do
-        read -r local_ref local_sha remote_ref remote_sha <<< "$line"
-        python3 "$helper" "$local_ref" "$local_sha" "$remote_ref" "$remote_sha" || exit 1
-    done
-fi
 
 # The 2026-09-28 pre-push check_burn_list.py gate was removed 2026-10-02 at Bruce's direction:
 # ~20 concurrent whole-repo scans overloaded the dev box during bulk to-do processing, and the

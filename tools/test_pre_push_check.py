@@ -1,20 +1,61 @@
 """pre_push_check.py: which direct pushes to main are allowed and the time budget of the branch check."""
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
+import unittest.mock
 
 import pre_push_check as ppc
 
 
 class PrePushCheckTests(unittest.TestCase):
-    # [@ANCHOR: test_a_main_push_is_allowed_only_for_notes_or_with_the_override]
-    def test_a_main_push_is_allowed_only_for_notes_or_with_the_override(self):
-        notes = ["night_shift_todo/high/a.md", "night_shift_history/b.md", "night_shift_questions/c.md"]
-        self.assertIsNone(ppc.main_push_problem(notes, {}))
-        self.assertIn("merge_pr.py", ppc.main_push_problem(notes + ["ham_base/models/x.py"], {}))
+    # [@ANCHOR: test_a_main_push_is_refused_unless_the_override_is_set]
+    def test_a_main_push_is_refused_unless_the_override_is_set(self):
+        ok = ["night_shift_todo/high/a.md", "docs/x/y.txt", "ham_x/claims/c.md", "claims/c.md", "README.md", "notes/n.md"]
+        self.assertIsNone(ppc.main_push_problem(ok, {}))
+        for bad in ("ham_base/models/x.py", "ham_base/__manifest__.py", "ham_base/tests/t.md", "ham_base/data/d.xml", "night_shift_todo_evil/x.py",
+                    "tools/README.md", "x.txt"):
+            self.assertIn("NO DIRECT PUSHES TO MAIN", ppc.main_push_problem(ok + [bad], {}), bad)
+        self.assertIn("merge_pr.py", ppc.main_push_problem([], {}))
+        self.assertIn("NO DIRECT", ppc.main_push_problem(["README.md"], {}, has_anchor=lambda path: True))  # anchor docs need the PR lint
         self.assertIsNone(ppc.main_push_problem(["x.py"], {"HAMS_ALLOW_MAIN_PUSH": "1"}))
-        self.assertIsNotNone(ppc.main_push_problem(["night_shift_todo_evil/x.py"], {}))
+
+    def test_a_failing_cheap_check_blocks_an_allowed_main_push(self):
+        calls = []
+        done = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+        with unittest.mock.patch.object(ppc, "git", return_value=done) as fake_git, \
+                unittest.mock.patch.object(ppc, "find_merge_pr", return_value="/x"), \
+                unittest.mock.patch.object(ppc, "check_branch", side_effect=lambda *a, **k: calls.append(a) or False):
+            fake_git.side_effect = lambda args, cwd=None: subprocess.CompletedProcess(
+                [], 0, stdout="docs/a.md\n" if args[0] == "diff" else "https://github.com/BrucePerens/hams_com.git\n", stderr="")
+            self.assertEqual(ppc.main(["p", "refs/heads/main", "a" * 40, "refs/heads/main", "b" * 40]), 1)
+            self.assertEqual(len(calls), 1)
+            with unittest.mock.patch.object(ppc, "check_branch", return_value=True):
+                self.assertEqual(ppc.main(["p", "refs/heads/main", "a" * 40, "refs/heads/main", "b" * 40]), 0)
+            fake_git.side_effect = lambda args, cwd=None: subprocess.CompletedProcess(
+                [], 0, stdout="ham_x/models/a.py\n" if args[0] == "diff" else "https://github.com/BrucePerens/hams_com.git\n", stderr="")
+            self.assertEqual(ppc.main(["p", "refs/heads/main", "a" * 40, "refs/heads/main", "b" * 40]), 1)
+
+    def test_the_shell_hook_refuses_main_first_and_lets_branches_reach_the_checks(self):
+        hook = os.path.join(os.path.dirname(os.path.abspath(__file__)), "git-hooks", "pre-push")
+        line = "refs/heads/x abc refs/heads/%s 000\n"
+        env = {k: v for k, v in os.environ.items() if k != "HAMS_ALLOW_MAIN_PUSH"}
+        repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, repo, True)
+        subprocess.run(["git", "init", "-q", repo], check=True)
+        subprocess.run(["git", "-C", repo, "remote", "add", "origin", "https://github.com/BrucePerens/hams_shared.git"], check=True)
+        refused = subprocess.run(["bash", hook, "origin"], input=line % "main", capture_output=True, text=True, env=env, cwd=repo)
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn("NO DIRECT PUSHES TO MAIN: open a PR and merge with devbox_tools/merge_pr.py", refused.stderr)
+        # the guard is the first thing that runs: no fetch, so no network is needed to be refused
+        self.assertNotIn("fetch", refused.stderr)
+        # a delete of main is refused too, and a non-main ref is not stopped by this guard
+        deleted = subprocess.run(["bash", hook, "origin"], input="(delete) 000 refs/heads/main abc\n", capture_output=True, text=True, env=env, cwd=repo)
+        self.assertEqual(deleted.returncode, 1)
+        self.assertIn("NO DIRECT PUSHES TO MAIN", deleted.stderr)
+        other = subprocess.run(["bash", hook, "origin"], input="", capture_output=True, text=True, env=env, cwd=repo)
+        self.assertNotIn("NO DIRECT PUSHES", other.stderr)
 
     # [@ANCHOR: test_the_runner_gives_up_when_the_time_is_spent]
     def test_the_runner_gives_up_when_the_time_is_spent(self):
