@@ -6760,6 +6760,7 @@ class WebBotAuthSigningUnitTests(_SafePatchTestCase):
         "pager-os-monitor.service": "monitoring probes of our own sites and the DNS roots",
         "hams-auth-cert-renew.service": "ACME to Let's Encrypt, authenticated by the account key",
         "hams-turn-cert-renew.service": "ACME to Let's Encrypt, authenticated by the account key",
+        "hams-parking-cert-renew.service": "ACME to Let's Encrypt, authenticated by the account key",
         "member.cert.service": "ACME to Let's Encrypt, authenticated by the account key (one-click member certificates)",
     }
 
@@ -8678,6 +8679,34 @@ class TurnServerManifestTests(unittest.TestCase):
         turn = self._unit("hams-turn-cert-renew.timer")["content"]
         self.assertNotEqual(re.search(r"OnCalendar=(.*)", auth).group(1), re.search(r"OnCalendar=(.*)", turn).group(1),
                             "the two renewals must not run at the same minute (certbot's lock)")
+
+
+class ParkingCertificateUnitsTests(_TmpDirTestCase):
+    """The `*.hams.com` certificate of the callsign parking page's HTTPS listener: its own renewal units, directory and key owner."""
+
+    def _unit(self, name):
+        return next(e for e in infra.MANIFEST["static_files"] if e["path"] == "/opt/hams/systemd/" + name)
+
+    def test_the_renewal_units_use_the_parking_profile_and_write_only_the_parking_directory(self):
+        for name in ("hams-parking-cert-renew.service", "hams-parking-cert-renew.timer"):
+            spec = self._unit(name)
+            self.assertTrue(spec.get("external_fetch"), name)
+            self.assertTrue(spec.get("opt_in"), name)
+            self.assertEqual(spec["environments"], ["prod"], name)
+            self.assertIn(name, infra.external_fetch_unit_names())
+        content = self._unit("hams-parking-cert-renew.service")["content"]
+        self.assertIn("ExecStart=/usr/bin/python3 /opt/hams/daemons/auth_cert_renew/main.py renew --profile parking", content)
+        self.assertIn("ConditionPathExists=/var/lib/hams-acme/config/renewal/parking-hams-com.conf", content)
+        self.assertIn("ConditionPathExists=/usr/local/sbin/hams-install-parking-cert", content)
+        self.assertEqual(re.findall(r"^ReadWritePaths=(.*)$", content, re.M), ["/etc/hams/parking"])
+        self.assertNotIn("EnvironmentFile", content)
+        calendars = {re.search(r"OnCalendar=(.*)", self._unit(f"hams-{p}-cert-renew.timer")["content"]).group(1) for p in ("auth", "turn", "parking")}
+        self.assertEqual(len(calendars), 3, "the three renewals must not run at the same minute (certbot's lock)")
+
+    def test_the_key_directory_is_readable_by_the_parking_account_only(self):
+        directory = next(d for d in infra.MANIFEST["directories"] if d["path"] == "/etc/hams/parking")
+        self.assertEqual((directory["owner"], directory["provision_mode"], directory["environments"]), ("root:hamsd_parking", "750", ["prod"]))
+        self.assertNotIn("runtime_mount", directory)
 
 
 class NginxFrontEndManifestTests(_TmpDirTestCase):
