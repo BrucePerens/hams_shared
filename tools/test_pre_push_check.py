@@ -8,13 +8,28 @@ import pre_push_check as ppc
 
 
 class PrePushCheckTests(unittest.TestCase):
-    # [@ANCHOR: test_a_main_push_is_allowed_only_for_notes_or_with_the_override]
-    def test_a_main_push_is_allowed_only_for_notes_or_with_the_override(self):
-        notes = ["night_shift_todo/high/a.md", "night_shift_history/b.md", "night_shift_questions/c.md"]
-        self.assertIsNone(ppc.main_push_problem(notes, {}))
-        self.assertIn("merge_pr.py", ppc.main_push_problem(notes + ["ham_base/models/x.py"], {}))
+    # [@ANCHOR: test_a_main_push_is_refused_unless_the_override_is_set]
+    def test_a_main_push_is_refused_unless_the_override_is_set(self):
+        notes = ["night_shift_todo/high/a.md", "night_shift_history/b.md"]
+        self.assertIn("NO DIRECT PUSHES TO MAIN", ppc.main_push_problem(notes, {}))
+        self.assertIn("merge_pr.py", ppc.main_push_problem(["ham_base/models/x.py"], {}))
         self.assertIsNone(ppc.main_push_problem(["x.py"], {"HAMS_ALLOW_MAIN_PUSH": "1"}))
-        self.assertIsNotNone(ppc.main_push_problem(["night_shift_todo_evil/x.py"], {}))
+
+    def test_the_shell_hook_refuses_main_first_and_lets_branches_reach_the_checks(self):
+        hook = os.path.join(os.path.dirname(os.path.abspath(__file__)), "git-hooks", "pre-push")
+        line = "refs/heads/x abc refs/heads/%s 000\n"
+        env = {k: v for k, v in os.environ.items() if k != "HAMS_ALLOW_MAIN_PUSH"}
+        refused = subprocess.run(["bash", hook, "origin"], input=line % "main", capture_output=True, text=True, env=env)
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn("NO DIRECT PUSHES TO MAIN: open a PR and merge with devbox_tools/merge_pr.py", refused.stderr)
+        # the guard is the first thing that runs: no fetch, so no network is needed to be refused
+        self.assertNotIn("fetch", refused.stderr)
+        # a delete of main is refused too, and a non-main ref is not stopped by this guard
+        deleted = subprocess.run(["bash", hook, "origin"], input="(delete) 000 refs/heads/main abc\n", capture_output=True, text=True, env=env)
+        self.assertEqual(deleted.returncode, 1)
+        self.assertIn("NO DIRECT PUSHES TO MAIN", deleted.stderr)
+        other = subprocess.run(["bash", hook, "origin"], input="", capture_output=True, text=True, env=env, cwd=os.path.dirname(hook))
+        self.assertNotIn("NO DIRECT PUSHES", other.stderr)
 
     # [@ANCHOR: test_the_runner_gives_up_when_the_time_is_spent]
     def test_the_runner_gives_up_when_the_time_is_spent(self):
