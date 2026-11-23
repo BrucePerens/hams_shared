@@ -3777,6 +3777,16 @@ Arguments: `args` (`name`, `grace` seconds default 10, `force`, `i_am_the_owner_
 
 Purpose: the `kill-pid` subcommand (`kill-pid PID [--start-time T | --cwd-under P] [--signal NAME] [--grace S] [--force] [--i-am-the-owner-and-checked]`). Exactly one pid is accepted (argparse refuses a second one with code 2); returns `kill_pid`'s code.
 
+### `[@ANCHOR: agent_procs:remote_kill]` `remote_kill(ssh_args, pid, expect_user, expect_cmd, out=sys.stdout, run=None)`
+
+Purpose: stop ONE exact process on another host (mac1, winvm) that the local `kill-pid` cannot see, without the guard hook mistaking the remote pid for a local one. Runs `ssh -o BatchMode=yes <ssh_args> sh -c SCRIPT`; the remote script reads the owner and command line with `ps`, refuses (exit 3, nothing sent) unless the owner equals `expect_user` and the command line contains `expect_cmd`, then sends SIGTERM to that pid only.
+
+Raises `ProcError` code 2 for pid <= 1, an empty user or command text, or an unparsable ssh string. Returns the remote exit code: 0 sent, 1 no such process, 3 refused, 255 ssh failure. `run` defaults to `subprocess.run`. Test: `test_agent_procs.py`.
+
+### `[@ANCHOR: agent_procs:cmd_remote_kill]` `cmd_remote_kill(args, out=sys.stdout)`
+
+Purpose: the `remote-kill` subcommand: `remote-kill PID --ssh "ARGS" --expect-user USER --expect-cmd SUBSTR`. Returns `remote_kill`'s code. `guard_signals.py` allows this form (it is verified ownership) and still denies `ssh host kill PID`. Test: `test_agent_procs.py`.
+
 ### `[@ANCHOR: agent_procs:build_parser]` `build_parser()`
 
 Purpose: the argparse parser: subcommands `find wait run jobs stop kill-pid` and the internal `_wrap`. It does not know the command after `--`; `parse_args` splits that off. Returns the `ArgumentParser`.
