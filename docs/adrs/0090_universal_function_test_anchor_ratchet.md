@@ -105,3 +105,6 @@ Checked against the repository. The ratchet exists as written (`tools/check_func
   mechanism" no longer holds.
 - Coverage instrumentation (Stage 2) exists as tools: `check_anchor_coverage.py`, `run_js_coverage.py`, `run_rust_coverage.py`. Stage 3 is `check_anchor_coverage.py`, whose own header says it implements the binary
   gate of decision 4 (no percentage threshold).
+
+## Enforcement (amendment 2026-11-23)
+Bruce decided on 2026-11-23 that documentation-format and claim-freshness checks must not block deploys. The prose/format rules of this ADR (the claim/doc wording and word-count rules only; the test-anchor ratchet itself stays blocking) are now ADVISORY: the step still runs and fails as `ADVISORY FAIL` in run_linters output and the round SUMMARY.md, but it does not make a round NO-GO and does not fail merge_pr or the lint batch. Real anchor breakage (a referenced anchor that is missing, duplicate anchors, broken references from code) stays blocking. The round manager dispatches a batch fix for the advisory list. Tier defined in `tools/lint_advisory.py`.

@@ -61,3 +61,6 @@ explanation, formatted for people.
 ## Consequences
 More documentation work up front and per change; much less reading of code to use or change it; better material
 for tests and reviews. Entries can drift from the code, so a change to the code must change its entry.
+
+## Enforcement (amendment 2026-11-23)
+Bruce decided on 2026-11-23 that documentation-format and claim-freshness checks must not block deploys. The prose/format rules of this ADR (word minimums and wording/format) are now ADVISORY: the step still runs and fails as `ADVISORY FAIL` in run_linters output and the round SUMMARY.md, but it does not make a round NO-GO and does not fail merge_pr or the lint batch. Real anchor breakage (a referenced anchor that is missing, duplicate anchors, broken references from code) stays blocking. The round manager dispatches a batch fix for the advisory list. Tier defined in `tools/lint_advisory.py`.

@@ -28,6 +28,7 @@ import tempfile
 import time
 
 import batch_queue
+import lint_advisory
 import lint_lock
 import lock_queue
 
@@ -253,6 +254,7 @@ def read_results(path):
     selected = [n for n in (data.get("selected") or [s["name"] for s in entries]) if n]
     outputs = data.get("outputs") or {}
     failed = {s["name"]: outputs.get(s["name"], "") for s in entries if s.get("returncode") != 0 or isinstance(s.get("returncode"), bool)}
+    failed = {n: o for n, o in failed.items() if n not in lint_advisory.ADVISORY_STEPS}  # advisory steps report but never fail a branch
     ran = {s["name"] for s in entries}
     for name in selected:
         if name not in ran:
