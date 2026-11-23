@@ -1114,16 +1114,6 @@ SHARED_ODOO_ACCOUNT_UNITS = {
         "Privileged by design and permanent: it inspects other processes of the odoo account (a one-off odoo shell left "
         "running), which an account of its own, or ProtectProc=invisible, would hide from it."
     ),
-    # Supervises the AI ticket-triage pass; the model itself runs as the dedicated nologin
-    # hams_ai_agent account (see the unit's own comment). Same shape as credential.touch.timer.
-    "ticket.triage.event.service": (
-        "The agent-account shape: supervises the triage model that runs as hams_ai_agent through the CLI wrapper, so no "
-        "NoNewPrivileges; needs its own review (plan section 13)."
-    ),
-    "ticket.triage.service": (
-        "The agent-account shape: supervises the triage model that runs as hams_ai_agent through the CLI wrapper, so no "
-        "NoNewPrivileges; needs its own review (plan section 13)."
-    ),
 }
 
 
@@ -1775,6 +1765,36 @@ FAMILY_ACCOUNT_UNITS = {
         "no_key": True,
         "db_login": "/opt/hams/etc/keys/parking/parking_db.env",
     },
+    # AI ticket triage (daemons/ticket_triage_agent), two units of one daemon on one account. The model reaches the ticket data through the MCP
+    # server it starts (run-ticket-triage-mcp.sh), which runs as THIS account (the grant of hams_ai_agent names it), reads the account's key
+    # and shares the state directory (ledger, limits, event log) with the daemon, so the account is the one place all of it lives. The account
+    # holds two reaches into others: the CLI wrapper as hams_ai_agent (`agent_sudo`) and, as root, the stop helper that ends a timed-out run's
+    # process group (`root_sudo`, one argument shape). `no_proc_view`: the helper reads /proc for members of other uids, so the unit takes
+    # neither ProtectProc=invisible nor ProcSubset=pid. `extra_caps`: the helper's kill of another uid's process needs CAP_KILL, which the
+    # unit's capability bounding set (CAP_SETUID CAP_SETGID, for sudo) did not contain. The wake-up spool is written by Odoo (`odoo_writes`).
+    "ticket.triage.service": {
+        "user": "hamsd_ticket_triage",
+        "environment_files": frozenset({"ticket_triage.env"}),
+        "operator_env_files": frozenset({"ticket_triage.env"}),
+        "socket_groups": ["hamsd_exception_report"],
+        "no_proc_view": True,
+        "extra_caps": ["CAP_KILL"],
+        "agent_sudo": {"hams_ai_agent": "/usr/local/sbin/run-hams-ai-agent-claude.sh"},
+        "root_sudo": {"/usr/local/sbin/hams-triage-stop": "[0-9]* KILL"},
+        "key_in_wrapper": True,
+    },
+    "ticket.triage.event.service": {
+        "user": "hamsd_ticket_triage",
+        "environment_files": frozenset({"ticket_triage.env"}),
+        "operator_env_files": frozenset({"ticket_triage.env"}),
+        "socket_groups": ["hamsd_exception_report"],
+        "no_proc_view": True,
+        "extra_caps": ["CAP_KILL"],
+        "agent_sudo": {"hams_ai_agent": "/usr/local/sbin/run-hams-ai-agent-claude.sh"},
+        "root_sudo": {"/usr/local/sbin/hams-triage-stop": "[0-9]* KILL"},
+        "key_in_wrapper": True,
+        "odoo_writes": frozenset({"/opt/hams/spool/ticket_triage"}),
+    },
     "club.crawl.service": {
         "user": "hamsd_club_crawl",
         "environment_files": frozenset({"common.env"}),
@@ -2033,6 +2053,21 @@ MANIFEST = {
             # FAMILY_ACCOUNT_UNITS for why that makes it the one unit with an `agent_sudo` exception.
             "user": "hamsd_club_crawl",
             "group": "hamsd_club_crawl",
+            "home": "/nonexistent",
+            "shell": "/usr/sbin/nologin",
+            "add_to_users": ["odoo"],
+            "member_of": ["hams_traverse"],
+            "not_member_of": ["hams_com"],
+            "environments": ["prod", "test"],
+        },
+        {
+            # daemons/ticket_triage_agent (hams_com): the AI ticket triage supervisor and the ticket triage MCP server the model starts. Its own
+            # account instead of `odoo`: it holds one Odoo key (ai_triage_service_internal.key, in keys/ticket_triage; odoo joins the group for the
+            # key hand-off, chgrp never chown), the ledger and limits in its state directory, and the wake-up spool Odoo writes into. Its reaches
+            # into other accounts are the sudoers.d lines of ticket-triage-claude-sandbox (the CLI wrapper as hams_ai_agent) and hams-triage-stop
+            # (the root helper, one argument shape). Not in hams_com. No home directory.
+            "user": "hamsd_ticket_triage",
+            "group": "hamsd_ticket_triage",
             "home": "/nonexistent",
             "shell": "/usr/sbin/nologin",
             "add_to_users": ["odoo"],
@@ -2618,6 +2653,15 @@ MANIFEST = {
             # (KEY_GROUP_DIR_MODE in its models/key_registry.py); this entry creates the directory first.
             "path": "/opt/hams/etc/keys/club_crawl",
             "owner": "odoo:hamsd_club_crawl",
+            "provision_mode": "750",
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Key directory of the ticket_triage family (hamsd_ticket_triage): owned by odoo, group = the one account that consumes
+            # the keys in it, 0750 (Bruce, NIGHT_PLAN 226); see the ncvec_sync entry above for the full reasoning.
+            "path": "/opt/hams/etc/keys/ticket_triage",
+            "owner": "odoo:hamsd_ticket_triage",
             "provision_mode": "750",
             "runtime_mount": "rw",
             "environments": ["prod", "test"],
@@ -3318,12 +3362,13 @@ MANIFEST = {
             # Wake-up spool for the event-driven AI ticket triage (Bruce, NIGHT_PLAN decision 222).
             # hams_helpdesk (inside odoo.service, which already has /opt/hams/spool read-write) drops
             # `ticket-<id>.json` here after a ticket commits; ticket.triage.path watches it and starts
-            # ticket.triage.event.service, which consumes the files. odoo:odoo 0700: only the Odoo server
-            # writes and only the triage supervisor (also odoo) reads; systemd's path unit runs as root and
-            # is not bound by the mode. Prod only: the units that use it are prod only.
+            # ticket.triage.event.service, which consumes the files. Since 2026-11-22 the account's own, hamsd_ticket_triage:hamsd_ticket_triage
+            # 2770: the supervisor lists and deletes the files (their content is never read), Odoo (in the group) creates them, and
+            # systemd's path unit runs as root and is not bound by the mode. Prod only: the units that use it are prod only.
             "path": "/opt/hams/spool/ticket_triage",
-            "owner": "odoo:odoo",
-            "provision_mode": "700",
+            "owner": "hamsd_ticket_triage:hamsd_ticket_triage",
+            "provision_mode": "2770",
+            "recursive_owner": True,
             "runtime_mount": "rw",
             "environments": ["prod"],
         },
@@ -9531,12 +9576,29 @@ ProtectHome=read-only
 PrivateTmp=true
 PrivateDevices=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-CapabilityBoundingSet=CAP_SETUID CAP_SETGID
-ReadWritePaths=@ACCOUNT_HOME_PARENT@/hams_ai_agent -/opt/hams/ai_triage_repo
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_KILL
+# The daemon-family isolation set (hams_com docs/proposals/DAEMON_OS_ISOLATION_PLAN.md section 5), as club.crawl.service carries it, except
+# ProtectProc=/ProcSubset=: the root stop helper reads /proc for members of other uids. CAP_KILL is for that helper alone (root through sudo is
+# the only process of the unit that holds it); the daemon and the model's processes run as non-root accounts with no capability.
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+ReadWritePaths=@ACCOUNT_HOME_PARENT@/hams_ai_agent
 StateDirectory=hams-ticket-triage
 StateDirectoryMode=0700
 Type=oneshot
-User=odoo
+User=hamsd_ticket_triage
+Group=hamsd_ticket_triage
+# The exception reporter's key (keys/exception_report, odoo:hamsd_exception_report 0640) for the quota report; this unit alone holds the group.
+SupplementaryGroups=hamsd_exception_report
 WorkingDirectory=/opt/hams/daemons/ticket_triage_agent
 EnvironmentFile=-/opt/hams/etc/ticket_triage.env
 # ai_quota.py and exception_reporter.py (synced flat to /opt/hams/daemons) file the one "AI service quota used up" ticket
@@ -9648,12 +9710,29 @@ ProtectHome=read-only
 PrivateTmp=true
 PrivateDevices=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-CapabilityBoundingSet=CAP_SETUID CAP_SETGID
-ReadWritePaths=@ACCOUNT_HOME_PARENT@/hams_ai_agent -/opt/hams/ai_triage_repo /opt/hams/spool/ticket_triage
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_KILL
+# The daemon-family isolation set (hams_com docs/proposals/DAEMON_OS_ISOLATION_PLAN.md section 5), as club.crawl.service carries it, except
+# ProtectProc=/ProcSubset=: the root stop helper reads /proc for members of other uids. CAP_KILL is for that helper alone (root through sudo is
+# the only process of the unit that holds it); the daemon and the model's processes run as non-root accounts with no capability.
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+ReadWritePaths=@ACCOUNT_HOME_PARENT@/hams_ai_agent /opt/hams/spool/ticket_triage
 StateDirectory=hams-ticket-triage
 StateDirectoryMode=0700
 Type=oneshot
-User=odoo
+User=hamsd_ticket_triage
+Group=hamsd_ticket_triage
+# The exception reporter's key (keys/exception_report, odoo:hamsd_exception_report 0640) for the quota report; this unit alone holds the group.
+SupplementaryGroups=hamsd_exception_report
 WorkingDirectory=/opt/hams/daemons/ticket_triage_agent
 EnvironmentFile=-/opt/hams/etc/ticket_triage.env
 # ai_quota.py and exception_reporter.py (synced flat to /opt/hams/daemons) file the one "AI service quota used up" ticket
@@ -9930,7 +10009,7 @@ WantedBy=timers.target
             # actually runs.
             "path": "/etc/sudoers.d/hams_ai_agent-mcp-servers",
             "content": (
-                "hams_ai_agent ALL=(odoo) NOPASSWD: "
+                "hams_ai_agent ALL=(hamsd_ticket_triage) NOPASSWD: "
                 "/usr/local/sbin/run-ticket-triage-mcp.sh\n"
             ),
             "owner": "root:root",
@@ -10008,6 +10087,124 @@ WantedBy=timers.target
             "environments": ["prod"],
         },
         {
+            # The ticket triage's own account (hamsd_ticket_triage): the one reach it has into the model's account, the Claude Code CLI wrapper as
+            # hams_ai_agent, with the CLI's own flags (the equivalent of the `odoo` grant it replaces; the `odoo` grant stays for the repeater
+            # import in Odoo, which uses the same wrapper). A wrapper that pins the flags, as run-hams-crawl-claude.sh does, is a follow-up.
+            "path": "/etc/sudoers.d/ticket-triage-claude-sandbox",
+            "content": (
+                "hamsd_ticket_triage ALL=(hams_ai_agent) NOPASSWD: "
+                "/usr/local/sbin/run-hams-ai-agent-claude.sh\n"
+            ),
+            "owner": "root:root",
+            "mode": "440",
+            "environments": ["prod"],
+        },
+        {
+            # The root helper that ends a timed-out triage run's process group (daemons/ticket_triage_agent/deploy/hams-triage-stop in hams_com, whose
+            # sudoers file this is a copy of): the daemon passes a process group id and KILL, and the helper itself refuses anything that is not
+            # verifiably a triage run. Before 2026-11-22 this line named `odoo`.
+            "path": "/etc/sudoers.d/hams-triage-stop",
+            "content": (
+                "# Lets the triage daemon (hamsd_ticket_triage) run exactly the stop helper as root, with the one argument shape it uses\n"
+                "# (a process group id, then KILL); nothing else. The helper verifies the group is a triage run. Install 0440 root:root.\n"
+                "hamsd_ticket_triage ALL=(root) NOPASSWD: /usr/local/sbin/hams-triage-stop [0-9]* KILL\n"
+            ),
+            "owner": "root:root",
+            "mode": "440",
+            "environments": ["prod"],
+        },
+        {
+            # daemons/ticket_triage_agent/deploy/hams-triage-stop in hams_com, verbatim after rendering (static content goes through format_env,
+            # so every brace is doubled here; a hams_com test pins the copy): the root-owned helper the hams-triage-stop sudoers line above runs.
+            "path": "/usr/local/sbin/hams-triage-stop",
+            "content": r'''#!/usr/bin/python3
+"""Root-owned helper: stops one ticket-triage run's process group (the `hamsd_ticket_triage` triage daemon may not signal the
+hams_ai_agent members itself). Usage: hams-triage-stop <pgid> [TERM|KILL]  (default KILL).
+Refuses (exit 2) anything that is not verifiably a triage run: pgid <= 1, an empty group, a group whose leader is not
+its own session leader, a member whose real uid is not hamsd_ticket_triage or hams_ai_agent, or a group with no member running the
+triage claude (hams_ai_agent's mcp_config.json plus --strict-mcp-config). Installed root:root 0755 as
+/usr/local/sbin/hams-triage-stop; sudoers: deploy/hams-triage-stop.sudoers."""
+import os
+import pwd
+import signal
+import sys
+
+PROC = "/proc"
+ALLOWED_USERS = ("hamsd_ticket_triage", "hams_ai_agent")
+SIGNALS = {{"TERM": signal.SIGTERM, "KILL": signal.SIGKILL}}
+
+
+def _members(pgid):
+    """[(pid, sid, real_uid, argv)] of every live process in group `pgid`."""
+    out = []
+    for name in os.listdir(PROC):
+        if not name.isdigit():
+            continue
+        try:
+            with open(f"{{PROC}}/{{name}}/stat") as f:
+                stat = f.read()
+            fields = stat[stat.rindex(")") + 2:].split()  # state ppid pgrp session ...
+            if fields[0] in "ZX" or int(fields[2]) != pgid:
+                continue
+            with open(f"{{PROC}}/{{name}}/status") as f:
+                uid = next(int(l.split()[1]) for l in f if l.startswith("Uid:"))
+            with open(f"{{PROC}}/{{name}}/cmdline", "rb") as f:
+                argv = f.read().split(b"\0")
+        except (OSError, ValueError, StopIteration):
+            continue
+        out.append((int(name), int(fields[3]), uid, [a.decode(errors="replace") for a in argv]))
+    return out
+
+
+def verify(pgid):
+    """Returns None if `pgid` is a triage run, else the refusal reason."""
+    if pgid <= 1 or pgid == os.getpgrp():
+        return "not a triage process group"
+    members = _members(pgid)
+    if not members:
+        return "empty group"
+    if not any(pid == pgid and sid == pgid for pid, sid, _u, _a in members):
+        return "group leader is not its own session leader"
+    allowed = set()
+    for user in ALLOWED_USERS:
+        try:
+            allowed.add(pwd.getpwnam(user).pw_uid)
+        except KeyError:
+            return f"no account {{user}}"
+    if any(uid not in allowed for _p, _s, uid, _a in members):
+        return "member of another uid"
+    hams_ai_uid = pwd.getpwnam("hams_ai_agent").pw_uid
+    for _pid, _sid, uid, argv in members:
+        if (uid == hams_ai_uid and "--strict-mcp-config" in argv
+                and any(a.endswith("/hams_ai_agent/.claude/mcp_config.json") for a in argv)):
+            return None
+    return "no ticket-triage claude in the group"
+
+
+def main(argv):
+    if len(argv) not in (2, 3) or not argv[1].isdigit() or (len(argv) == 3 and argv[2] not in SIGNALS):
+        print("usage: hams-triage-stop <pgid> [TERM|KILL]", file=sys.stderr)
+        return 2
+    pgid = int(argv[1])
+    reason = verify(pgid)
+    if reason:
+        print(f"refused: {{reason}}", file=sys.stderr)
+        return 2
+    try:
+        os.killpg(pgid, SIGNALS[argv[2] if len(argv) == 3 else "KILL"])
+    except ProcessLookupError:
+        pass
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
+''',
+            "owner": "root:root",
+            "mode": "755",
+            "environments": ["prod"],
+        },
+        {
             # Sibling grant letting `odoo` run the real Claude Code CLI as `hams_event_agent` --
             # restricted to the already-tracked `run-hams-event-agent-claude.sh` wrapper (see its
             # own static_files entry elsewhere in this MANIFEST).
@@ -10067,13 +10264,14 @@ exec @ACCOUNT_HOME_PARENT@/hams_ai_agent/.local/bin/agy "$@"
             "path": "/usr/local/sbin/run-ticket-triage-mcp.sh",
             "content": """\
 @BASH_SHEBANG@
-# Exact env + exec for hams_ticket_triage_mcp, run as odoo via a narrow sudoers grant for
-# hams_ai_agent. A wrapper script, not the raw command line in sudoers, because sudoers own
+# Exact env + exec for hams_ticket_triage_mcp, run as hamsd_ticket_triage (the triage daemon's own account, which holds the key and the
+# state directory it shares with the daemon; it ran as odoo before 2026-11-22) via a narrow sudoers grant for
+# hams_ai_agent. The daemon itself also runs this wrapper's --count-pending as the same account. A wrapper script, not the raw command line in sudoers, because sudoers own
 # parser chokes on the URL colon in ODOO_URL.
 export PYTHONPATH=/opt/hams/daemons
 export ODOO_URL=http://127.0.0.1:8069
 export ODOO_DB=hams_prod
-export ODOO_KEY_FILE=/opt/hams/etc/keys/ai_triage_service_internal.key
+export ODOO_KEY_FILE=/opt/hams/etc/keys/ticket_triage/ai_triage_service_internal.key
 # The sudoers grant allows ANY arguments, so this wrapper is what restricts them: no argument is
 # the MCP server (what the model's own session launches); --count-pending is the scheduled
 # agent's cheap "is any ticket waiting" check (no model call). Anything else, notably

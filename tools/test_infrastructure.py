@@ -5633,7 +5633,6 @@ class SharedOdooAccountRatchetTests(unittest.TestCase):
         "backup.worker.service",
         "code.review.sweep.service", "credential.touch.timer.service", "event.ai.enrichment.service",
         "hams.daemon.keys.service", "stray.odoo.shell.detector.service",
-        "ticket.triage.event.service", "ticket.triage.service",
     )
 
     def test_exactly_the_pinned_units_run_as_odoo(self):
@@ -5951,6 +5950,68 @@ class AdifPipelineAccountTests(unittest.TestCase):
                 self.assertEqual(self._values(unit, "SupplementaryGroups"), ["hamsd_exception_report"])
 
 
+class TicketTriageAccountTests(unittest.TestCase):
+    """ticket.triage (timer and event units) on its own account, hamsd_ticket_triage (daemon OS isolation): the MCP server the model starts runs as
+    it too and shares its key and state directory, Odoo writes the wake-up spool through the group, and the account's only reaches into others are one
+    CLI wrapper line and the root stop helper in one argument shape."""
+
+    UNITS = ("ticket.triage.service", "ticket.triage.event.service")
+
+    def _values(self, unit, directive):
+        return infra.systemd_unit_directive_values(infra.MANIFEST, unit, directive)
+
+    def _static(self, path):
+        return [e for e in infra.MANIFEST["static_files"] if e["path"] == path][0]
+
+    def test_both_units_run_as_the_account_and_left_the_shared_odoo_list(self):
+        for unit in self.UNITS:
+            with self.subTest(unit=unit):
+                self.assertEqual((self._values(unit, "User"), self._values(unit, "Group")), (["hamsd_ticket_triage"], ["hamsd_ticket_triage"]))
+                self.assertEqual(self._values(unit, "SupplementaryGroups"), ["hamsd_exception_report"])
+                self.assertNotIn(unit, infra.SHARED_ODOO_ACCOUNT_UNITS)
+                # The stop helper reads other uids' processes and signals them: no ProtectProc, CAP_KILL kept for it.
+                self.assertEqual(self._values(unit, "ProtectProc"), [])
+                self.assertEqual(self._values(unit, "CapabilityBoundingSet"), ["CAP_SETUID", "CAP_SETGID", "CAP_KILL"])
+        self.assertEqual(self._values("ticket.triage.service", "ReadWritePaths"), [f"{infra.ACCOUNT_HOME_PARENT}/hams_ai_agent"])
+        self.assertEqual(sorted(self._values("ticket.triage.event.service", "ReadWritePaths")),
+                         sorted([f"{infra.ACCOUNT_HOME_PARENT}/hams_ai_agent", "/opt/hams/spool/ticket_triage"]))
+
+    def test_the_spool_is_the_accounts_and_odoo_writes_into_it_through_the_group(self):
+        directories = {d["path"]: (d["owner"], d["provision_mode"]) for d in infra.MANIFEST["directories"]}
+        self.assertEqual(directories["/opt/hams/spool/ticket_triage"], ("hamsd_ticket_triage:hamsd_ticket_triage", "2770"))
+        self.assertEqual(directories["/opt/hams/etc/keys/ticket_triage"], ("odoo:hamsd_ticket_triage", "750"))
+        account = [a for a in infra.MANIFEST["system_accounts"] if a["user"] == "hamsd_ticket_triage"][0]
+        self.assertEqual(account["add_to_users"], ["odoo"])
+
+    def test_the_mcp_server_runs_as_the_account_with_the_key_in_its_family_directory(self):
+        self.assertEqual(self._static("/etc/sudoers.d/hams_ai_agent-mcp-servers")["content"],
+                         "hams_ai_agent ALL=(hamsd_ticket_triage) NOPASSWD: /usr/local/sbin/run-ticket-triage-mcp.sh\n")
+        wrapper = self._static("/usr/local/sbin/run-ticket-triage-mcp.sh")["content"]
+        self.assertIn("export ODOO_KEY_FILE=/opt/hams/etc/keys/ticket_triage/ai_triage_service_internal.key\n", wrapper)
+
+    def test_the_accounts_sudoers_lines_are_exactly_the_cli_wrapper_and_the_pinned_stop_helper(self):
+        lines = sorted(
+            line for entry in infra.MANIFEST["static_files"] if entry["path"].startswith("/etc/sudoers.d/")
+            for line in entry["content"].splitlines() if line.startswith("hamsd_ticket_triage ")
+        )
+        self.assertEqual(lines, [
+            "hamsd_ticket_triage ALL=(hams_ai_agent) NOPASSWD: /usr/local/sbin/run-hams-ai-agent-claude.sh",
+            "hamsd_ticket_triage ALL=(root) NOPASSWD: /usr/local/sbin/hams-triage-stop [0-9]* KILL",
+        ])
+        helper = self._static("/usr/local/sbin/hams-triage-stop")
+        self.assertEqual((helper["owner"], helper["mode"], helper["environments"]), ("root:root", "755", ["prod"]))
+        self.assertIn('ALLOWED_USERS = ("hamsd_ticket_triage", "hams_ai_agent")', infra.render_static_content(helper, {}))
+
+    def test_the_helper_copy_is_the_deploy_file_of_hams_com(self):
+        here = os.path.dirname(os.path.abspath(__file__))
+        found = [path for path in (os.path.join(here, up, "hams_com", "daemons", "ticket_triage_agent", "deploy", "hams-triage-stop")
+                                   for up in ("../..", "../../..")) if os.path.exists(path)]
+        if not found:
+            self.skipTest("the hams_com daemons tree is not beside this checkout")
+        with open(found[0], encoding="utf-8") as handle:
+            self.assertEqual(infra.render_static_content(self._static("/usr/local/sbin/hams-triage-stop"), {}), handle.read())
+
+
 class PagerMonitorAccountTests(unittest.TestCase):
     """pager-os-monitor on its own account, hamsd_pager_monitor: its Odoo key and database login are in keys/pager_monitor, Odoo writes
     the exported check list into a directory the account reads through the group, and its process checks keep the whole /proc."""
@@ -6200,7 +6261,10 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
                     # The documented exception: the agent's own home and nothing else (the CLI, running
                     # as the agent, writes its session state there; the daemon's account never does).
                     homes = sorted(f"{infra.ACCOUNT_HOME_PARENT}/{agent}" for agent in rules["agent_sudo"])
-                    self.assertEqual(sorted(writable), homes)
+                    # Besides the agents' homes only a directory the account itself owns (the triage wake-up spool Odoo also writes).
+                    own = [p for p in writable if p in self._directories_owned_by(rules["user"])]
+                    self.assertEqual(sorted(set(writable) - set(own)), homes)
+                    self.assertLessEqual(set(own), set(rules.get("odoo_writes", ())))
                     for agent in rules["agent_sudo"]:
                         self.assertIn(f"{infra.ACCOUNT_HOME_PARENT}/{agent}", self._directories_owned_by(agent))
                     continue
@@ -6311,7 +6375,7 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
                         self.assertEqual(infra.systemd_unit_directive_values(infra.MANIFEST, unit, directive), [])
                         self.assertEqual(
                             infra.systemd_unit_directive_values(infra.MANIFEST, unit, "CapabilityBoundingSet"),
-                            ["CAP_SETUID", "CAP_SETGID"],
+                            ["CAP_SETUID", "CAP_SETGID"] + rules.get("extra_caps", []),
                         )
                     continue
                 if directive == "ProcSubset" and unit in SIMBOTS_UNITS:
@@ -6336,12 +6400,15 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
                     for line in entry["content"].splitlines() if line.startswith(user + " ")
                 ]
                 # One line per agent the unit becomes, each naming exactly the declared command (a wrapper path, and its arguments when pinned).
-                self.assertEqual(sorted(line for _, line in lines),
-                                 sorted(f"{user} ALL=({agent}) NOPASSWD: {command}" for agent, command in agents.items()))
+                # `root_sudo` names a root helper the unit may run (command -> the one pinned argument shape).
+                roots = rules.get("root_sudo", {})
+                self.assertEqual(sorted(line for _, line in lines), sorted(
+                    [f"{user} ALL=({agent}) NOPASSWD: {command}" for agent, command in agents.items()]
+                    + [f"{user} ALL=(root) NOPASSWD: {command} {args}" for command, args in roots.items()]))
                 for grant, line in lines:
                     self.assertEqual((grant["owner"], grant["mode"], grant["environments"]), ("root:root", "440", ["prod"]))
                     self.assertNotIn("ALL=(ALL)", line)
-                for command in agents.values():
+                for command in list(agents.values()) + list(roots):
                     self.assertIn(command.split()[0].rsplit("/", 1)[-1], [
                         e["path"].rsplit("/", 1)[-1] for e in infra.MANIFEST["static_files"]
                     ])
@@ -6362,6 +6429,10 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
                     continue
                 values = infra.systemd_unit_directive_values(infra.MANIFEST, unit, "Environment")
                 key_files = [v.strip('"').split("=", 1)[1] for v in values if v.strip('"').startswith("ODOO_KEY_FILE=")]
+                if rules.get("key_in_wrapper"):
+                    # The unit's own environment names no key: the wrapper it (and the model's MCP session) runs does (TicketTriageAccountTests).
+                    self.assertEqual(key_files, [])
+                    continue
                 self.assertEqual(len(key_files), 1)
                 self.assertTrue(key_files[0].startswith("/opt/hams/etc/keys/"))
 
@@ -6387,6 +6458,8 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
                     # No Odoo key: the daemon reads its database login from the family directory itself.
                     self.assertEqual(os.path.dirname(rules["db_login"]), directory)
                     continue
+                if rules.get("key_in_wrapper"):
+                    continue  # the wrapper's key path is pinned in TicketTriageAccountTests
                 values = infra.systemd_unit_directive_values(infra.MANIFEST, unit, "Environment")
                 key_file = [v.strip('"').split("=", 1)[1] for v in values if v.strip('"').startswith("ODOO_KEY_FILE=")][0]
                 self.assertEqual(os.path.dirname(key_file), directory)
@@ -7461,11 +7534,11 @@ class TicketTriageTimerUnitTests(unittest.TestCase):
         self.assertIn("WantedBy=paths.target", text)
         self.assertIn("TriggerLimitBurst=", text)
 
-    def test_the_spool_directory_is_odoo_owned_private_and_prod_only(self):
+    def test_the_spool_directory_is_the_triage_accounts_group_writable_for_odoo_and_prod_only(self):
         entries = [e for e in infra.MANIFEST["directories"] if e["path"] == "/opt/hams/spool/ticket_triage"]
         self.assertEqual(len(entries), 1)
-        self.assertEqual(entries[0]["owner"], "odoo:odoo")
-        self.assertEqual(entries[0]["provision_mode"], "700")
+        self.assertEqual(entries[0]["owner"], "hamsd_ticket_triage:hamsd_ticket_triage")
+        self.assertEqual(entries[0]["provision_mode"], "2770")
         self.assertEqual(entries[0]["environments"], ["prod"])
 
     def test_the_event_service_consumes_before_anything_can_skip_or_fail_it(self):
@@ -7476,7 +7549,7 @@ class TicketTriageTimerUnitTests(unittest.TestCase):
         self.assertNotIn("ConditionPathExists", text)
         self.assertNotIn("ExecStartPre", text)
         self.assertIn(
-            f"ReadWritePaths={infra.ACCOUNT_HOME_PARENT}/hams_ai_agent -/opt/hams/ai_triage_repo /opt/hams/spool/ticket_triage", text
+            f"ReadWritePaths={infra.ACCOUNT_HOME_PARENT}/hams_ai_agent /opt/hams/spool/ticket_triage", text
         )
         self.assertIn("HAMS_TRIAGE_SPOOL_DIR=/opt/hams/spool/ticket_triage", text)
         self.assertIn("StateDirectory=hams-ticket-triage", text)  # the same lock and counters as the timer path
@@ -7497,8 +7570,8 @@ class TicketTriageTimerUnitTests(unittest.TestCase):
         ]
         self.assertFalse([line for line in directives if line.startswith("NoNewPrivileges")])
 
-    def test_the_event_service_is_on_the_shared_odoo_account_ratchet(self):
-        self.assertIn("ticket.triage.event.service", infra.SHARED_ODOO_ACCOUNT_UNITS)
+    def test_the_event_service_is_off_the_shared_odoo_account_ratchet(self):
+        self.assertNotIn("ticket.triage.event.service", infra.SHARED_ODOO_ACCOUNT_UNITS)
 
     def test_provisioning_links_but_does_not_enable_the_path_unit_unless_named_and_never_in_test(self):
         linked = ["ticket.triage.path", "ticket.triage.timer", "stray.odoo.shell.detector.timer"]
@@ -7525,7 +7598,7 @@ class TicketTriageTimerUnitTests(unittest.TestCase):
     def test_the_model_is_not_given_a_shell_account_the_unit_is_only_the_supervisor(self):
         accounts = {a["user"]: a for a in infra.MANIFEST["system_accounts"]}
         self.assertEqual(accounts["hams_ai_agent"]["shell"], "/usr/sbin/nologin")
-        self.assertIn("ticket.triage.service", infra.SHARED_ODOO_ACCOUNT_UNITS)
+        self.assertNotIn("ticket.triage.service", infra.SHARED_ODOO_ACCOUNT_UNITS)
 
     def test_provisioning_links_but_does_not_enable_the_timer_unless_named(self):
         linked = ["ticket.triage.timer", "stray.odoo.shell.detector.timer"]
