@@ -1110,11 +1110,6 @@ SHARED_ODOO_ACCOUNT_UNITS = {
         "account that owns the key directories and is a member of every family group. Hardened instead: see "
         "SANDBOX_BASELINE_EXEMPTIONS."
     ),
-    "hams-exception-report@.service": (
-        "Reads /opt/hams/etc/keys/exception_reporter.env (odoo-owned, 0600, a fixed path in exception_reporter.py): the one "
-        "credential that may file a daemon failure as a server-exception ticket. A family account would need that file's "
-        "ownership changed first, and the unit must be able to start for a daemon in any family (plan section 13)."
-    ),
     "hams.data.relay.service": (
         "Relay and auth behavior: Bruce reviews and merges changes to the relay units himself (night rules), so it is not "
         "migrated unattended (plan section 13)."
@@ -1711,6 +1706,16 @@ FAMILY_ACCOUNT_UNITS = {
         "db_login": "/opt/hams/etc/keys/pager_monitor/pager_monitor_db.env",
         "no_proc_view": True,
     },
+    # The OnFailure reporter: reads the exception reporter's key (keys/exception_report/exception_reporter.env, `db_login` names it: a
+    # credential file, not an ODOO_KEY_FILE) and the failed unit's journal through the systemd-journal group, held by the unit alone.
+    "hams-exception-report@.service": {
+        "user": "hamsd_exception_report",
+        "environment_files": frozenset({"common.env"}),
+        "no_state": True,
+        "no_key": True,
+        "db_login": "/opt/hams/etc/keys/exception_report/exception_reporter.env",
+        "socket_groups": ["systemd-journal"],
+    },
     "dx.firehose.service": {
         "user": "hamsd_dx_firehose",
         "environment_files": frozenset({"common.env"}),
@@ -2284,6 +2289,20 @@ MANIFEST = {
             "environments": ["prod", "test"],
         },
         {
+            # hams-exception-report@.service (hams_open hams_helpdesk/daemon): files a failed unit as a server-exception ticket. It holds one
+            # credential, the exception reporter's key (keys/exception_report/exception_reporter.env), which odoo, in this group, also reads
+            # for the daemons that run as odoo (backup.worker, ticket triage, event enrichment) through the helper's default path. Not in
+            # hams_com; the journal group is the unit's alone (SupplementaryGroups=).
+            "user": "hamsd_exception_report",
+            "group": "hamsd_exception_report",
+            "home": "/nonexistent",
+            "shell": "/usr/sbin/nologin",
+            "add_to_users": ["odoo"],
+            "member_of": ["hams_traverse"],
+            "not_member_of": ["hams_com"],
+            "environments": ["prod", "test"],
+        },
+        {
             # daemons/gdpr_csv_export: the GDPR export builder, which handles members' personal data. Its own account and key
             # (gdpr_export_service_internal.key) mean no other daemon reads the key or anything the unit holds. odoo joins this group for the key hand-off (chgrp, never chown). Not in hams_com: the traversal group plus the ACL entries on the directories it passes through are all it has.
             "user": "hamsd_gdpr_export",
@@ -2731,6 +2750,14 @@ MANIFEST = {
             # Key directory of the pager_monitor family (hamsd_pager_monitor): pager_duty.env (the Odoo key) and pager_monitor_db.env.
             "path": "/opt/hams/etc/keys/pager_monitor",
             "owner": "odoo:hamsd_pager_monitor",
+            "provision_mode": "750",
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Key directory of the exception_report family (hamsd_exception_report): the reporter's key; see the ncvec_sync entry above.
+            "path": "/opt/hams/etc/keys/exception_report",
+            "owner": "odoo:hamsd_exception_report",
             "provision_mode": "750",
             "runtime_mount": "rw",
             "environments": ["prod", "test"],
@@ -10477,8 +10504,8 @@ WantedBy=multi-user.target
             # with the unit's name as the instance. It runs the deployed helper, which sends the unit name, systemd's
             # Result word and the last 20 journal lines; Odoo scrubs them, de-duplicates by (unit, kind, result) and
             # rate limits (50 new tickets an hour). The key is the Daemon Key Manager's exception_reporter service
-            # account key, /opt/hams/etc/keys/exception_reporter.env (odoo 0600, the helper's default path), so the
-            # unit runs as odoo (see SHARED_ODOO_ACCOUNT_UNITS). common.env, which systemd reads as root, gives it
+            # account key, /opt/hams/etc/keys/exception_report/exception_reporter.env (odoo:hamsd_exception_report 0640, the helper's default path), so
+            # the unit runs as hamsd_exception_report. common.env, which systemd reads as root, gives it
             # ODOO_URL and DB_NAME. %i and not %I: the drop-in passes the failed unit's name as written, and %I would
             # turn the dashes of "hams-auth-gateway.service" into slashes.
             # Same lines as hams_open hams_helpdesk/daemon/hams-exception-report@.service (ExceptionReportUnitTests).
@@ -10492,10 +10519,12 @@ StartLimitBurst=5
 
 [Service]
 Type=oneshot
-User=odoo
+User=hamsd_exception_report
+Group=hamsd_exception_report
 # Reading another unit's journal needs this group.
 SupplementaryGroups=systemd-journal
 EnvironmentFile=-/opt/hams/etc/common.env
+Environment="EXCEPTION_REPORTER_KEY_FILE=/opt/hams/etc/keys/exception_report/exception_reporter.env"
 ExecStart=/usr/bin/python3 /opt/hams/src/hams_open/hams_helpdesk/daemon/exception_reporter.py report-unit %i
 # Long enough for the helper to wait out an Odoo restart (REPORT_ODOO_WAIT_SECONDS, ten minutes) and still post.
 TimeoutStartSec=900
@@ -10508,13 +10537,16 @@ ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
 PrivateDevices=true
+ProtectProc=invisible
+ProcSubset=pid
+UMask=0027
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-# Second tier (hams_com DAEMON_OS_ISOLATION_PLAN.md section 5, 2026-11-07), derived from hams_helpdesk/daemon/exception_reporter.py (hams_open): journalctl and systemctl show as subprocesses, one HTTP POST to Odoo: none of it sets a kernel tunable, loads a module, reads the kernel log, writes a cgroup, sets the clock, makes a namespace, asks for realtime scheduling, creates a setuid or setgid file or changes personality. Not ProtectProc= or UMask=: the unit still runs as odoo beside Odoo and shares its directories.
+# Second tier (hams_com DAEMON_OS_ISOLATION_PLAN.md section 5, 2026-11-07), derived from hams_helpdesk/daemon/exception_reporter.py (hams_open): journalctl and systemctl show as subprocesses, one HTTP POST to Odoo: none of it sets a kernel tunable, loads a module, reads the kernel log, writes a cgroup, sets the clock, makes a namespace, asks for realtime scheduling, creates a setuid or setgid file or changes personality. Its own account since 2026-11-22 (hamsd_exception_report), so the family tier applies: it reads only its own processes' /proc entries (journalctl and systemctl show talk to journald and systemd over sockets).
 ProtectKernelLogs=true
 ProtectClock=true
 RestrictNamespaces=true

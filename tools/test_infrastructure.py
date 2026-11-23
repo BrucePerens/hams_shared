@@ -5632,7 +5632,7 @@ class SharedOdooAccountRatchetTests(unittest.TestCase):
     PINNED_ODOO_UNITS = (
         "backup.worker.service",
         "code.review.sweep.service", "credential.touch.timer.service", "event.ai.enrichment.service",
-        "hams-exception-report@.service", "hams.daemon.keys.service", "hams.data.relay.service",
+        "hams.daemon.keys.service", "hams.data.relay.service",
         "hams.relay.bridge.service", "stray.odoo.shell.detector.service",
         "ticket.triage.event.service", "ticket.triage.service",
     )
@@ -5877,16 +5877,16 @@ class OdooUnitSecondTierTests(unittest.TestCase):
         "RestrictRealtime": ["true"], "RestrictSUIDSGID": ["true"], "LockPersonality": ["true"],
         "SystemCallArchitectures": ["native"],
     }
-    UNITS = ("hams-exception-report@.service", "stray.odoo.shell.detector.service")
+    UNITS = ("stray.odoo.shell.detector.service",)
 
-    def test_the_two_units_carry_the_second_tier(self):
+    def test_the_unit_carries_the_second_tier(self):
         for unit in self.UNITS:
             for directive, value in self.SECOND_TIER.items():
                 with self.subTest(unit=unit, directive=directive):
                     self.assertEqual(infra.systemd_unit_directive_values(infra.MANIFEST, unit, directive), value)
 
     def test_they_still_share_odoo_so_no_proc_hiding_or_umask(self):
-        # hams-exception-report@ shares Odoo's key file, and the stray detector must see every odoo process (ps -eo).
+        # The stray detector must see every odoo process (ps -eo).
         for unit in self.UNITS:
             with self.subTest(unit=unit):
                 self.assertEqual(infra.systemd_unit_directive_values(infra.MANIFEST, unit, "User"), ["odoo"])
@@ -5966,6 +5966,33 @@ class PagerMonitorAccountTests(unittest.TestCase):
         self.assertEqual((self._values("ProtectProc"), self._values("ProcSubset")), ([], []))
         self.assertEqual(self._values("ReadWritePaths"), [])
         self.assertEqual(infra.systemd_unit_sandbox_gaps(infra.MANIFEST, self.UNIT), set())
+
+
+class ExceptionReporterAccountTests(unittest.TestCase):
+    """hams-exception-report@ on its own account, hamsd_exception_report: the reporter key is in its family directory, readable by odoo
+    (the group) for the daemons that still run as odoo and read it through the helper's default path."""
+
+    UNIT = "hams-exception-report@.service"
+
+    def _values(self, directive):
+        return infra.systemd_unit_directive_values(infra.MANIFEST, self.UNIT, directive)
+
+    def test_the_unit_left_the_shared_account_and_names_its_key(self):
+        self.assertEqual((self._values("User"), self._values("Group")), (["hamsd_exception_report"], ["hamsd_exception_report"]))
+        self.assertNotIn(self.UNIT, infra.SHARED_ODOO_ACCOUNT_UNITS)
+        self.assertEqual(self._values("Environment"), ['"EXCEPTION_REPORTER_KEY_FILE=/opt/hams/etc/keys/exception_report/exception_reporter.env"'])
+        self.assertEqual(self._values("SupplementaryGroups"), ["systemd-journal"])
+
+    def test_the_key_directory_is_the_accounts_and_odoo_is_in_the_group(self):
+        directory = [d for d in infra.MANIFEST["directories"] if d["path"] == "/opt/hams/etc/keys/exception_report"][0]
+        self.assertEqual((directory["owner"], directory["provision_mode"]), ("odoo:hamsd_exception_report", "750"))
+        account = [a for a in infra.MANIFEST["system_accounts"] if a["user"] == "hamsd_exception_report"][0]
+        self.assertIn("odoo", account["add_to_users"])
+        self.assertEqual(account["not_member_of"], ["hams_com"])
+
+    def test_it_takes_the_family_isolation_tier(self):
+        self.assertEqual(infra.systemd_unit_sandbox_gaps(infra.MANIFEST, self.UNIT), set())
+        self.assertEqual((self._values("ProtectProc"), self._values("UMask")), (["invisible"], ["0027"]))
 
 
 class SimulatedBandAccountTests(unittest.TestCase):
@@ -8059,9 +8086,9 @@ class ExceptionReportUnitTests(unittest.TestCase):
         self.assertIn("EnvironmentFile=-/opt/hams/etc/common.env\n", text)
         self.assertNotIn("ODOO_KEY_FILE", text)
 
-    def test_template_is_sandboxed_and_runs_as_the_key_owner(self):
+    def test_template_is_sandboxed_and_runs_as_its_own_account(self):
         text = self._text()
-        for line in ("User=odoo", "Type=oneshot", "SupplementaryGroups=systemd-journal", "ProtectSystem=strict",
+        for line in ("User=hamsd_exception_report", "Type=oneshot", "SupplementaryGroups=systemd-journal", "ProtectSystem=strict",
                      "PrivateTmp=true", "PrivateDevices=true", "NoNewPrivileges=true", "CapabilityBoundingSet="):
             self.assertIn(line + "\n", text)
         self.assertNotIn("ReadWritePaths", text)
@@ -8069,7 +8096,7 @@ class ExceptionReportUnitTests(unittest.TestCase):
         self.assertEqual(infra.systemd_unit_sandbox_gaps(infra.MANIFEST, self.TEMPLATE), set())
 
     def test_template_is_classified_and_never_enabled_or_started_by_provisioning(self):
-        self.assertIn(self.TEMPLATE, infra.SHARED_ODOO_ACCOUNT_UNITS)
+        self.assertIn(self.TEMPLATE, infra.FAMILY_ACCOUNT_UNITS)
         self.assertNotIn(self.TEMPLATE, infra.external_fetch_unit_names())
         self.assertNotIn(self.TEMPLATE, infra.boot_service_unit_names())
         self.assertNotIn(self.TEMPLATE, infra._smoketest_candidate_services())
