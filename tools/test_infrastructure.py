@@ -5985,6 +5985,15 @@ class EventEnrichmentAccountTests(unittest.TestCase):
         self.assertIn("export ODOO_KEY_FILE=/opt/hams/etc/keys/event_enrichment/event_ai_correction_service_internal.key\n", wrapper)
         self.assertIn('"ODOO_KEY_FILE=/opt/hams/etc/keys/event_enrichment/event_ai_correction_service_internal.key"', self._values("Environment"))
 
+    def test_a_family_run_writes_the_mcp_grant_and_its_wrapper_besides_the_accounts_own_grant(self):
+        self.assertEqual(infra.daemon_family_sudo_commands({"hamsd_event_enrichment"}),
+                         {"/usr/local/sbin/run-hams-event-agent-claude.sh", "/usr/local/sbin/run-event-enrichment-mcp.sh"})
+        for path in ("/etc/sudoers.d/hams_event_agent-mcp-servers", "/etc/sudoers.d/event-enrichment-claude-sandbox",
+                     "/usr/local/sbin/run-event-enrichment-mcp.sh", "/usr/local/sbin/run-hams-event-agent-claude.sh"):
+            with self.subTest(path=path), infra.only_daemon_families({"hamsd_event_enrichment"}):
+                spec = [e for e in infra.MANIFEST["static_files"] if e["path"] == path][0]
+                self.assertTrue(infra._spec_selected(spec), path)
+
     def test_the_account_reaches_the_cli_through_one_sudoers_line(self):
         grant = self._static("/etc/sudoers.d/event-enrichment-claude-sandbox")
         self.assertEqual(grant["content"], "hamsd_event_enrichment ALL=(hams_event_agent) NOPASSWD: /usr/local/sbin/run-hams-event-agent-claude.sh\n")
