@@ -38,6 +38,7 @@ WARM_MAX_LAYERS = 8
 WARM_MOUNT_FAILED = 125
 WARM_DRAIN_WAIT = 60.0
 DRAIN_STALE_SECONDS = 600
+_sleep = time.sleep  # the one wait in this module; tests replace this name, never time.sleep itself (a global patch made other threads' sleep loops grow a list without bound)
 _MOUNT_SCRIPT = 'mount -t overlay overlay -o "lowerdir=$1,upperdir=$2,workdir=$3,userxattr" "$4" || exit %d; shift 4; exec "$@"' % WARM_MOUNT_FAILED
 
 
@@ -243,7 +244,7 @@ class Run:
                     return
             except OSError:
                 return
-            time.sleep(0.5)
+            _sleep(0.5)
 
     def __enter__(self):
         base, key = self.base, self.key

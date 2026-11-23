@@ -151,22 +151,33 @@ class FlattenTests(Base):
         self.assertEqual(self.build("ls $M", promote=False).split(), ["f0", "f1", "f2", "f3", "f4"])
 
     def test_a_draining_flag_makes_new_runs_wait_until_it_clears_or_goes_stale(self):
-        warm_build.WARM_DRAIN_WAIT = 30.0
-        self.addCleanup(setattr, warm_build, "WARM_DRAIN_WAIT", 60.0)
         flag = os.path.join(self.base, "k.draining")
         open(flag, "w").close()
-        threading.Timer(1.0, os.unlink, [flag]).start()
-        started = time.monotonic()
+        sleeps = []
+
+        def clear_on_third_sleep(seconds):  # drives the wait explicitly: no real sleeping, no threads, no global patch
+            sleeps.append(seconds)
+            if len(sleeps) == 3:
+                os.unlink(flag)
+
+        self.addCleanup(setattr, warm_build, "_sleep", warm_build._sleep)
+        warm_build._sleep = clear_on_third_sleep
         self.build("echo x > $M/f", promote=True)
-        self.assertGreaterEqual(time.monotonic() - started, 0.9)
+        self.assertEqual(len(sleeps), 3)
+        sleeps.clear()
+        warm_build._sleep = sleeps.append  # a stale flag must not make the run wait at all
         open(flag, "w").close()
         os.utime(flag, (time.time() - 10_000, time.time() - 10_000))
-        sleeps = []
-        real_sleep = time.sleep
-        time.sleep = sleeps.append  # a stale flag must not make the run wait at all
-        self.addCleanup(setattr, time, "sleep", real_sleep)
         self.build("echo y > $M/g", promote=False)
         self.assertEqual(sleeps, [])
+        # a flag that never clears and is not stale ends after WARM_DRAIN_WAIT: the wait is bounded
+        open(flag, "w").close()
+        self.addCleanup(setattr, warm_build, "WARM_DRAIN_WAIT", warm_build.WARM_DRAIN_WAIT)
+        warm_build.WARM_DRAIN_WAIT = 0.05
+        warm_build._sleep = lambda seconds: time.sleep(0.02)
+        started = time.monotonic()
+        self.build("echo z > $M/h", promote=False)
+        self.assertLess(time.monotonic() - started, 20)
 
     def test_apply_layer_reads_a_real_whiteout(self):
         lower, upper = os.path.join(self.parent, "l"), os.path.join(self.parent, "u")
