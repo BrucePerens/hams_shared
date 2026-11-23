@@ -31,6 +31,17 @@ LISTING = "\n".join("%s: test" % name for name in (
     "data_dir::tests::h", "other::unrelated")) + "\n\n10 tests, 0 benchmarks\n"
 
 
+class OpenTreeTests(unittest.TestCase):
+    def test_the_hams_open_beside_the_checkout_is_named_and_none_when_absent(self):
+        job = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, job, True)
+        repo = os.path.join(job, "hams_com")
+        os.makedirs(repo)
+        self.assertIsNone(rs.open_tree(repo))
+        os.makedirs(os.path.join(job, "hams_open"))
+        self.assertEqual(rs.open_tree(repo), os.path.join(job, "hams_open"))
+
+
 class StepScopeTests(unittest.TestCase):
     def test_the_step_files_named_in_run_linters_exist(self):
         import run_linters

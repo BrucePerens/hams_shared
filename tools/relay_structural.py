@@ -133,6 +133,13 @@ def _stamp_path(key, environ=None):
     return os.path.join(lint_cache.cache_root(environ), "hams-relay-structural", key)
 
 
+def open_tree(repo_root):
+    """The hams_open tree that sits beside `repo_root` (the checkout, worktree or job directory the lint runs on), or None. The relay's tests read rig
+    descriptions from it (`HAMS_OPEN_DIR`), and a copy of the checkout (the work copy, a warm_build overlay) has no sibling of its own. Pure."""
+    path = os.path.join(os.path.dirname(os.path.abspath(repo_root)), "hams_open")
+    return path if os.path.isdir(path) else None
+
+
 def _run(command, cwd, env):
     return subprocess.run(command, cwd=cwd, env=env, capture_output=True, text=True)
 
@@ -268,6 +275,9 @@ def _run_group(argv, repo_root, relay):
 
 def _build_and_test(argv, repo_root, relay, env, work):
     """List the relay's tests, check the filters against them and run the group with `env`; `work` is the synced copy the build runs in (None: the checkout itself)."""
+    tree = open_tree(repo_root)
+    if tree:
+        env = dict(env, HAMS_OPEN_DIR=tree)
     shown = (lambda text: text.replace(work, os.path.abspath(repo_root))) if work else (lambda text: text)
     listing = _run(cargo_command(filters=(), list_only=True), relay, env)  # every test of the binary: the filters are checked against it
     if listing.returncode != 0:
