@@ -2761,6 +2761,27 @@ def run_protected(cmd, protected_pids, **popen_kwargs):
             raise
 
 
+# [@ANCHOR: test:top_level_submounts]
+def top_level_submounts(prefix, mountinfo_text):
+    """Mount points strictly below `prefix` in /proc/self/mountinfo text, leaving out any that lie inside another one listed
+    (an rbind of the outer one carries it). An overlay of `prefix` does not show what is mounted below it, so the
+    isolated run re-binds these (overlay worktrees from devbox_tools/wt.py are such mounts under /home)."""
+    points = []
+    for line in mountinfo_text.splitlines():
+        fields = line.split()
+        if len(fields) < 5:
+            continue
+        point = re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), fields[4])
+        if point.startswith(prefix.rstrip("/") + "/"):
+            points.append(point)
+    points.sort()
+    kept = []
+    for point in points:
+        if not kept or not point.startswith(kept[-1] + "/"):
+            kept.append(point)
+    return kept
+
+
 # [@ANCHOR: test:setup_namespace_and_run_tests]
 def setup_namespace_and_run_tests(real_log_dir, sys_args):
     """
@@ -2821,6 +2842,16 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
     os.makedirs("/mnt/real_log", exist_ok=True)
     subprocess.run(["mount", "--bind", host_log_dir, "/mnt/real_log"], check=True)
 
+    # An overlay of /home hides mounts below it (a wt.py overlay worktree under ~/agent_work would read as an empty
+    # directory): keep each one at /mnt/home_mount_N and bind it back after the overlay.
+    with open("/proc/self/mountinfo", encoding="utf-8") as mountinfo:
+        kept_home_mounts = []
+        for i, point in enumerate(top_level_submounts("/home", mountinfo.read())):
+            keep = f"/mnt/home_mount_{i}"
+            os.makedirs(keep, exist_ok=True)
+            subprocess.run(["mount", "--rbind", point, keep], check=True)
+            kept_home_mounts.append((keep, point))
+
     print("[*] Creating overlay filesystem for isolated testing...")
     for item in ["etc", "opt", "var", "usr", "home", "tmp", "run"]:
         if not os.path.exists(f"/{item}"):
@@ -2842,6 +2873,10 @@ def setup_namespace_and_run_tests(real_log_dir, sys_args):
             )
         except subprocess.CalledProcessError as e:
             _logger.debug("Failed to overlay mount /%s: %s", item, e)
+
+    for keep, point in kept_home_mounts:
+        os.makedirs(point, exist_ok=True)
+        subprocess.run(["mount", "--rbind", keep, point], check=True)
 
     print("[*] Restoring host daemon sockets...")
     for temp_sock, sock in preserved_socks:

@@ -1572,6 +1572,13 @@ Purpose: run the test process of the root phase and return its return code, like
 `subprocess.Popen` (the root phase passes `preexec_fn`). Any exception while waiting (a signal turned into `sys.exit`, Ctrl-C) kills the child and waits for it before the
 exception propagates, as `subprocess.run` does.
 
+### `[@ANCHOR: test:top_level_submounts]` `top_level_submounts(prefix, mountinfo_text)`
+
+Purpose: the mount points strictly below `prefix` in `/proc/self/mountinfo` text (octal escapes such as `\040` decoded), without any that lie inside another listed one. The isolated test
+run overlays `/home`, and an overlay does not show what is mounted below it: a `devbox_tools/wt.py` overlay worktree (a mount under `~/agent_work`) read as an empty directory there and
+`test.py` was "not found" in it. `setup_namespace_and_run_tests` keeps each of these with `mount --rbind` at `/mnt/home_mount_N` before the overlay and binds it back after. Tests:
+`test_test.py` `TopLevelSubmountsTests`.
+
 ### `[@ANCHOR: test:run_preflight_in_slot]` `run_preflight_in_slot(args, lock_file_path, held_slot, slots, preflight=None)`
 
 Purpose: the pre-flight (semantic anchor scan, burn-list and audit linters, init-import and JavaScript syntax checks, and for a `HAMS_ISOLATED_NS=1` run the test-host check) runs
