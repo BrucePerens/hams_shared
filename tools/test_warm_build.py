@@ -40,6 +40,7 @@ class Base(unittest.TestCase):
 
 
 class StackTests(Base):
+    # Tests [@ANCHOR: warm_build_run]
     def test_a_run_sees_what_a_promoted_run_left_and_a_pr_run_leaves_nothing(self):
         self.build("mkdir $M/t; echo one > $M/t/a", promote=True)
         self.assertEqual(len(self.layers()), 1)
@@ -160,9 +161,12 @@ class FlattenTests(Base):
         self.assertGreaterEqual(time.monotonic() - started, 0.9)
         open(flag, "w").close()
         os.utime(flag, (time.time() - 10_000, time.time() - 10_000))
-        started = time.monotonic()
+        sleeps = []
+        real_sleep = time.sleep
+        time.sleep = sleeps.append  # a stale flag must not make the run wait at all
+        self.addCleanup(setattr, time, "sleep", real_sleep)
         self.build("echo y > $M/g", promote=False)
-        self.assertLess(time.monotonic() - started, 10)
+        self.assertEqual(sleeps, [])
 
     def test_apply_layer_reads_a_real_whiteout(self):
         lower, upper = os.path.join(self.parent, "l"), os.path.join(self.parent, "u")
