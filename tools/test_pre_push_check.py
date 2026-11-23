@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+import unittest.mock
 
 import pre_push_check as ppc
 
@@ -11,14 +12,30 @@ import pre_push_check as ppc
 class PrePushCheckTests(unittest.TestCase):
     # [@ANCHOR: test_a_main_push_is_refused_unless_the_override_is_set]
     def test_a_main_push_is_refused_unless_the_override_is_set(self):
-        notes = ["night_shift_todo/high/a.md", "night_shift_history/b.md"]
-        for repo in ("hams_open", "hams_shared"):
-            self.assertIn("NO DIRECT PUSHES TO MAIN", ppc.main_push_problem(notes, repo, {}))
-        self.assertIsNone(ppc.main_push_problem(notes, "hams_com", {}))
-        self.assertIn("merge_pr.py", ppc.main_push_problem(notes + ["ham_base/models/x.py"], "hams_com", {}))
-        self.assertIsNotNone(ppc.main_push_problem(["night_shift_todo_evil/x.py"], "hams_com", {}))
-        self.assertIsNotNone(ppc.main_push_problem([], "hams_com", {}))
-        self.assertIsNone(ppc.main_push_problem(["x.py"], "hams_shared", {"HAMS_ALLOW_MAIN_PUSH": "1"}))
+        ok = ["night_shift_todo/high/a.md", "docs/x/y.txt", "ham_x/claims/c.md", "claims/c.md", "README.md", "notes/n.md"]
+        self.assertIsNone(ppc.main_push_problem(ok, {}))
+        for bad in ("ham_base/models/x.py", "ham_base/__manifest__.py", "ham_base/tests/t.md", "ham_base/data/d.xml", "night_shift_todo_evil/x.py",
+                    "tools/README.md", "x.txt"):
+            self.assertIn("NO DIRECT PUSHES TO MAIN", ppc.main_push_problem(ok + [bad], {}), bad)
+        self.assertIn("merge_pr.py", ppc.main_push_problem([], {}))
+        self.assertIn("NO DIRECT", ppc.main_push_problem(["README.md"], {}, has_anchor=lambda path: True))  # anchor docs need the PR lint
+        self.assertIsNone(ppc.main_push_problem(["x.py"], {"HAMS_ALLOW_MAIN_PUSH": "1"}))
+
+    def test_a_failing_cheap_check_blocks_an_allowed_main_push(self):
+        calls = []
+        done = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+        with unittest.mock.patch.object(ppc, "git", return_value=done) as fake_git, \
+                unittest.mock.patch.object(ppc, "find_merge_pr", return_value="/x"), \
+                unittest.mock.patch.object(ppc, "check_branch", side_effect=lambda *a, **k: calls.append(a) or False):
+            fake_git.side_effect = lambda args, cwd=None: subprocess.CompletedProcess(
+                [], 0, stdout="docs/a.md\n" if args[0] == "diff" else "https://github.com/BrucePerens/hams_com.git\n", stderr="")
+            self.assertEqual(ppc.main(["p", "refs/heads/main", "a" * 40, "refs/heads/main", "b" * 40]), 1)
+            self.assertEqual(len(calls), 1)
+            with unittest.mock.patch.object(ppc, "check_branch", return_value=True):
+                self.assertEqual(ppc.main(["p", "refs/heads/main", "a" * 40, "refs/heads/main", "b" * 40]), 0)
+            fake_git.side_effect = lambda args, cwd=None: subprocess.CompletedProcess(
+                [], 0, stdout="ham_x/models/a.py\n" if args[0] == "diff" else "https://github.com/BrucePerens/hams_com.git\n", stderr="")
+            self.assertEqual(ppc.main(["p", "refs/heads/main", "a" * 40, "refs/heads/main", "b" * 40]), 1)
 
     def test_the_shell_hook_refuses_main_first_and_lets_branches_reach_the_checks(self):
         hook = os.path.join(os.path.dirname(os.path.abspath(__file__)), "git-hooks", "pre-push")

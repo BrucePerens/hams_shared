@@ -4,7 +4,8 @@
 Called by git-hooks/pre-push once per pushed ref: `pre_push_check.py <local_ref> <local_sha> <remote_ref> <remote_sha>` (cwd: the repo).
 
   - A push to main must come from merge_pr.py, which merges through GitHub, never from a git push: it is refused unless HAMS_ALLOW_MAIN_PUSH=1
-    is set (the coordinator, deliberately) or, in hams_com only, every changed file is a to-do note (todo_note.py's path).
+    is set (the coordinator, deliberately) or every changed file passes direct_path_ok (to-do notes, docs/, claims, plain .md; direct_note.py's path),
+    and then merge_pr's cheap checks must pass on the pushed commit first.
   - A push of any other branch runs merge_pr's cheap check_plan (imported, not copied) on the branch merged into origin/main, within
     PUSH_CHECK_SECONDS. A failing check refuses the push (fix it, run lint_autofix.py, or `git push --no-verify`); a check that does
     not finish in time only warns and the push goes ahead. HAMS_SKIP_PREPUSH_CHECK=1 skips the check.
@@ -16,7 +17,9 @@ import sys
 import time
 
 PUSH_CHECK_SECONDS = 180
-NOTE_DIRS = ("night_shift_todo/", "night_shift_history/", "night_shift_questions/")  # hams_com only: devbox_tools/todo_note.py pushes these
+NOTE_DIRS = ("night_shift_todo/", "night_shift_history/", "night_shift_questions/", "docs/")
+CODE_DIRS = {"src", "tests", "test", "static", "models", "controllers", "views", "data", "security", "wizards", "report", "daemons", "tools",
+             "devbox_tools", "scripts", "templates", "i18n", ".github", "hams_open", "hams_shared", "hams_com"}
 MAIN_PUSH_MESSAGE = "NO DIRECT PUSHES TO MAIN: open a PR and merge with devbox_tools/merge_pr.py"
 ZERO = "0" * 40
 
@@ -30,14 +33,22 @@ def git(args, cwd=None):
     return subprocess.run(["git"] + args, cwd=cwd, capture_output=True, text=True)
 
 
+def direct_path_ok(path, has_anchor=lambda path: False):
+    """True when a file may go to main by a direct push: a to-do note, docs/, a claims file, or a .md outside code directories that carries no anchor docs."""
+    if path.startswith(NOTE_DIRS) or path.startswith("claims/") or "/claims/" in path:
+        return True
+    if not path.endswith(".md") or set(path.split("/")[:-1]) & CODE_DIRS:
+        return False
+    return not has_anchor(path)
+
+
 # [@ANCHOR: pre_push_check_main_push_problem]
 # Verified by [@ANCHOR: test_a_main_push_is_refused_unless_the_override_is_set]
-def main_push_problem(files, repo, environ=os.environ):
-    """None when a direct push of `files` to main of `repo` is allowed, else the reason. Allowed: HAMS_ALLOW_MAIN_PUSH=1, or in hams_com only
-    when every file is a to-do note (todo_note.py's path). hams_open and hams_shared have no exception."""
+def main_push_problem(files, environ=os.environ, has_anchor=lambda path: False):
+    """None when a direct push of `files` to main is allowed (HAMS_ALLOW_MAIN_PUSH=1, or every file passes direct_path_ok), else the reason."""
     if environ.get("HAMS_ALLOW_MAIN_PUSH") == "1":
         return None
-    if repo == "hams_com" and files and all(f.startswith(NOTE_DIRS) for f in files):
+    if files and all(direct_path_ok(f, has_anchor) for f in files):
         return None
     return MAIN_PUSH_MESSAGE
 
@@ -110,20 +121,23 @@ def main(argv):
     local_ref, local_sha, remote_ref, remote_sha = argv[1:5]
     if local_sha == ZERO or not remote_ref.startswith("refs/heads/"):
         return 0  # a deletion or a tag; the shell hook handles main deletion
-    if remote_ref == "refs/heads/main":
-        base = remote_sha if remote_sha != ZERO else "origin/main"
-        changed = git(["diff", "--name-only", base, local_sha])
-        repo = os.path.basename(git(["remote", "get-url", "origin"]).stdout.strip()).removesuffix(".git")
-        problem = main_push_problem(changed.stdout.split() if changed.returncode == 0 else [], repo)
-        if problem:
-            print("pre-push: refusing: " + problem, file=sys.stderr)
-            return 1
-        return 0
-    if os.environ.get("HAMS_SKIP_PREPUSH_CHECK") == "1":
-        return 0
     tools_dir = find_merge_pr()
     url = git(["remote", "get-url", "origin"]).stdout.strip()
     repo = os.path.basename(url).removesuffix(".git")
+    if remote_ref == "refs/heads/main":
+        base = remote_sha if remote_sha != ZERO else "origin/main"
+        changed = git(["diff", "--name-only", base, local_sha])
+        files = changed.stdout.split() if changed.returncode == 0 else []
+        problem = main_push_problem(files, has_anchor=lambda path: "@ANCHOR" in git(["show", "%s:%s" % (local_sha, path)]).stdout)
+        if problem:
+            print("pre-push: refusing: " + problem, file=sys.stderr)
+            return 1
+        if os.environ.get("HAMS_ALLOW_MAIN_PUSH") == "1" or tools_dir is None or repo not in ("hams_com", "hams_open", "hams_shared"):
+            return 0
+        # allowed paths still skip merge_pr's lint, so run its cheap checks on them first
+        return 0 if check_branch(repo, local_sha, tools_dir, say=lambda m: print(m, file=sys.stderr)) else 1
+    if os.environ.get("HAMS_SKIP_PREPUSH_CHECK") == "1":
+        return 0
     if tools_dir is None or repo not in ("hams_com", "hams_open", "hams_shared"):
         print("pre-push: merge_pr.py or the repo name not found; check skipped.", file=sys.stderr)
         return 0
