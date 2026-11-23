@@ -47,6 +47,7 @@ import math
 import os
 import pwd
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -1245,6 +1246,51 @@ def cmd_kill_pid(args, out=sys.stdout):
                     args.signal, out)
 
 
+# The check-then-TERM run on the remote host by `remote_kill`. Positional arguments: pid, expected user, expected command text.
+# `ps -o user= -o command=` works on Linux and macOS (no /proc needed). Exit 0 sent, 1 no such process, 3 refused.
+REMOTE_KILL_SCRIPT = (
+    'pid=$1; want_user=$2; want_cmd=$3; '
+    'user=$(ps -o user= -p "$pid" 2>/dev/null | tr -d " "); '
+    'cmd=$(ps -o command= -p "$pid" 2>/dev/null); '
+    '[ -n "$user" ] || { echo "remote-kill: no process $pid" >&2; exit 1; }; '
+    '[ "$user" = "$want_user" ] || { echo "remote-kill: pid $pid is owned by $user, not $want_user: refused" >&2; exit 3; }; '
+    'case "$cmd" in *"$want_cmd"*) ;; '
+    '*) echo "remote-kill: pid $pid command does not contain the expected text: refused: $cmd" >&2; exit 3;; esac; '
+    'kill -TERM "$pid" && echo "remote-kill: sent TERM to $pid ($user): $cmd"'
+)
+
+
+# [@ANCHOR: agent_procs:remote_kill]
+def remote_kill(ssh_args, pid, expect_user, expect_cmd, out=sys.stdout, run=None):
+    """Send SIGTERM to ONE exact pid on another host (mac1, winvm) over ssh, after the remote host itself has checked that the
+    process belongs to `expect_user` and that its command line contains `expect_cmd`; otherwise nothing is sent (exit 3). `ssh_args`
+    is the ssh argument string (`-p 2222 ai@127.0.0.1`). Refuses pid <= 1 and an empty user or command text (ProcError code 2).
+    Only TERM, never a list or a pattern. `run` defaults to `subprocess.run` (injectable for tests). Returns the remote exit code:
+    0 sent, 1 no such process, 3 refused; 255 is an ssh failure."""
+    if pid <= 1:
+        raise ProcError("remote-kill: refusing pid <= 1", EX_USAGE)
+    if not expect_user.strip() or not expect_cmd.strip():
+        raise ProcError("remote-kill: --expect-user and --expect-cmd must not be empty", EX_USAGE)
+    try:
+        ssh_words = shlex.split(ssh_args)
+    except ValueError as error:
+        raise ProcError(f"remote-kill: bad --ssh text: {error}", EX_USAGE) from error
+    if not ssh_words:
+        raise ProcError("remote-kill: --ssh is empty", EX_USAGE)
+    remote = "sh -c " + shlex.join([REMOTE_KILL_SCRIPT, "sh", str(pid), expect_user, expect_cmd])
+    done = (run or subprocess.run)(["ssh", "-o", "BatchMode=yes", *ssh_words, remote], capture_output=True, text=True, timeout=60, check=False)
+    out.write(done.stdout)
+    if done.stderr:
+        sys.stderr.write(done.stderr)
+    return done.returncode
+
+
+# [@ANCHOR: agent_procs:cmd_remote_kill]
+def cmd_remote_kill(args, out=sys.stdout):
+    """`remote-kill` subcommand: `remote_kill` with the command-line options."""
+    return remote_kill(args.ssh, args.pid, args.expect_user, args.expect_cmd, out)
+
+
 # [@ANCHOR: agent_procs:build_parser]
 def build_parser():
     """The argparse parser of the command line, without the command after `--` (`parse_args` adds it)."""
@@ -1305,6 +1351,11 @@ def build_parser():
     kill.add_argument("--force", action="store_true", help="SIGKILL this pid if it survives the grace period")
     kill.add_argument(OWNER_OVERRIDE_FLAG, action="store_true", dest="i_am_the_owner_and_checked",
                       help="override the protected-process refusal for your own recorded job")
+    remote = sub.add_parser("remote-kill", help="TERM one exact pid on another host over ssh, after a user and command check there")
+    remote.add_argument("pid", type=int)
+    remote.add_argument("--ssh", required=True, metavar="ARGS", help='ssh arguments, e.g. "-p 2222 ai@127.0.0.1"')
+    remote.add_argument("--expect-user", required=True, metavar="USER", help="the process must belong to this user")
+    remote.add_argument("--expect-cmd", required=True, metavar="SUBSTR", help="its command line must contain this text")
     wrap = sub.add_parser("_wrap")
     wrap.add_argument("name")
     wrap.add_argument("--timeout", type=float, default=0)
@@ -1339,7 +1390,7 @@ def main(argv=None):
             return wrapper_main(args.name, args.command, timeout=args.timeout, kill_grace=args.kill_grace,
                             mem_max=None if args.mem_max == "none" else args.mem_max, nice=args.nice)
         handler = {"find": cmd_find, "wait": cmd_wait, "run": cmd_run, "jobs": cmd_jobs, "reap": cmd_reap, "stop": cmd_stop,
-                   "kill-pid": cmd_kill_pid}[args.cmd]
+                   "kill-pid": cmd_kill_pid, "remote-kill": cmd_remote_kill}[args.cmd]
         return handler(args)
     except ProcError as error:
         print(f"agent_procs: {error}", file=sys.stderr)

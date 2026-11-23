@@ -92,6 +92,7 @@ DENIED = [
     "echo $(echo $(echo $(pkill foo)))", 'echo "a $(kill -9 5) b"',
     # Equivalent spellings (to-do signal-guard-shell-forms, 2026-11-09): a program named by a variable or ANSI-C quoting, a script piped
     # into a shell, wrappers with long or clustered options, and wrappers that were not read at all.
+    "ssh mac1 kill 1", "ssh -p 2222 ai@127.0.0.1 'kill 1'", "ssh mac1 'kill -TERM 1'",
     "K=kill; $K -9 123", "${K:-kill} -9 1", "${K-pkill} x", "K='kill -9'; $K 123", "$'kill' -9 123", "$'p\\x6bill' x",
     "echo 'kill -9 1' | sh", "printf '%s' 'pkill foo' | bash", "echo pkill foo | bash -s", "cat <<EOF | bash\nkill -9 1\nEOF",
     "echo hi | cat | sh -c 'x' ; echo 'kill -9 1' | sh -",
@@ -117,6 +118,7 @@ ALLOWED = [
     "python3 hams_shared/tools/agent_procs.py stop build --force",
     "python3 hams_shared/tools/agent_procs.py kill-pid 123 --start-time 456 --force",
     "python3 hams_shared/tools/agent_procs.py find --cmd-contains hams_pf_probe",
+    "python3 hams_shared/tools/agent_procs.py remote-kill 4242 --ssh '-p 2222 ai@127.0.0.1' --expect-user ai --expect-cmd tokio",
     "until ! python3 hams_shared/tools/agent_procs.py find --quiet --cmd-contains tools/test.py; do sleep 3; done",
     "bash -c 'until [ -e done.marker ]; do sleep 1; done'", "timeout 60 sleep 100", "nice -n 10 python3 x.py 2>&1 | tail -5",
     "sudo -n -u odoo env HAMS_ISOLATED_NS=1 python3 hams_shared/tools/test.py --wait -u hams_x",

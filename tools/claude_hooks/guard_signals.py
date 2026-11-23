@@ -459,7 +459,8 @@ def check_kill(words, via_xargs, verdict, table=None):
             break
     if pids and not verdict.reasons:
         verdict.notes.append("kill of a literal pid: print its ps line first (`ps -o pid,user,lstart,args -p PID`); prefer "
-                             "agent_procs.py kill-pid PID --start-time T or agent_procs.py stop NAME")
+                             "agent_procs.py kill-pid PID --start-time T or agent_procs.py stop NAME; on another host "
+                             "agent_procs.py remote-kill PID --ssh ARGS --expect-user U --expect-cmd TEXT")
 
 
 # [@ANCHOR: guard_signals:check_pgrep]

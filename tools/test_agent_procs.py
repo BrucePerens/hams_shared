@@ -58,6 +58,8 @@ Tests [@ANCHOR: agent_procs:cmd_run]
 Tests [@ANCHOR: agent_procs:cmd_jobs]
 Tests [@ANCHOR: agent_procs:cmd_stop]
 Tests [@ANCHOR: agent_procs:cmd_kill_pid]
+Tests [@ANCHOR: agent_procs:remote_kill]
+Tests [@ANCHOR: agent_procs:cmd_remote_kill]
 Tests [@ANCHOR: agent_procs:build_parser]
 Tests [@ANCHOR: agent_procs:parse_args]
 Tests [@ANCHOR: agent_procs:main]
@@ -85,6 +87,8 @@ from hypothesis import strategies as st
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import agent_procs as ap  # noqa: E402
+
+REAL_RUN = subprocess.run
 
 TOOL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent_procs.py")
 
@@ -1471,6 +1475,55 @@ class KillPidTests(ProcTestCase):
         ticks = ap.read_proc(target.pid).start_ticks
         args = ap.parse_args(["kill-pid", str(target.pid), "--start-time", str(ticks), "--grace", "10"])
         self.assertEqual(ap.cmd_kill_pid(args, io.StringIO()), 0)
+        target.wait(timeout=10)
+
+
+class RemoteKillTests(ProcTestCase):
+    """remote_kill, cmd_remote_kill: the remote check-then-TERM. A fake `run` executes the remote command on this host, as the
+    far side of ssh would, against decoys this test started."""
+
+    def fake_run(self, argv, **_kwargs):
+        self.argv = argv
+        return REAL_RUN(["sh", "-c", argv[-1]], capture_output=True, text=True, check=False)
+
+    def kill(self, pid, user, cmd):
+        out = io.StringIO()
+        with mock.patch.object(sys, "stderr", io.StringIO()):
+            code = ap.remote_kill("-p 2222 ai@host", pid, user, cmd, out, run=self.fake_run)
+        return code, out.getvalue()
+
+    def test_remote_kill_match_sends_term(self):
+        target = self.decoy("tokremotematch")
+        code, text = self.kill(target.pid, ap.user_name(os.getuid()), "tokremotematch")
+        self.assertEqual(code, 0)
+        self.assertIn("sent TERM", text)
+        target.wait(timeout=10)
+        self.assertEqual(self.argv[:5], ["ssh", "-o", "BatchMode=yes", "-p", "2222"])
+
+    def test_remote_kill_user_mismatch_is_refused(self):
+        target = self.decoy("tokremoteuser")
+        code, _text = self.kill(target.pid, "nosuchuser", "tokremoteuser")
+        self.assertEqual(code, 3)
+        self.assertIsNone(target.poll())
+
+    def test_remote_kill_command_mismatch_is_refused(self):
+        target = self.decoy("tokremotecmd")
+        code, _text = self.kill(target.pid, ap.user_name(os.getuid()), "othertext")
+        self.assertEqual(code, 3)
+        self.assertIsNone(target.poll())
+
+    def test_remote_kill_missing_pid_and_bad_input(self):
+        self.assertEqual(self.kill(2 ** 22 + 91, ap.user_name(os.getuid()), "x")[0], 1)
+        for pid, user, cmd in ((1, "ai", "x"), (5, "", "x"), (5, "ai", " ")):
+            with self.assertRaises(ap.ProcError):
+                ap.remote_kill("host", pid, user, cmd, io.StringIO(), run=self.fake_run)
+
+    def test_cmd_remote_kill_parses_options(self):
+        target = self.decoy("tokremotecli")
+        args = ap.parse_args(["remote-kill", str(target.pid), "--ssh", "host", "--expect-user", ap.user_name(os.getuid()),
+                              "--expect-cmd", "tokremotecli"])
+        with mock.patch.object(ap.subprocess, "run", self.fake_run):
+            self.assertEqual(ap.cmd_remote_kill(args, io.StringIO()), 0)
         target.wait(timeout=10)
 
 
