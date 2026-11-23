@@ -451,7 +451,6 @@
  "docs/runbooks/HAMS1_SECRET_CANARY_AND_STORE_ROLLOUT_2026-11-12.md|path|srvctl.sh",
  "docs/runbooks/HAMS1_SECRET_CANARY_AND_STORE_ROLLOUT_2026-11-12.md|path|web.py",
  "docs/runbooks/HOST_FLOOD_GUARD.md|path|night_shift_todo/low/cert-login-rate-limit-keys-on-ipv6-slash-64-and-shared-addresses-39224ff4.md",
- "docs/runbooks/HOST_FLOOD_GUARD.md|path|rollback.sh",
  "docs/runbooks/HOST_FLOOD_GUARD.md|unit|hams-flood-rollback.timer",
  "docs/runbooks/IMAGE_LICENSE_INVENTORY_2026-10.md|path|course_HAM_TECH/images/",
  "docs/runbooks/IMAGE_LICENSE_INVENTORY_2026-10.md|path|ham_training/data/teachers_guide/",
