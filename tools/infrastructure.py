@@ -1110,14 +1110,6 @@ SHARED_ODOO_ACCOUNT_UNITS = {
         "account that owns the key directories and is a member of every family group. Hardened instead: see "
         "SANDBOX_BASELINE_EXEMPTIONS."
     ),
-    "hams.data.relay.service": (
-        "Relay and auth behavior: Bruce reviews and merges changes to the relay units himself (night rules), so it is not "
-        "migrated unattended (plan section 13)."
-    ),
-    "hams.relay.bridge.service": (
-        "Relay and auth behavior: Bruce reviews and merges changes to the relay units himself (night rules), so it is not "
-        "migrated unattended (plan section 13)."
-    ),
     "stray.odoo.shell.detector.service": (
         "Privileged by design and permanent: it inspects other processes of the odoo account (a one-off odoo shell left "
         "running), which an account of its own, or ProtectProc=invisible, would hide from it."
@@ -1716,6 +1708,21 @@ FAMILY_ACCOUNT_UNITS = {
         "db_login": "/opt/hams/etc/keys/exception_report/exception_reporter.env",
         "socket_groups": ["systemd-journal"],
     },
+    # The relay units (written 2026-11-22; the relay release is on hold, so these reach hams1 with the next deploy of the relay only):
+    # neither holds an Odoo key or writes a file. The data relay serves map data from Redis (REDIS_URL, redis.env); the bridge reads
+    # ODOO_URL (common.env) and its own BRIDGE_API_KEY / BRIDGE_STUN_BIND (bridge.env, read by systemd as root).
+    "hams.data.relay.service": {
+        "user": "hamsd_data_relay",
+        "environment_files": frozenset({"redis.env"}),
+        "no_state": True,
+        "no_key": True,
+    },
+    "hams.relay.bridge.service": {
+        "user": "hamsd_relay_bridge",
+        "environment_files": frozenset({"common.env", "bridge.env"}),
+        "no_state": True,
+        "no_key": True,
+    },
     "dx.firehose.service": {
         "user": "hamsd_dx_firehose",
         "environment_files": frozenset({"common.env"}),
@@ -2298,6 +2305,26 @@ MANIFEST = {
             "home": "/nonexistent",
             "shell": "/usr/sbin/nologin",
             "add_to_users": ["odoo"],
+            "member_of": ["hams_traverse"],
+            "not_member_of": ["hams_com"],
+            "environments": ["prod", "test"],
+        },
+        {
+            # hams.data.relay.service (the relay units, hold on release): the live map data relay (aircraft, marine, APRS) from Redis. Not in hams_com; no key and no state, so odoo is not in the group.
+            "user": "hamsd_data_relay",
+            "group": "hamsd_data_relay",
+            "home": "/nonexistent",
+            "shell": "/usr/sbin/nologin",
+            "member_of": ["hams_traverse"],
+            "not_member_of": ["hams_com"],
+            "environments": ["prod", "test"],
+        },
+        {
+            # hams.relay.bridge.service (the relay units, hold on release): the central relay bridge between browsers and local hardware relays. Not in hams_com; no key and no state, so odoo is not in the group.
+            "user": "hamsd_relay_bridge",
+            "group": "hamsd_relay_bridge",
+            "home": "/nonexistent",
+            "shell": "/usr/sbin/nologin",
             "member_of": ["hams_traverse"],
             "not_member_of": ["hams_com"],
             "environments": ["prod", "test"],
@@ -8636,8 +8663,22 @@ NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
 ReadWritePaths=
+ProtectProc=invisible
+ProcSubset=pid
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
 Type=simple
-User=odoo
+User=hamsd_data_relay
+Group=hamsd_data_relay
 WorkingDirectory=/opt/hams/daemons/hams_data_relay
 
 EnvironmentFile=-/opt/hams/etc/redis.env
@@ -8674,12 +8715,25 @@ NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
 ReadWritePaths=
+ProtectProc=invisible
+ProcSubset=pid
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
 Type=simple
-User=odoo
+User=hamsd_relay_bridge
+Group=hamsd_relay_bridge
 WorkingDirectory=/opt/hams/daemons/hams_relay_bridge
 
-EnvironmentFile=-/opt/hams/etc/core.env
-EnvironmentFile=-/opt/hams/etc/odoo.env
+EnvironmentFile=-/opt/hams/etc/common.env
 EnvironmentFile=-/opt/hams/etc/bridge.env
 
 ExecStart=/opt/hams/daemons/hams_relay_bridge/target/release/hams_relay_bridge

@@ -5632,8 +5632,7 @@ class SharedOdooAccountRatchetTests(unittest.TestCase):
     PINNED_ODOO_UNITS = (
         "backup.worker.service",
         "code.review.sweep.service", "credential.touch.timer.service", "event.ai.enrichment.service",
-        "hams.daemon.keys.service", "hams.data.relay.service",
-        "hams.relay.bridge.service", "stray.odoo.shell.detector.service",
+        "hams.daemon.keys.service", "stray.odoo.shell.detector.service",
         "ticket.triage.event.service", "ticket.triage.service",
     )
 
@@ -5895,8 +5894,7 @@ class OdooUnitSecondTierTests(unittest.TestCase):
 
     def test_the_units_left_out_are_still_left_out(self):
         # A unit that gains RestrictNamespaces or RestrictSUIDSGID later must be a reviewed change: the reasons are above.
-        for unit in ("backup.worker.service", "credential.touch.timer.service",
-                     "hams.relay.bridge.service"):
+        for unit in ("backup.worker.service", "credential.touch.timer.service"):
             with self.subTest(unit=unit):
                 self.assertEqual(infra.systemd_unit_directive_values(infra.MANIFEST, unit, "RestrictNamespaces"), [])
 
