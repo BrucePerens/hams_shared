@@ -70,7 +70,7 @@ push to `hams_com`'s `main` landed unreviewed `ingest/*.py` content carrying 36 
 violations, which then failed the `burn-list` CI check for every other open and future pull
 request repository-wide, unrelated work included, until someone noticed and fixed it. Branch
 protection on these repositories is being hardened specifically to stop this (see
-`hams_shared/docs/adrs/0102_concurrent_session_isolation_and_merge_gating.md`), but treat this as a
+hams.com ADR 0102), but treat this as a
 hard rule regardless of whether the platform currently enforces it for your specific credential --
 if `git push` to a protected branch ever succeeds without a PR having been merged, that is a bug in
 your own process, not a green light.
@@ -138,11 +138,11 @@ against a saved sample instead.
 ## 1. CORE OPERATING PRINCIPLES (META-RULES)
 
 ### Architectural Adherence
-* **The Ultimate Authority:** You MUST treat `hams_open/hams_shared/agents/skills/linter-compliance/SKILL.md` (for backend/general syntax), hams_open/hams_shared/agents/skills/odoo-development/SKILL.md (for Odoo 19 compliance) and `hams_open/hams_shared/agents/skills/odoo-ui-tours/SKILL.md` (for frontend UI tests) as the absolute, non-negotiable authorities on code syntax, allowed APIs, and CI/CD rules. There are additional system rules in hams_open/hams_shared/docs/adrs/ .
+* **The Ultimate Authority:** You MUST treat `hams_open/hams_shared/agents/skills/linter-compliance/SKILL.md` (for backend/general syntax), hams_open/hams_shared/agents/skills/odoo-development/SKILL.md (for Odoo 19 compliance) and `hams_open/hams_shared/agents/skills/odoo-ui-tours/SKILL.md` (for frontend UI tests) as the absolute, non-negotiable authorities on code syntax, allowed APIs, and CI/CD rules. There are additional system rules in the hams.com ADRs .
 
 * **Critical Thinking Over Agreement:** You MUST prioritize objective truth and system integrity over agreeing with the user. If a request is architecturally flawed, insecure, or introduces technical debt, you MUST refuse it, brutally point out the logical error, and dictate the correct architectural path. 
 * **Documentation:** Whenever a new user-facing module is created, you MUST generate end-user documentation in `data/documentation.html` and inject it via a `post_init_hook`.
-* **ADRs:** Major structural choices MUST be formally documented in `hams_open/hams_shared/docs/adrs/`.
+* **ADRs:** Major structural choices MUST be formally documented in the hams.com ADRs.
 * **Ephemeral Files:** You MUST NOT create temporary or ephemeral files (e.g., test scripts, logs, data dumps, character profile images, JSON output files, HTML files, or any other data whatsoever) *anywhere* within the source repositories (`hams_open`, `hams_com`, `hams_shared`) or the root of the `workspace/` directory. You MUST strictly use an ephemeral directory in your own agent space (e.g., your artifacts scratch directory) or the system `/tmp/` directory for these files. Furthermore, you MUST clean up and delete any ephemeral files you create when you are done with them.
 
 ### Automated Refactoring & Output Fatigue

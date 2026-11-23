@@ -9,7 +9,7 @@ survives a fresh clone on any machine, not just the box where it was first learn
 companion to `hams_shared/agents/skills/project-experience/SKILL.md` (which is a Trap/Solution log
 of narrow technical bugs and CI/CD gotchas), `hams_shared/agents/skills/claude-memory/` (the
 committed backup of Claude's own broader per-lesson cross-session memory files, one topic per
-file), and `hams_shared/docs/adrs/` (which holds formal, numbered Architecture Decision Records
+file), and the hams.com ADRs (which holds formal, numbered Architecture Decision Records
 for structural mandates) — this file is for standing conventions and policy decisions that don't
 fit any of those shapes as neatly, along with a few pointers to fuller treatments that already
 live elsewhere.
@@ -74,8 +74,8 @@ live elsewhere.
   don't exist yet or need to be created.
 - **A cross-cutting standing policy is an ADR; a scoped feature/fix is a proposal doc.**
   `hams_com/docs/proposals/*.md` tracks one specific, not-yet-built feature or fix, with its own
-  "Still open" section. `hams_shared/docs/adrs/` (now consolidated into numbered `MASTER_NN_*.md`
-  documents, see `hams_shared/docs/adrs/README.md`) is for a durable, cross-cutting policy governing
+  "Still open" section. The hams.com ADRs (now consolidated into numbered `MASTER_NN_*.md`
+  documents, see the hams.com ADR index) is for a durable, cross-cutting policy governing
   a whole category of situation going forward. The tell: if the ask is "we need a standing document
   on this topic" / "a general policy," it's an ADR; if it's "fix this one thing," it's a proposal.
   Since `hams_shared` is a git submodule shared by hams_com and hams_open, a new ADR needs its own
@@ -209,7 +209,7 @@ live elsewhere.
   a formal ADR; confirm whether that ADR exists yet before assuming this is only recorded here.)
 - **Extend hams.com's own models directly; reserve `_inherit` for genuinely third-party or
   genuinely-optional-module models.** Formalized as ADR 0086 (now folded into the consolidated
-  `MASTER_*` ADR series — check `hams_shared/docs/adrs/README.md` for its current location) after
+  `MASTER_*` ADR series — check the hams.com ADR index for its current location) after
   cross-module `_inherit` of an in-house model repeatedly produced real, hard-to-diagnose bugs
   invisible from reading either module alone: a model missing itself from `_inherit` crashing
   registry loading, two modules declaring the same `_name` with no `_inherit` relationship at all

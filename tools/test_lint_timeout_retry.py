@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """
-Step timeouts on a saturated machine are a distinct outcome from step failures (ADR 0117): the step is rerun once, alone, after the
+Step timeouts on a saturated machine are a distinct outcome from step failures (hams.com ADR 0128): the step is rerun once, alone, after the
 run; a pass is recorded in the stamp as `timeout-retried=`; a second failure is real. The step's own time limit stretches with load.
 
 Tests [@ANCHOR: lint_exec:cpu_pressure]

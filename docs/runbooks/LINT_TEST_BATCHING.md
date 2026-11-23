@@ -1,6 +1,6 @@
 # Lint and test batching (coalescing queue)
 
-Decision: `docs/adrs/0115_lint_and_test_runs_coalesce_into_batches.md`. Anchor reference (every function and data
+Decision: hams.com ADR 0115. Anchor reference (every function and data
 structure, ADR 0113): `docs/runbooks/LINT_TEST_BATCHING_ANCHORS.md`. Code: `tools/batch_queue.py` (queue, combined
 tree, attribution), `tools/lint_batch.py` (lint side), the hook in `tools/run_linters.py`.
 

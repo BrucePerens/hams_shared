@@ -315,8 +315,7 @@ ODOO_ONLY = (
     "Cloudflare tunnel rules and DNS records are changed ONLY through hams.com's own Odoo (the cloudflare "
     "module's tunnel routes, pushed by cloudflare.tunnel.action_push_configuration). Odoo is the single "
     "source of truth; a change made through the Cloudflare API is overwritten by the next Odoo push. "
-    "This tool no longer calls the Cloudflare API (read or write). See hams_shared/docs/adrs/"
-    "0106_tenants_inside_one_odoo.md."
+    "This tool no longer calls the Cloudflare API (read or write). See hams.com ADR 0106."
 )
 
 

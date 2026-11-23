@@ -195,6 +195,7 @@ class AdrAnchorUnitConfigFunctionTests(unittest.TestCase):
     def test_adr_numbers(self):
         self.assertEqual(self.tree.check("See ADR 0090 and ADR-90.\n"), [])
         self.assertEqual(self.tree.check("See ADR 0555.\n"), [("adr", "ADR 0555")])
+        self.assertEqual(self.tree.check("See ADR 0113 and ADR 0129.\n"), [])  # listed in data/adr_numbers.txt, no ADR file in the tree
 
     def test_heading_links_in_this_and_other_documents(self):
         self.assertEqual(self.tree.check("# Top\n[a](#top) [b](other.md#second-part)\n"), [])

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
-Known-red baseline of the lint run (ADR 0117, docs/runbooks/LINT_MERGE_QUEUE.md).
+Known-red baseline of the lint run (hams.com ADR 0128, docs/runbooks/LINT_MERGE_QUEUE.md).
 
 A failure that is already on the main branch is not caused by the branch under test. A "canary" run
 (`run_linters.py --baseline-refresh`) lints a clean `origin/main` and records every failing step and failing test
@@ -12,7 +12,7 @@ item, or a recorded test failing with a different message) blocks as before. The
 tolerated, so nothing is hidden.
 
 The record is a machine-local file under `~/.cache/hams-lint/baseline/<repository>.json`, written only from a real
-run of the linters on a clean main tree. The reasons it is not a file in the repository are in ADR 0117.
+run of the linters on a clean main tree. The reasons it is not a file in the repository are in hams.com ADR 0128.
 """
 
 import fcntl

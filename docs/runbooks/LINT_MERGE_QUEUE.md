@@ -1,6 +1,6 @@
 # Known-red baseline and merge queue: operating manual
 
-Design and reasons: `docs/adrs/0117_known_red_baseline_and_merge_queue.md`. Anchor reference:
+Design and reasons: hams.com ADR 0128. Anchor reference:
 `LINT_MERGE_QUEUE_ANCHORS.md`. This page is how to use it.
 
 ## The known-red baseline (on by default)

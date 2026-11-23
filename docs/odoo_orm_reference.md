@@ -16,7 +16,7 @@ File: `odoo/orm/environments.py`, `Environment.company` (~line 216) and `.compan
 - Both are `functools.cached_property`. They read `allowed_company_ids` from the environment's own
   context (set by `.with_company(company_id)` -- this is the *only* sanctioned way to set it; do
   not inject `allowed_company_ids` into a context dict by hand, an existing standing rule,
-  `hams_shared/docs/adrs/0083_multi_tenant_context_management.md` decision 1).
+  hams.com ADR 0083 decision 1).
 - **Non-sudo**: if `allowed_company_ids` names any company not in `self.user._get_company_ids()`
   (the acting user's own real company scope), this raises `AccessError` -- immediately, from the
   cached-property getter, before any query executes. This is why a per-company loop that calls

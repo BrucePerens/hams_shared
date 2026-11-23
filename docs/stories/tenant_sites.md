@@ -3,7 +3,7 @@
 As the **owner of hams.com** I want **perens.com, postopen.org and other sites to be websites of the same Odoo**
 (one database, one Cloudflare tunnel (the connection that carries public web traffic to the machine), one place that says what the tunnel does), so that each site shows only
 its own public content, nothing of hams.com's members or backend is reachable on its names, and the Cloudflare
-configuration has a single source of truth. The decision is [ADR (Architecture Decision Record) 0106](../adrs/0106_tenants_inside_one_odoo.md): a *tenant* is a website of hams.com's own Odoo, bound to one or more hostnames, with no company or database of its own.
+configuration has a single source of truth. The decision is ADR (Architecture Decision Record) 0106 (hams.com ADR 0106): a *tenant* is a website of hams.com's own Odoo, bound to one or more hostnames, with no company or database of its own.
 
 ## Scenario: What a request for a hostname is
 

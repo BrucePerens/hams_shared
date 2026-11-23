@@ -75,7 +75,7 @@ deliberate, opt-in dev-box run -- not something an unattended `pytest`/`test.py`
 of every `tools/test_*.py` file should do to a shared system file without being asked.
 
 **Deliberately contains no `sudo` call anywhere in this file**, per this codebase's own
-zero-sudo policy (`hams_shared/docs/adrs/`'s standing "no `sudo`/privilege escalation in
+zero-sudo policy (the hams.com ADRs' standing "no `sudo`/privilege escalation in
 committed code, use a narrowly-scoped account instead" rule) -- that rule is about
 committed, repo-tracked code specifically, distinct from an operator's own interactive
 `sudo` use setting up their own dev box, which this test deliberately doesn't attempt to

@@ -2,7 +2,7 @@
 
 ## Technical Specification
 
-*Anchor tags: each bracketed anchor tag below is a Semantic Anchor, a marker that ties one function to its test and to its documentation; the `COMM_` prefix marks anchors owned by `hams_open`. See [MASTER 11](../adrs/MASTER_11_DEVELOPMENT_WORKFLOW_DOCS.md) and [ADR-0090](../adrs/0090_universal_function_test_anchor_ratchet.md).*
+*Anchor tags: each bracketed anchor tag below is a Semantic Anchor, a marker that ties one function to its test and to its documentation; the `COMM_` prefix marks anchors owned by `hams_open`. See hams.com ADR MASTER 11 and hams.com ADR 0090.*
 
 ### 1. Amazon SNS/SES Webhook Ingestion
 Receives Amazon SNS (Simple Notification Service) webhooks for incoming SES (Simple Email Service) emails and event notifications (bounce/complaint) at the public endpoint `POST /mail/webhook/sns?token=<secret_token>`. It first checks the per-domain secret token (a missing or unknown token gets 403 and is not logged, since no domain exists to attach a log to), then the body (empty or non-JSON or non-object gets 400), then a real AWS SNS message signature (two independent layers, both required; a valid token with a bad signature is logged as `rejected_signature` and refused). Only then does it dispatch: it confirms an SNS subscription only for an `https://sns.<region>.amazonaws.com/` address, treats a Notification with a raw email as inbound mail passed to Odoo's `mail.thread.message_process` for the domain's company, and logs a Notification with no email content as `ignored`. A processing error is logged as `failed` yet answered 200, because SNS retries any non-2xx response. Each request leaves a `ses.webhook.log` row with status `success`, `failed`, `ignored`, `rejected_subscribe_url` or `rejected_signature`.

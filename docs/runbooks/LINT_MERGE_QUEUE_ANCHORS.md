@@ -1,6 +1,6 @@
 # Known-red baseline and merge queue: anchor reference (ADR 0113)
 
-Operating manual: `LINT_MERGE_QUEUE.md`. Design: `docs/adrs/0117_known_red_baseline_and_merge_queue.md`.
+Operating manual: `LINT_MERGE_QUEUE.md`. Design: hams.com ADR 0128.
 
 ## lint_baseline
 
