@@ -2301,10 +2301,11 @@ Purpose: lets the snapshot check tolerate to-do notes pushed straight to hams_co
 Purpose: the refusal. Returns every problem listed above (empty: current and complete). `fetch` refreshes `origin/main` of the repositories first; `environ` is where `HAMS_OPEN_TREE` is read (default `os.environ`). Raises `SnapshotError` for an unreadable manifest. A stale
 input is a returned problem, never an exception, so one call names all of them.
 
-### `[@ANCHOR: gate_snapshot:create_snapshot]` `create_snapshot(workspace, parent, shards, shards_file, fetch, build, cargo_target_dir, run, out, hostname)`
+### `[@ANCHOR: gate_snapshot:create_snapshot]` `create_snapshot(workspace, parent, shards, shards_file, fetch, build, cargo_target_dir, run, out, hostname, balance, com_commit, open_commit)`
 
 Purpose: `create`. Returns the manifest dictionary (`version`, `created`, `workspace`, `trees`, `cargo_target_dir`, `shards`, `commands`). Raises `SnapshotError` for a production host, a failed step, a malformed shard file, or a snapshot that does not verify afterwards.
 If origin/main moved while the snapshot was built, it is made again at the new commits (re-fetch, up to 3 attempts; then the "behind origin/main" error). Takes no test slot and starts no test.
+`com_commit` and `open_commit` pin the snapshot to those commits (hams_shared is what `open_commit` records) instead of the current origin/main, so a round that linted exact commits gates the same ones while merges continue. Test: `test_pinned_commits_are_snapshotted_even_after_main_moved_on`.
 
 ### `[@ANCHOR: gate_snapshot:prune_snapshots]` `prune_snapshots(parent, keep=1, out=print)`
 
