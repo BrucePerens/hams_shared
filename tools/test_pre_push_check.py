@@ -37,6 +37,16 @@ class PrePushCheckTests(unittest.TestCase):
                 [], 0, stdout="ham_x/models/a.py\n" if args[0] == "diff" else "https://github.com/BrucePerens/hams_com.git\n", stderr="")
             self.assertEqual(ppc.main(["p", "refs/heads/main", "a" * 40, "refs/heads/main", "b" * 40]), 1)
 
+    def test_a_notes_only_main_push_runs_just_the_todo_check_not_the_worktree_check(self):
+        with unittest.mock.patch.object(ppc, "find_merge_pr", return_value="/x"), \
+                unittest.mock.patch.object(ppc, "check_branch", side_effect=AssertionError("no worktree for notes")), \
+                unittest.mock.patch.object(ppc, "note_only_check", return_value=0) as note:
+            fake = lambda args, cwd=None: subprocess.CompletedProcess(
+                [], 0, stdout="night_shift_todo/high/a.md\n" if args[0] == "diff" else "https://github.com/BrucePerens/hams_com.git\n", stderr="")
+            with unittest.mock.patch.object(ppc, "git", side_effect=fake):
+                self.assertEqual(ppc.main(["p", "refs/heads/main", "a" * 40, "refs/heads/main", "b" * 40]), 0)
+            self.assertEqual(note.call_count, 1)
+
     def test_the_shell_hook_refuses_main_first_and_lets_branches_reach_the_checks(self):
         hook = os.path.join(os.path.dirname(os.path.abspath(__file__)), "git-hooks", "pre-push")
         line = "refs/heads/x abc refs/heads/%s 000\n"

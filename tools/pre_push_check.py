@@ -18,7 +18,8 @@ import time
 
 PUSH_CHECK_SECONDS = 180
 NOTE_DIRS = ("night_shift_todo/", "night_shift_history/", "night_shift_questions/", "docs/")
-CODE_DIRS = {"src", "tests", "test", "static", "models", "controllers", "views", "data", "security", "wizards", "report", "daemons", "tools",
+TODO_DIRS = ("night_shift_todo/", "night_shift_history/", "night_shift_questions/")  # a push of only these needs just the to-do format check
+CODE_DIRS ={"src", "tests", "test", "static", "models", "controllers", "views", "data", "security", "wizards", "report", "daemons", "tools",
              "devbox_tools", "scripts", "templates", "i18n", ".github", "hams_open", "hams_shared", "hams_com"}
 MAIN_PUSH_MESSAGE = "NO DIRECT PUSHES TO MAIN: open a PR and merge with devbox_tools/merge_pr.py"
 ZERO = "0" * 40
@@ -117,6 +118,22 @@ def check_branch(repo, sha, tools_dir, seconds=PUSH_CHECK_SECONDS, say=print):
             os.remove(state)
 
 
+def note_only_check(sha, say=print):
+    """0 allow, 1 refuse, for a main push that changes only night_shift_* notes: just the to-do format check (seconds), no check worktree and no lint.
+
+    Runs in the pushing checkout when its HEAD is the pushed commit (direct_note.py's case); otherwise the commit is not at hand and the push is allowed."""
+    top = git(["rev-parse", "--show-toplevel"]).stdout.strip()
+    head = git(["rev-parse", "HEAD"], cwd=top or None).stdout.strip()
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "night_shift_history.py")
+    if not top or head != sha or not os.path.exists(script):
+        return 0
+    done = subprocess.run([sys.executable, script, "check", top], cwd=top, capture_output=True, text=True)
+    if done.returncode != 0:
+        say("pre-push: CHECK FAILED: night_shift_history.py check\n" + (done.stdout + done.stderr).strip()[-1500:])
+        return 1
+    return 0
+
+
 def main(argv):
     local_ref, local_sha, remote_ref, remote_sha = argv[1:5]
     if local_sha == ZERO or not remote_ref.startswith("refs/heads/"):
@@ -134,6 +151,8 @@ def main(argv):
             return 1
         if os.environ.get("HAMS_ALLOW_MAIN_PUSH") == "1" or tools_dir is None or repo not in ("hams_com", "hams_open", "hams_shared"):
             return 0
+        if files and all(f.startswith(TODO_DIRS) for f in files):
+            return note_only_check(local_sha, say=lambda m: print(m, file=sys.stderr))
         # allowed paths still skip merge_pr's lint, so run its cheap checks on them first
         return 0 if check_branch(repo, local_sha, tools_dir, say=lambda m: print(m, file=sys.stderr)) else 1
     if os.environ.get("HAMS_SKIP_PREPUSH_CHECK") == "1":
