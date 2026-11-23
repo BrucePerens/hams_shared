@@ -2079,7 +2079,7 @@ class CreateOdooRoleIfMissingTests(_SafePatchTestCase):
         cmd = run.call_args.args[0]
         self.assertEqual(cmd[:4], ["sudo", "-u", "postgres", "psql"])
         self.assertEqual(cmd[-2:], ["-d", "hams_prod"])
-        for name in ("pg_trgm", "vector"):
+        for name in ("pg_trgm", "vector", "pg_stat_statements"):
             self.assertIn(f"CREATE EXTENSION IF NOT EXISTS {name};", run.call_args.kwargs["input"])
 
     def test_a_failing_extension_step_is_logged_not_raised(self):
