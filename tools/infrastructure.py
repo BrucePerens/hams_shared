@@ -1098,11 +1098,6 @@ SHARED_ODOO_ACCOUNT_UNITS = {
         "The agent-account shape: touches the AI agents' home directories through the Claude Code CLI wrapper, so it cannot "
         "take NoNewPrivileges and needs its own review before it can leave the shared account (plan section 13)."
     ),
-    # AI correction of scraped hamfest listings; the model runs as hams_event_agent (see the unit's comment).
-    "event.ai.enrichment.service": (
-        "The agent-account shape (supervises a model that runs as hams_event_agent through the CLI wrapper, so no "
-        "NoNewPrivileges); needs the same review as ticket.triage before it moves."
-    ),
     # The key bootstrapper writes every daemon's key file, so it runs as the account that owns
     # them (odoo); it stays on this list in the final state too (the plan's Phase 5).
     "hams.daemon.keys.service": (
@@ -1775,6 +1770,16 @@ FAMILY_ACCOUNT_UNITS = {
         "no_key": True,
         "db_login": "/opt/hams/etc/keys/parking/parking_db.env",
     },
+    # AI correction of scraped hamfest listings (daemons/event_ai_enrichment). Its Odoo key is in its family key directory; the MCP server the
+    # model starts (run-event-enrichment-mcp.sh) runs as this same account (the sudoers line of hams_event_agent names it), so the account holds
+    # both the key and the Web Bot Auth signing key of its page fetches. It reaches the model only through the one sudoers line below: the
+    # wrapper, with the CLI's own flags (the equivalent of the odoo grant it replaces; a wrapper that pins them is a follow-up).
+    "event.ai.enrichment.service": {
+        "user": "hamsd_event_enrichment",
+        "environment_files": frozenset({"common.env"}),
+        "socket_groups": ["hamsd_exception_report"],
+        "agent_sudo": {"hams_event_agent": "/usr/local/sbin/run-hams-event-agent-claude.sh"},
+    },
     "club.crawl.service": {
         "user": "hamsd_club_crawl",
         "environment_files": frozenset({"common.env"}),
@@ -2033,6 +2038,20 @@ MANIFEST = {
             # FAMILY_ACCOUNT_UNITS for why that makes it the one unit with an `agent_sudo` exception.
             "user": "hamsd_club_crawl",
             "group": "hamsd_club_crawl",
+            "home": "/nonexistent",
+            "shell": "/usr/sbin/nologin",
+            "add_to_users": ["odoo"],
+            "member_of": ["hams_traverse"],
+            "not_member_of": ["hams_com"],
+            "environments": ["prod", "test"],
+        },
+        {
+            # daemons/event_ai_enrichment (hams_com): the AI correction of scraped hamfest listings and the event enrichment MCP server it
+            # starts. Its own account instead of `odoo`: it holds one Odoo key (event_ai_correction_service_internal.key, in
+            # keys/event_enrichment; odoo joins the group for the key hand-off, chgrp never chown), its own Web Bot Auth signing key and a
+            # state directory, and reaches the model through the sudoers.d line of event-enrichment-claude-sandbox. Not in hams_com. No home.
+            "user": "hamsd_event_enrichment",
+            "group": "hamsd_event_enrichment",
             "home": "/nonexistent",
             "shell": "/usr/sbin/nologin",
             "add_to_users": ["odoo"],
@@ -2618,6 +2637,15 @@ MANIFEST = {
             # (KEY_GROUP_DIR_MODE in its models/key_registry.py); this entry creates the directory first.
             "path": "/opt/hams/etc/keys/club_crawl",
             "owner": "odoo:hamsd_club_crawl",
+            "provision_mode": "750",
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Key directory of the event_enrichment family (hamsd_event_enrichment): owned by odoo, group = the one account that consumes
+            # the keys in it, 0750 (Bruce, NIGHT_PLAN 226); see the ncvec_sync entry above for the full reasoning.
+            "path": "/opt/hams/etc/keys/event_enrichment",
+            "owner": "odoo:hamsd_event_enrichment",
             "provision_mode": "750",
             "runtime_mount": "rw",
             "environments": ["prod", "test"],
@@ -3213,6 +3241,17 @@ MANIFEST = {
             # itself is unreadable to every other account.
             "path": "/opt/hams/spool/web_bot_auth_keys/hamsd_club_crawl",
             "owner": "hamsd_club_crawl:hamsd_club_crawl",
+            "provision_mode": "755",
+            "recursive_owner": True,
+            "runtime_mount": "rw",
+            "environments": ["prod", "test"],
+        },
+        {
+            # Web Bot Auth key of the hamsd_event_enrichment account (the daemon's fetches and the enrichment MCP server's fetch_page_text):
+            # <name>.key (0600, only this account reads it) and <name>.jwk (0644, public). Mode 755 so the publisher (hamsd_web_bot_auth, through
+            # the traversal parent above) can read the .jwk by its exact path; the key file itself is unreadable to every other account.
+            "path": "/opt/hams/spool/web_bot_auth_keys/hamsd_event_enrichment",
+            "owner": "hamsd_event_enrichment:hamsd_event_enrichment",
             "provision_mode": "755",
             "recursive_owner": True,
             "runtime_mount": "rw",
@@ -7981,6 +8020,7 @@ ExecStart=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py refresh --key-file 
     --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_club_search/hamsd_club_search.jwk \\
     --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_country_sync/hamsd_country_sync.jwk \\
     --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_dx_daemon/hamsd_dx_daemon.jwk \\
+    --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_event_enrichment/hamsd_event_enrichment.jwk \\
     --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_event_sync/hamsd_event_sync.jwk \\
     --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_ncvec_sync/hamsd_ncvec_sync.jwk \\
     --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_satellite_sync/hamsd_satellite_sync.jwk \\
@@ -9798,15 +9838,12 @@ WantedBy=timers.target
             # (the Python crawl plus one batched Gemini-grounded search for events ARRL's link cannot lead from),
             # then asks the Claude Code CLI to write the correction through the event enrichment MCP server.
             #
-            # Account: `odoo`, on the SHARED_ODOO_ACCOUNT_UNITS list, as ticket.triage does and for the same two
-            # reasons. (1) The unit reaches the CLI through `sudo -u hams_event_agent run-hams-event-agent-claude.sh`
-            # (the existing odoo grant), so it has the credential.touch.timer exception: NoNewPrivileges omitted,
-            # CapabilityBoundingSet narrowed to SETUID/SETGID, hams_event_agent's home the only ReadWritePaths=.
-            # (2) Its Odoo key is event_ai_correction_service_internal.key, the SAME file the MCP server reads
-            # (run-event-enrichment-mcp.sh runs it as odoo through a sudo hop): a hamsd_ family account would need
-            # that key moved into a family key directory (NIGHT_PLAN 226) and a second key registered for the same
-            # service account, which is its own reviewed change. Moving this unit to its own account belongs to that
-            # later phase of docs/proposals/DAEMON_OS_ISOLATION_PLAN.md; the model itself never runs as odoo.
+            # Account: hamsd_event_enrichment (own account since 2026-11-22; it ran as `odoo` before). The unit reaches the CLI through
+            # `sudo -u hams_event_agent run-hams-event-agent-claude.sh` (the event-enrichment-claude-sandbox grant), so it has the agent_sudo
+            # exception (FAMILY_ACCOUNT_UNITS): NoNewPrivileges omitted, CapabilityBoundingSet narrowed to SETUID/SETGID, hams_event_agent's
+            # home the only ReadWritePaths= besides its own Web Bot Auth key directory. Its Odoo key is event_ai_correction_service_internal.key
+            # in keys/event_enrichment, the SAME file the MCP server reads: run-event-enrichment-mcp.sh runs as this account too (the
+            # hams_event_agent-mcp-servers grant), so the model's session never holds an `odoo` process. The model itself never runs as it.
             #
             # Guard rails live in main.py `--scheduled`: kill switch file /opt/hams/etc/event_ai_enrichment.disabled
             # (also ConditionPathExists=! below), one run at a time, at most 30 model dispatches a UTC day, and an
@@ -9815,8 +9852,9 @@ WantedBy=timers.target
             # unresolved events would be redispatched on every run. Politeness: page_cleaning.fetch_page() honors
             # robots.txt and is SSRF-safe, and a run crawls at most five events (see main.py's docstring).
             #
-            # The Gemini key for the search fallback is read from odoo's own ~/.secrets/google_search/api_key.txt
-            # (/var/lib/odoo/.secrets/google_search/api_key.txt); without it the fallback logs one line and is skipped.
+            # The Gemini key for the search fallback is a root-owned file, /etc/hams-event-enrichment/google_search_api_key, handed over
+            # by LoadCredential= (main.py reads $CREDENTIALS_DIRECTORY/google_search_api_key first, and still the old odoo path as a
+            # fallback); without it the fallback logs one line and is skipped.
             #
             # opt_in: provisioning links this unit but never enables or starts it unless named with
             # provision.py --enable-opt-in (it fetches third-party sites and spends Claude Code subscription quota).
@@ -9839,11 +9877,31 @@ PrivateTmp=true
 PrivateDevices=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=CAP_SETUID CAP_SETGID
+# The daemon-family isolation set (hams_com docs/proposals/DAEMON_OS_ISOLATION_PLAN.md section 5), as club.crawl.service carries it.
+ProtectProc=invisible
+ProcSubset=pid
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
 ReadWritePaths=@ACCOUNT_HOME_PARENT@/hams_event_agent
 StateDirectory=hams-event-ai-enrichment
 StateDirectoryMode=0700
 Type=oneshot
-User=odoo
+User=hamsd_event_enrichment
+Group=hamsd_event_enrichment
+# The exception reporter's key (keys/exception_report, odoo:hamsd_exception_report 0640) for the in-process crash and quota reports.
+SupplementaryGroups=hamsd_exception_report
+# The Gemini key of the search fallback, a root-owned hand-placed file (it was odoo's ~/.secrets/google_search/api_key.txt); main.py reads it
+# from $CREDENTIALS_DIRECTORY first. The file must exist before this unit starts.
+LoadCredential=google_search_api_key:/etc/hams-event-enrichment/google_search_api_key
 WorkingDirectory=/opt/hams/daemons/event_ai_enrichment
 # Five events a run, each a short crawl, an optional shared search call and one model call of up to 240 s.
 TimeoutStartSec=1h
@@ -9852,7 +9910,7 @@ TimeoutStartSec=1h
 # odoo.env is used, so none is loaded.
 EnvironmentFile=/opt/hams/etc/common.env
 Environment="ODOO_USER=event_ai_correction_service_internal"
-Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/event_ai_correction_service_internal.key"
+Environment="ODOO_KEY_FILE=/opt/hams/etc/keys/event_enrichment/event_ai_correction_service_internal.key"
 Environment="PYTHONPATH=/opt/hams/daemons"
 Environment="EVENT_AI_ENRICHMENT_STATE_DIR=/var/lib/hams-event-ai-enrichment"
 Environment="EVENT_AI_ENRICHMENT_BATCH_SIZE=5"
@@ -9860,10 +9918,10 @@ Environment="EVENT_AI_ENRICHMENT_MAX_EVENTS_PER_DAY=30"
 
 ExecStartPre=/usr/bin/python3 /opt/hams/daemons/event_ai_enrichment/main.py --start-test
 # Web Bot Auth: this account signs its requests to third-party servers with its own key (daemons/web_bot_auth.py); the
-# public half, odoo.jwk, is read by path by web.bot.auth.directory.service and listed in hams.com's key directory.
-ReadWritePaths=/opt/hams/spool/web_bot_auth_keys/odoo
-Environment="HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/odoo/odoo.key"
-ExecStartPre=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py ensure-key --key-file /opt/hams/spool/web_bot_auth_keys/odoo/odoo.key --jwk-file /opt/hams/spool/web_bot_auth_keys/odoo/odoo.jwk
+# public half, hamsd_event_enrichment.jwk, is read by path by web.bot.auth.directory.service and listed in hams.com's key directory.
+ReadWritePaths=/opt/hams/spool/web_bot_auth_keys/hamsd_event_enrichment
+Environment="HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/hamsd_event_enrichment/hamsd_event_enrichment.key"
+ExecStartPre=/usr/bin/python3 /opt/hams/daemons/web_bot_auth.py ensure-key --key-file /opt/hams/spool/web_bot_auth_keys/hamsd_event_enrichment/hamsd_event_enrichment.key --jwk-file /opt/hams/spool/web_bot_auth_keys/hamsd_event_enrichment/hamsd_event_enrichment.jwk
 ExecStart=/usr/bin/python3 /opt/hams/daemons/event_ai_enrichment/main.py --scheduled
 
 StandardOutput=journal
@@ -9945,7 +10003,7 @@ WantedBy=timers.target
             # two accounts/tools must never share a grant).
             "path": "/etc/sudoers.d/hams_event_agent-mcp-servers",
             "content": (
-                "hams_event_agent ALL=(odoo) NOPASSWD: "
+                "hams_event_agent ALL=(hamsd_event_enrichment) NOPASSWD: "
                 "/usr/local/sbin/run-event-enrichment-mcp.sh\n"
             ),
             "owner": "root:root",
@@ -10002,6 +10060,19 @@ WantedBy=timers.target
             "content": (
                 "hamsd_club_crawl ALL=(hams_ai_agent) NOPASSWD: "
                 "/usr/local/sbin/run-hams-crawl-claude.sh\n"
+            ),
+            "owner": "root:root",
+            "mode": "440",
+            "environments": ["prod"],
+        },
+        {
+            # The event enrichment daemon's own account (hamsd_event_enrichment): the one reach it has into another account, the Claude Code CLI wrapper
+            # as hams_event_agent (what the `odoo` grant below gave it while it ran as odoo; that grant stays until nothing in Odoo
+            # uses it).
+            "path": "/etc/sudoers.d/event-enrichment-claude-sandbox",
+            "content": (
+                "hamsd_event_enrichment ALL=(hams_event_agent) NOPASSWD: "
+                "/usr/local/sbin/run-hams-event-agent-claude.sh\n"
             ),
             "owner": "root:root",
             "mode": "440",
@@ -10098,7 +10169,8 @@ esac
             "path": "/usr/local/sbin/run-event-enrichment-mcp.sh",
             "content": """\
 @BASH_SHEBANG@
-# Exact env + exec for hams_event_enrichment_mcp, run as odoo via a narrow sudoers grant for
+# Exact env + exec for hams_event_enrichment_mcp, run as hamsd_event_enrichment (the event enrichment daemon's own account, the
+# one that holds its key; it ran as odoo before 2026-11-22) via a narrow sudoers grant for
 # hams_event_agent (its own dedicated account, separate from hams_ai_agent/ticket-triage --
 # see agents/skills/local-resources/SKILL.md and night_shift_todo/high/
 # agy-shared-mcp-blanket-permission-crosses-repeater-import-and-ticket-triage-b6e91f2a.md for why
@@ -10107,10 +10179,10 @@ esac
 export PYTHONPATH=/opt/hams/daemons
 export ODOO_URL=http://127.0.0.1:8069
 export ODOO_DB=hams_prod
-export ODOO_KEY_FILE=/opt/hams/etc/keys/event_ai_correction_service_internal.key
-# Web Bot Auth: fetch_page_text signs its page and robots.txt requests with the odoo account's key (this script runs as odoo;
-# the key is created by odoo.service and event.ai.enrichment.service). Unreadable or absent: the request goes out unsigned.
-export HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/odoo/odoo.key
+export ODOO_KEY_FILE=/opt/hams/etc/keys/event_enrichment/event_ai_correction_service_internal.key
+# Web Bot Auth: fetch_page_text signs its page and robots.txt requests with this account's key (created by event.ai.enrichment.service).
+# Unreadable or absent: the request goes out unsigned.
+export HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/hamsd_event_enrichment/hamsd_event_enrichment.key
 exec /usr/bin/python3 /opt/hams/daemons/hams_event_enrichment_mcp/main.py
 """,
             "owner": "root:root",

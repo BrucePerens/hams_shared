@@ -5631,7 +5631,7 @@ class SharedOdooAccountRatchetTests(unittest.TestCase):
     # shared odoo account by editing one place. When a unit moves to its own account, delete it here in the same change.
     PINNED_ODOO_UNITS = (
         "backup.worker.service",
-        "code.review.sweep.service", "credential.touch.timer.service", "event.ai.enrichment.service",
+        "code.review.sweep.service", "credential.touch.timer.service",
         "hams.daemon.keys.service", "stray.odoo.shell.detector.service",
         "ticket.triage.event.service", "ticket.triage.service",
     )
@@ -5949,6 +5949,47 @@ class AdifPipelineAccountTests(unittest.TestCase):
         for unit in self.UNITS:
             with self.subTest(unit=unit):
                 self.assertEqual(self._values(unit, "SupplementaryGroups"), ["hamsd_exception_report"])
+
+
+class EventEnrichmentAccountTests(unittest.TestCase):
+    """event.ai.enrichment on its own account, hamsd_event_enrichment (daemon OS isolation): the Odoo key is in keys/event_enrichment, the MCP
+    server the model starts runs as the same account (not odoo), the Web Bot Auth key is the account's own, and the one reach into another account is
+    one sudoers line for the CLI wrapper."""
+
+    UNIT = "event.ai.enrichment.service"
+
+    def _values(self, directive):
+        return infra.systemd_unit_directive_values(infra.MANIFEST, self.UNIT, directive)
+
+    def _static(self, path):
+        return [e for e in infra.MANIFEST["static_files"] if e["path"] == path][0]
+
+    def test_the_unit_runs_as_its_own_account_and_holds_only_the_reporter_group_and_the_search_credential(self):
+        self.assertEqual((self._values("User"), self._values("Group")), (["hamsd_event_enrichment"], ["hamsd_event_enrichment"]))
+        self.assertEqual(self._values("SupplementaryGroups"), ["hamsd_exception_report"])
+        self.assertEqual(self._values("LoadCredential"), ["google_search_api_key:/etc/hams-event-enrichment/google_search_api_key"])
+        self.assertEqual({os.path.basename(v) for v in self._values("EnvironmentFile")}, {"common.env"})
+        self.assertEqual(sorted(self._values("ReadWritePaths")), sorted([
+            f"{infra.ACCOUNT_HOME_PARENT}/hams_event_agent", "/opt/hams/spool/web_bot_auth_keys/hamsd_event_enrichment"]))
+
+    def test_the_key_lives_in_the_family_directory_that_odoo_hands_over_through_the_group(self):
+        directory = [d for d in infra.MANIFEST["directories"] if d["path"] == "/opt/hams/etc/keys/event_enrichment"][0]
+        self.assertEqual((directory["owner"], directory["provision_mode"]), ("odoo:hamsd_event_enrichment", "750"))
+        account = [a for a in infra.MANIFEST["system_accounts"] if a["user"] == "hamsd_event_enrichment"][0]
+        self.assertEqual(account["add_to_users"], ["odoo"])
+
+    def test_the_mcp_server_runs_as_the_account_and_reads_the_same_key(self):
+        grant = self._static("/etc/sudoers.d/hams_event_agent-mcp-servers")["content"]
+        self.assertEqual(grant, "hams_event_agent ALL=(hamsd_event_enrichment) NOPASSWD: /usr/local/sbin/run-event-enrichment-mcp.sh\n")
+        wrapper = self._static("/usr/local/sbin/run-event-enrichment-mcp.sh")["content"]
+        self.assertIn("export ODOO_KEY_FILE=/opt/hams/etc/keys/event_enrichment/event_ai_correction_service_internal.key\n", wrapper)
+        self.assertIn('"ODOO_KEY_FILE=/opt/hams/etc/keys/event_enrichment/event_ai_correction_service_internal.key"', self._values("Environment"))
+
+    def test_the_account_reaches_the_cli_through_one_sudoers_line(self):
+        grant = self._static("/etc/sudoers.d/event-enrichment-claude-sandbox")
+        self.assertEqual(grant["content"], "hamsd_event_enrichment ALL=(hams_event_agent) NOPASSWD: /usr/local/sbin/run-hams-event-agent-claude.sh\n")
+        self.assertEqual((grant["owner"], grant["mode"], grant["environments"]), ("root:root", "440", ["prod"]))
+        self.assertNotIn(self.UNIT, infra.SHARED_ODOO_ACCOUNT_UNITS)
 
 
 class PagerMonitorAccountTests(unittest.TestCase):
@@ -6779,7 +6820,7 @@ class WebBotAuthSigningUnitTests(_SafePatchTestCase):
         "ncvec.sync.service": "hamsd_ncvec_sync", "pota.sync.service": "hamsd_activator_sync",
         "sota.sync.service": "hamsd_activator_sync", "skimmer.list.sync.service": "hamsd_dx_daemon",
         "club.web.search.discovery.service": "hamsd_club_search",
-        "club.crawl.service": "hamsd_club_crawl", "event.ai.enrichment.service": "odoo",
+        "club.crawl.service": "hamsd_club_crawl", "event.ai.enrichment.service": "hamsd_event_enrichment",
     }
 
     def _unit_text(self, unit):
@@ -6813,10 +6854,12 @@ class WebBotAuthSigningUnitTests(_SafePatchTestCase):
 
     def test_the_publisher_lists_one_jwk_file_per_signing_account(self):
         text = self._unit_text("web.bot.auth.directory.service")
-        for account in set(self.SIGNING_UNITS.values()):
+        # Odoo's own fetchers (ham_base/outbound_signing.py) sign with the odoo account's key, which the publisher lists too.
+        accounts = set(self.SIGNING_UNITS.values()) | {"odoo"}
+        for account in accounts:
             with self.subTest(account=account):
                 self.assertIn(f"--jwk-file {WEB_BOT_AUTH_KEY_ROOT}/{account}/{account}.jwk", text)
-        self.assertEqual(len(re.findall(r"^\s+--jwk-file ", text, re.M)), len(set(self.SIGNING_UNITS.values())))
+        self.assertEqual(len(re.findall(r"^\s+--jwk-file ", text, re.M)), len(accounts))
 
     def test_no_unit_that_fetches_from_a_third_party_through_the_shared_helpers_is_left_unsigned(self):
         signing = set(self.SIGNING_UNITS)
@@ -6869,9 +6912,9 @@ class WebBotAuthSigningUnitTests(_SafePatchTestCase):
         self.assertTrue(set(self.SIGNING_UNITS) <= seen, set(self.SIGNING_UNITS) - seen)
         self.assertTrue(set(self.NOT_CRAWLERS) <= seen, set(self.NOT_CRAWLERS) - seen)
 
-    def test_the_event_enrichment_mcp_wrapper_gives_fetch_page_text_the_odoo_key(self):
+    def test_the_event_enrichment_mcp_wrapper_gives_fetch_page_text_the_daemons_own_key(self):
         wrapper = [e for e in infra.MANIFEST["static_files"] if e["path"] == "/usr/local/sbin/run-event-enrichment-mcp.sh"][0]["content"]
-        self.assertIn("export HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/odoo/odoo.key\n", wrapper)
+        self.assertIn("export HAMS_WEB_BOT_AUTH_KEY_FILE=/opt/hams/spool/web_bot_auth_keys/hamsd_event_enrichment/hamsd_event_enrichment.key\n", wrapper)
         self.assertLess(wrapper.index("HAMS_WEB_BOT_AUTH_KEY_FILE"), wrapper.index("exec /usr/bin/python3"))
 
 
@@ -7740,7 +7783,7 @@ class EventAiEnrichmentTimerUnitTests(unittest.TestCase):
         self.assertIn("ExecStartPre=/usr/bin/python3 /opt/hams/daemons/event_ai_enrichment/main.py --start-test", text)
         self.assertIn("ExecStart=/usr/bin/python3 /opt/hams/daemons/event_ai_enrichment/main.py --scheduled", text)
         self.assertIn("Type=oneshot", text)
-        self.assertIn("ODOO_KEY_FILE=/opt/hams/etc/keys/event_ai_correction_service_internal.key", text)
+        self.assertIn("ODOO_KEY_FILE=/opt/hams/etc/keys/event_enrichment/event_ai_correction_service_internal.key", text)
         timeout = int(re.search(r"^TimeoutStartSec=(\d+)h$", text, re.M).group(1))
         self.assertGreaterEqual(timeout, 1)
 
@@ -7751,7 +7794,7 @@ class EventAiEnrichmentTimerUnitTests(unittest.TestCase):
         self.assertIn(f"ReadWritePaths={infra.ACCOUNT_HOME_PARENT}/hams_event_agent\n", text)
         env_files = re.findall(r"^EnvironmentFile=-?(\S+)$", text, re.M)
         self.assertEqual(env_files, ["/opt/hams/etc/common.env"])
-        self.assertIn("event.ai.enrichment.service", infra.SHARED_ODOO_ACCOUNT_UNITS)
+        self.assertNotIn("event.ai.enrichment.service", infra.SHARED_ODOO_ACCOUNT_UNITS)
 
     def test_the_odoo_grant_to_the_agent_wrapper_it_uses_exists(self):
         grants = [
