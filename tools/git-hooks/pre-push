@@ -22,10 +22,12 @@ while IFS= read -r line; do
 done
 
 # NO DIRECT PUSHES TO MAIN (2026-11-23): first check, before any network call. merge_pr.py and merge_all.sh merge through the GitHub API.
-# Only HAMS_ALLOW_MAIN_PUSH=1 (set by hand by the coordinator; no tool sets it) lets a push to main through.
+# hams_open and hams_shared: refused outright. hams_com: pre_push_check.py below allows only to-do notes (devbox_tools/todo_note.py).
+# HAMS_ALLOW_MAIN_PUSH=1 (set by hand by the coordinator; no tool sets it) lets anything through.
+origin_url=$(git remote get-url "$remote_name" 2>/dev/null || true)
 for line in "${updates[@]}"; do
     read -r _ _ remote_ref _ <<< "$line"
-    if [ "$remote_ref" = "$protected_ref" ] && [ "${HAMS_ALLOW_MAIN_PUSH:-}" != "1" ]; then
+    if [ "$remote_ref" = "$protected_ref" ] && [ "${HAMS_ALLOW_MAIN_PUSH:-}" != "1" ] && [ "$(basename "$origin_url" .git)" != "hams_com" ]; then
         echo "pre-push: NO DIRECT PUSHES TO MAIN: open a PR and merge with devbox_tools/merge_pr.py" >&2
         exit 1
     fi
