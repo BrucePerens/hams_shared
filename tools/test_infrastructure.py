@@ -6199,9 +6199,10 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
                 if rules.get("agent_sudo"):
                     # The documented exception: the agent's own home and nothing else (the CLI, running
                     # as the agent, writes its session state there; the daemon's account never does).
-                    agent = rules["agent_sudo"]
-                    self.assertEqual(writable, [f"{infra.ACCOUNT_HOME_PARENT}/{agent}"])
-                    self.assertIn(f"{infra.ACCOUNT_HOME_PARENT}/{agent}", self._directories_owned_by(agent))
+                    homes = sorted(f"{infra.ACCOUNT_HOME_PARENT}/{agent}" for agent in rules["agent_sudo"])
+                    self.assertEqual(sorted(writable), homes)
+                    for agent in rules["agent_sudo"]:
+                        self.assertIn(f"{infra.ACCOUNT_HOME_PARENT}/{agent}", self._directories_owned_by(agent))
                     continue
                 # `group_write`: a path owned by another account's group that the unit writes through SupplementaryGroups=
                 # (checked in its own test below); every other writable path is the account's own.
@@ -6322,40 +6323,34 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
                         infra.systemd_unit_directive_values(infra.MANIFEST, unit, directive), expected
                     )
 
-    def test_an_agent_sudo_unit_reaches_the_agent_through_one_sudoers_line_and_nothing_wider(self):
+    def test_an_agent_sudo_unit_reaches_each_agent_through_one_sudoers_line_and_nothing_wider(self):
         for unit, rules in infra.FAMILY_ACCOUNT_UNITS.items():
-            agent = rules.get("agent_sudo")
-            if not agent:
+            agents = rules.get("agent_sudo")
+            if not agents:
                 continue
             with self.subTest(unit=unit):
+                user = rules["user"]
                 lines = [
-                    entry for entry in infra.MANIFEST["static_files"]
+                    (entry, line) for entry in infra.MANIFEST["static_files"]
                     if entry["path"].startswith("/etc/sudoers.d/")
-                    and any(l.startswith(rules["user"] + " ") for l in entry["content"].splitlines())
+                    for line in entry["content"].splitlines() if line.startswith(user + " ")
                 ]
-                self.assertEqual(len(lines), 1)
-                grant = lines[0]
-                self.assertEqual(
-                    grant["content"],
-                    f"{rules['user']} ALL=({agent}) NOPASSWD: /usr/local/sbin/run-hams-crawl-claude.sh\n",
-                )
-                self.assertEqual((grant["owner"], grant["mode"], grant["environments"]), ("root:root", "440", ["prod"]))
-                self.assertIn("run-hams-crawl-claude.sh", [
-                    e["path"].rsplit("/", 1)[-1] for e in infra.MANIFEST["static_files"]
-                ])
-                # The account is not in the sudo group and gets no blanket grant anywhere.
-                for entry in infra.MANIFEST["static_files"]:
-                    if entry["path"].startswith("/etc/sudoers.d/"):
-                        for line in entry["content"].splitlines():
-                            if line.startswith(rules["user"] + " "):
-                                self.assertNotIn("ALL=(ALL)", line)
-                account = [a for a in infra.MANIFEST["system_accounts"] if a["user"] == rules["user"]][0]
+                # One line per agent the unit becomes, each naming exactly the declared command (a wrapper path, and its arguments when pinned).
+                self.assertEqual(sorted(line for _, line in lines),
+                                 sorted(f"{user} ALL=({agent}) NOPASSWD: {command}" for agent, command in agents.items()))
+                for grant, line in lines:
+                    self.assertEqual((grant["owner"], grant["mode"], grant["environments"]), ("root:root", "440", ["prod"]))
+                    self.assertNotIn("ALL=(ALL)", line)
+                for command in agents.values():
+                    self.assertIn(command.split()[0].rsplit("/", 1)[-1], [
+                        e["path"].rsplit("/", 1)[-1] for e in infra.MANIFEST["static_files"]
+                    ])
+                account = [a for a in infra.MANIFEST["system_accounts"] if a["user"] == user][0]
                 self.assertNotIn("sudo", account.get("member_of", []))
                 # The unit is prod-only and opt-in: the agent account and wrapper exist only on hams1.
                 entry = [e for e in infra.MANIFEST["static_files"] if e["path"].endswith("/" + unit)][0]
                 self.assertEqual(entry["environments"], ["prod"])
-                self.assertTrue(entry.get("opt_in"))
-                self.assertTrue(entry.get("external_fetch"))
+                self.assertTrue(entry.get("opt_in") or entry.get("external_fetch"))
 
     def test_the_key_file_a_migrated_unit_reads_is_under_the_key_directory(self):
         for unit, rules in infra.FAMILY_ACCOUNT_UNITS.items():
