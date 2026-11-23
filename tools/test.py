@@ -1211,6 +1211,17 @@ def cpu_limit_verdict(returncode, cpu_seconds, soft_limit=ODOO_CPU_LIMIT_SOFT_SE
 
 
 # [@ANCHOR: test:signal_exit_verdict]
+# [@ANCHOR: test:idle_limit_seconds]
+def idle_limit_seconds(base=60.0):
+    """No-output limit before the runner treats a test as hung: `base` times the load per CPU (rounded up, at least 1).
+    A hoot suite or a page load is silent for a minute on a box at load 50-100 without being stuck (round 191), and the
+    kill of Chrome that followed failed tests that pass alone."""
+    try:
+        return base * max(1, math.ceil(os.getloadavg()[0] / (os.cpu_count() or 1)))
+    except OSError:  # audit-ignore-catch-all
+        return base
+
+
 def signal_exit_verdict(returncode, watchdog_fired, odoo_result_lines):
     """(exit status, summary line) for an Odoo process that a signal killed, or (returncode, None) when none did. Full entry: tools/README.md.
 
@@ -1464,7 +1475,7 @@ def run_cmd(cmd, extractor=None, cwd=None, env=None):
                 if (
                     not (extractor and extractor.mcp_mode)
                     and not os.environ.get("HAMS_PAUSE_ON_FAIL")
-                    and (time.time() - last_output_time > 60.0)
+                    and (time.time() - last_output_time > idle_limit_seconds())
                 ):
                     hang_recovery_attempts += 1
                     total_hang_recovery_attempts += 1

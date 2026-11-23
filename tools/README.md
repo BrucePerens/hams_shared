@@ -7284,6 +7284,14 @@ Every class of the tools that is not a function, with its fields, who creates it
 **Notes.** Dataclass, built by the step builders of the module and only read.
 
 
+### `idle_limit_seconds` [@ANCHOR: test:idle_limit_seconds]
+
+**Purpose.** Seconds of silence from the Odoo test process before `run_cmd` calls it hung and kills headless Chrome: `base` (60) times the 1-minute load average per CPU, rounded up, at least 1.
+**Definition.** `def idle_limit_seconds(base=60.0) -> float` in `tools/test.py`.
+
+**Notes.** A hoot suite or page load is silent for a minute on a box at load 50-100 without being stuck (round 191); the Chrome kill failed tests that pass alone. Returns `base` when the load average cannot be read.
+
+
 ### `OOMWatchdog` [@ANCHOR: test:test_oomwatchdog_class]
 
 **Purpose.** Separate process of test.py that watches the memory of the whole test process tree and kills it before the machine runs out of memory: when the total resident memory of the tree is above the limit, or host available memory is under 512 MB, it sets `fired`, prints an alert, kills the runner's children and the target process and ends.
