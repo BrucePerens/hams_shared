@@ -222,6 +222,8 @@ def flatten(base, key):
         collect_garbage(base, key)
 
 
+# [@ANCHOR: warm_build_run]
+# Verified by [@ANCHOR: test_a_run_sees_what_a_promoted_run_left_and_a_pr_run_leaves_nothing]
 class Run:
     """One run's overlay for `key`; see the module text. `run.mount` is the path to put the tool's directories under; `run.passed` must be set True for a promotion."""
 
