@@ -12764,16 +12764,32 @@ def _in_host_class(spec, classes=None):
 _DAEMON_FAMILY_ACCOUNTS = None
 
 
+# [@ANCHOR: infrastructure:sudoers_line_names_account]
+def _sudoers_line_names_account(line, accounts):
+    """True when the sudoers line's user (first token) or its run-as account, `user HOST=(runas) ...`, is one of `accounts`. The run-as
+    side matters for a grant that lets another account become a family's account (hams_event_agent running the enrichment MCP server as
+    hamsd_event_enrichment): a family run must write that grant and its wrapper, or the account's MCP server is unreachable."""
+    line = line.strip()
+    if not line or line.startswith("#") or "=" not in line:
+        return False
+    if line.split(None, 1)[0] in accounts:
+        return True
+    rest = line.split("=", 1)[1].strip()
+    if rest.startswith("(") and ")" in rest:
+        return any(name.strip().split(":")[0] in accounts for name in rest[1:].split(")", 1)[0].split(","))
+    return False
+
+
 # [@ANCHOR: infrastructure:sudoers_commands]
 def _sudoers_commands(content, accounts=None):
     """The absolute command paths the sudoers lines in `content` grant, in order; with `accounts`, only
-    from lines whose user (first token) is one of them. `ALL` and other non-path commands are left out."""
+    from lines whose user (first token) or run-as account is one of them. `ALL` and other non-path commands are left out."""
     commands = []
     for raw in (content or "").splitlines():
         line = raw.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
-        if accounts is not None and line.split(None, 1)[0] not in accounts:
+        if accounts is not None and not _sudoers_line_names_account(line, accounts):
             continue
         rest = line.split("=", 1)[1].strip()
         if rest.startswith("("):
@@ -12862,9 +12878,7 @@ def _spec_in_daemon_family(spec):
     if path in daemon_family_sudo_commands(accounts):
         return True
     if path.startswith("/etc/sudoers.d/"):
-        return any(
-            line.split(" ", 1)[0] in accounts for line in (spec.get("content") or "").splitlines()
-        )
+        return any(_sudoers_line_names_account(line, accounts) for line in (spec.get("content") or "").splitlines())
     return False
 
 

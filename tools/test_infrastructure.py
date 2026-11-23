@@ -6515,6 +6515,12 @@ class ProvisionDaemonFamiliesTests(_SafePatchTestCase):
         self.assertEqual(infra.daemon_family_sudo_commands({"hamsd_club_crawl"}),
                          {"/usr/local/sbin/run-hams-crawl-claude.sh"})
 
+    def test_a_grant_that_lets_another_account_become_a_family_account_is_part_of_that_family(self):
+        text = "hams_event_agent ALL=(hamsd_x) NOPASSWD: /usr/local/sbin/m.sh\nodoo ALL=(hams_ai_agent) NOPASSWD: /usr/local/sbin/a.sh\n"
+        self.assertEqual(infra._sudoers_commands(text, {"hamsd_x"}), ["/usr/local/sbin/m.sh"])
+        self.assertTrue(infra._sudoers_line_names_account("hams_event_agent ALL=(hamsd_x:grp) NOPASSWD: /x", {"hamsd_x"}))
+        self.assertFalse(infra._sudoers_line_names_account("odoo ALL=(hams_ai_agent) NOPASSWD: /x", {"hamsd_x"}))
+
     def test_every_command_a_sudoers_grant_names_is_a_manifest_file_for_the_same_hosts(self):
         files = {spec["path"]: spec for spec in infra.MANIFEST["static_files"]}
         for spec in infra.MANIFEST["static_files"]:
