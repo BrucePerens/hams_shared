@@ -66,6 +66,7 @@ a download is trusted only through hams.com's reviewed mirror with a checked has
 | PortAudio | macOS Direwolf, static | v19.7.0 (`pa_stable_v190700_20210406.tgz`, SHA-256 `47efbf42c77c19a05d22e627d42873e991ec0c1357219c0d74ce6a2948cb2def`) | MIT | yes (PortAudio/portaudio, v19.7.0) |
 | hidapi | macOS Mercury and Direwolf, vendored in the Mercury source tree | as in the Mercury commit | BSD/GPL | no |
 | libopus | Opus codec through the `opus` crate | crate 0.4 (vendored Opus build, see `Cargo.toml`) | BSD | via cargo |
+| `hams-modem-packet` | native packet modem (replaces Direwolf when `HAMS_RELAY_PACKET_MODEM=native`); built from this repository and installed beside the relay executable, started by `native_packet_tnc.rs` with the path found next to the relay | ships with the relay | proprietary | no |
 | RADE / FreeDV (`rade_c`) | FreeDV RADE codec | vendored in `daemons/hams_local_relay/rade_c` | see its LICENSE | no |
 | Transformers.js | the console's voice and translation, served by hams.com | `@xenova/transformers` 2.16.0 (ONNX runtime wasm files) | Apache-2.0 | yes (`huggingface/transformers.js`, release 2.16.0; held, see `dependency_watch.json`) |
 | Whisper tiny, NLLB | console speech-to-text and translation models, served by hams.com | `Xenova/whisper-tiny`, NLLB (see `ml_assets.rs`) | MIT / CC-BY-NC (check before any change) | no |
