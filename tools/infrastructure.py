@@ -3524,6 +3524,16 @@ MANIFEST = {
             "environments": ["prod"],
         },
 
+        # hams_com daemons/callsign_parking, HTTPS: the `*.hams.com` certificate (parking.crt) and its key (parking.key, root:hamsd_parking 0640,
+        # written by hams-install-parking-cert), (HTTPS is switched on by a systemd drop-in with PARKING_TLS_BIND, PARKING_TLS_CERT and PARKING_TLS_KEY, see hams_com docs/runbooks/CALLSIGN_PARKING.md). Readable
+        # by root and the parking account only: not odoo, not any other daemon. Never mounted into any other runtime.
+        {
+            "path": "/etc/hams/parking",
+            "owner": "root:hamsd_parking",
+            "provision_mode": "750",
+            "environments": ["prod"],
+        },
+
         # hams_com docs/design/HAMS1_LLM_SERVER.md: the local LLM server's tree. Root owns every file (the service account only
         # reads it, and the unit adds ReadOnlyPaths=/opt/hams/llm): bin/llama-server is the pinned llama.cpp build placed by the
         # install steps in that document (it is compiled, not downloaded, so no MANIFEST entry can fetch it), models/ is
@@ -10862,6 +10872,82 @@ Description=Twice-daily renewal check for the turn.hams.com certificate
 # certbot renews only when 30 days or fewer remain, so most runs do nothing. Twice a day, at other minutes than the
 # auth.hams.com timer, so the two never hold certbot's lock together.
 OnCalendar=*-*-* 04,16:41:00
+Persistent=true
+RandomizedDelaySec=30m
+
+[Install]
+WantedBy=timers.target
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+        },
+        {
+            # hams_com daemons/auth_cert_renew, `--profile parking`: renews the wildcard *.hams.com certificate for the callsign parking page's
+            # HTTPS listener on hams1 through its own PowerDNS, as hams-turn-cert-renew.service does for turn.hams.com: the CNAME
+            # `_acme-challenge.hams.com` (a record of the hams.com zone our PowerDNS serves; the coordinator adds it with pdnsutil) points into
+            # acme.hams.com. Its own lineage, key and installer (/usr/local/sbin/hams-install-parking-cert, hams_com nginx/prod/cert-deploy/),
+            # which installs /etc/hams/parking/parking.crt and parking.key (key root:hamsd_parking 0640: the listener re-reads the files, so no
+            # reload). It talks to Let's Encrypt, hence external_fetch; opt_in: the coordinator enables it after the first issuance.
+            "path": "/opt/hams/systemd/hams-parking-cert-renew.service",
+            "external_fetch": "talks to Let's Encrypt (the ACME directory) to renew the certificate",
+            "opt_in": "needs the _acme-challenge.hams.com CNAME and a first issuance; see hams_com docs/runbooks/CALLSIGN_PARKING.md",
+            "content": """\
+[Unit]
+Description=Renew the *.hams.com certificate through our own PowerDNS (DNS-01) and install it for the callsign parking page's HTTPS listener
+After=network-online.target pdns.service
+Wants=network-online.target
+ConditionPathExists=/var/lib/hams-acme/config/renewal/parking-hams-com.conf
+ConditionPathExists=/usr/local/sbin/hams-install-parking-cert
+
+[Service]
+Type=oneshot
+User=root
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER
+StateDirectory=hams-acme
+StateDirectoryMode=0700
+LogsDirectory=hams-acme
+LogsDirectoryMode=0700
+RuntimeDirectory=hams-parking-cert-renew
+RuntimeDirectoryMode=0700
+ReadWritePaths=/etc/hams/parking
+Environment=HAMS_INSTALL_TMPDIR=/run/hams-parking-cert-renew
+WorkingDirectory=/opt/hams/daemons/auth_cert_renew
+TimeoutStartSec=15min
+
+ExecStart=/usr/bin/python3 /opt/hams/daemons/auth_cert_renew/main.py renew --profile parking
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hams-parking-cert-renew
+""",
+            "owner": "root:root",
+            "mode": "644",
+            "environments": ["prod"],
+        },
+        {
+            "path": "/opt/hams/systemd/hams-parking-cert-renew.timer",
+            "external_fetch": "activates hams-parking-cert-renew.service, which talks to Let's Encrypt",
+            "opt_in": "activates hams-parking-cert-renew.service; see that unit",
+            "content": """\
+[Unit]
+Description=Twice-daily renewal check for the *.hams.com certificate
+
+[Timer]
+# certbot renews only when 30 days or fewer remain, so most runs do nothing. Twice a day, at other minutes than the
+# auth.hams.com timer, so the two never hold certbot's lock together.
+OnCalendar=*-*-* 05,17:21:00
 Persistent=true
 RandomizedDelaySec=30m
 
