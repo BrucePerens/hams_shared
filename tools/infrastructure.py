@@ -1094,10 +1094,6 @@ SHARED_ODOO_ACCOUNT_UNITS = {
         "Writes into a repository checkout (/opt/hams/hams_com/docs/code_review_reports) that does not exist on hams1; "
         "opt-in, linked but never enabled in production, so there is no live exposure to close first (plan section 13)."
     ),
-    "credential.touch.timer.service": (
-        "The agent-account shape: touches the AI agents' home directories through the Claude Code CLI wrapper, so it cannot "
-        "take NoNewPrivileges and needs its own review before it can leave the shared account (plan section 13)."
-    ),
     # AI correction of scraped hamfest listings; the model runs as hams_event_agent (see the unit's comment).
     "event.ai.enrichment.service": (
         "The agent-account shape (supervises a model that runs as hams_event_agent through the CLI wrapper, so no "
@@ -1795,6 +1791,20 @@ FAMILY_ACCOUNT_UNITS = {
         "key_in_wrapper": True,
         "odoo_writes": frozenset({"/opt/hams/spool/ticket_triage"}),
     },
+    # The twice-daily touch of the two Claude Code CLI service accounts' OAuth sessions. It holds no Odoo key, loads no environment file and
+    # writes no file of its own: it only runs `sudo -u <agent> <wrapper> -p <probe>`, one sudoers line per agent with the probe's argument
+    # pinned in the line. The one credential it reads is the exception reporter's key through SupplementaryGroups=hamsd_exception_report
+    # (the "AI service quota used up" ticket, ai_quota.py), held by the unit alone.
+    "credential.touch.timer.service": {
+        "user": "hamsd_credential_touch",
+        "environment_files": frozenset(),
+        "no_key": True,
+        "socket_groups": ["hamsd_exception_report"],
+        "agent_sudo": {
+            "hams_ai_agent": r"/usr/local/sbin/run-hams-ai-agent-claude.sh -p Reply\ with\ exactly\:\ OK",
+            "hams_event_agent": r"/usr/local/sbin/run-hams-event-agent-claude.sh -p Reply\ with\ exactly\:\ OK",
+        },
+    },
     "club.crawl.service": {
         "user": "hamsd_club_crawl",
         "environment_files": frozenset({"common.env"}),
@@ -2071,6 +2081,19 @@ MANIFEST = {
             "home": "/nonexistent",
             "shell": "/usr/sbin/nologin",
             "add_to_users": ["odoo"],
+            "member_of": ["hams_traverse"],
+            "not_member_of": ["hams_com"],
+            "environments": ["prod", "test"],
+        },
+        {
+            # daemons/credential_touch (hams_com), the twice-daily touch of the hams_ai_agent and hams_event_agent Claude Code CLI sessions
+            # (credential.touch.timer.service). Its own account instead of `odoo`: it holds no key and no database login, so a compromise of
+            # it reaches only the two sudoers.d lines of credential-touch-claude-sandbox (each pinned to one wrapper and its one probe
+            # argument) and the exception reporter's key through the unit's SupplementaryGroups. Not in hams_com. No home directory.
+            "user": "hamsd_credential_touch",
+            "group": "hamsd_credential_touch",
+            "home": "/nonexistent",
+            "shell": "/usr/sbin/nologin",
             "member_of": ["hams_traverse"],
             "not_member_of": ["hams_com"],
             "environments": ["prod", "test"],
@@ -9467,9 +9490,9 @@ exec @ACCOUNT_HOME_PARENT@/hams_event_agent/.local/bin/claude "$@"
             # of capabilities, and an emptied CapabilityBoundingSet would stop a setuid-root
             # binary from ever regaining root's capabilities even with NoNewPrivileges off. Both
             # `sudo -u` calls are restricted to one exact, already-live, narrowly-scoped command
-            # each via real sudoers.d grants (confirmed directly on hams1, not assumed):
-            #   odoo ALL=(hams_ai_agent) NOPASSWD: /usr/local/sbin/run-hams-ai-agent-claude.sh
-            #   odoo ALL=(hams_event_agent) NOPASSWD: /usr/local/sbin/run-hams-event-agent-claude.sh
+            # each via sudoers.d grants. Since 2026-11-22 the unit runs as its own account, hamsd_credential_touch, and the
+            # grants are its own two lines in credential-touch-claude-sandbox (wrapper plus the pinned probe argument); the earlier
+            # `odoo ALL=(hams_ai_agent|hams_event_agent)` grants stay for Odoo and event.ai.enrichment.
             # ReadWritePaths carves out exactly the two accounts' home directories (where the
             # Claude Code CLI's own refreshed .credentials.json actually gets written), rather
             # than weakening ProtectHome=read-only more broadly than that one real need.
@@ -9493,9 +9516,26 @@ PrivateTmp=true
 PrivateDevices=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=CAP_SETUID CAP_SETGID
+# The daemon-family isolation set (hams_com docs/proposals/DAEMON_OS_ISOLATION_PLAN.md section 5), as club.crawl.service carries it.
+ProtectProc=invisible
+ProcSubset=pid
+UMask=0027
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
 ReadWritePaths=@ACCOUNT_HOME_PARENT@/hams_ai_agent @ACCOUNT_HOME_PARENT@/hams_event_agent
 Type=oneshot
-User=odoo
+User=hamsd_credential_touch
+Group=hamsd_credential_touch
+# The exception reporter's key (keys/exception_report, odoo:hamsd_exception_report 0640) for the one quota ticket; this unit alone holds the group.
+SupplementaryGroups=hamsd_exception_report
 WorkingDirectory=/opt/hams/daemons/credential_touch
 # exception_reporter.py (synced flat to /opt/hams/daemons) files the one "AI service quota used up" ticket
 # (2026-11-05); without this the import failed and no ticket was filed.
@@ -10094,6 +10134,22 @@ WantedBy=timers.target
             "content": (
                 "hamsd_ticket_triage ALL=(hams_ai_agent) NOPASSWD: "
                 "/usr/local/sbin/run-hams-ai-agent-claude.sh\n"
+            ),
+            "owner": "root:root",
+            "mode": "440",
+            "environments": ["prod"],
+        },
+        {
+            # The credential touch's own account (hamsd_credential_touch, daemons/credential_touch): one line per agent, each naming the one
+            # wrapper AND the probe argument the daemon passes (`-p "Reply with exactly: OK"`), so the account cannot start the CLI with any other
+            # prompt, tool or flag. sudoers escapes the spaces and the colon of that one argument. The `odoo` grants above stay: Odoo itself
+            # (repeater import) and event.ai.enrichment use them.
+            "path": "/etc/sudoers.d/credential-touch-claude-sandbox",
+            "content": (
+                "hamsd_credential_touch ALL=(hams_ai_agent) NOPASSWD: "
+                "/usr/local/sbin/run-hams-ai-agent-claude.sh -p Reply\\ with\\ exactly\\:\\ OK\n"
+                "hamsd_credential_touch ALL=(hams_event_agent) NOPASSWD: "
+                "/usr/local/sbin/run-hams-event-agent-claude.sh -p Reply\\ with\\ exactly\\:\\ OK\n"
             ),
             "owner": "root:root",
             "mode": "440",
