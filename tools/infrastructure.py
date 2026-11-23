@@ -14489,7 +14489,9 @@ def _provision_dx_firehose_role(run_cmd_func, db_name, role_name=None):
 
 # Extensions Odoo or a hams module needs in the application database. Created by the postgres superuser at provisioning time, so the
 # application role needs no superuser for them (`vector` is not a trusted extension: only a superuser can create it; pg_trgm is trusted).
-ODOO_DATABASE_EXTENSIONS = ("pg_trgm", "vector")
+# pg_stat_statements (not trusted either) is last: it records per-statement timings once shared_preload_libraries loads it
+# (POSTGRESQL_LOCKDOWN_SETTINGS), and a missing contrib package must not stop the two extensions before it.
+ODOO_DATABASE_EXTENSIONS = ("pg_trgm", "vector", "pg_stat_statements")
 
 
 # [@ANCHOR: infrastructure:_precreate_odoo_extensions]
