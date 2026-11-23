@@ -2497,15 +2497,15 @@ class ProvisionCacheManagerRoleTests(_TmpDirTestCase):
         self.assertTrue(any("ALTER ROLE" in c.kwargs["input"] for c in run_cmd.call_args_list))
         self.assertNotIn("legacy_env_file", infra._provision_cache_manager_role.__code__.co_varnames)
 
-    def test_the_pager_monitor_login_stays_odoo_only(self):
-        # pager-os-monitor.service still runs as odoo (SHARED_ODOO_ACCOUNT_UNITS); its file keeps odoo:odoo 0600.
+    def test_the_pager_monitor_login_is_in_the_family_directory(self):
+        # pager-os-monitor.service runs as hamsd_pager_monitor: its login is odoo:hamsd_pager_monitor 0640 in keys/pager_monitor.
         calls = []
         self.safe_patch_object(infra, "_provision_cache_manager_role", side_effect=lambda *a, **k: calls.append(k))
         infra._provision_pager_monitor_role(MagicMock(), "hams_test")
         self.assertEqual(len(calls), 1)
         self.assertEqual(
             (calls[0]["env_file"], calls[0]["owner"], calls[0]["mode"]),
-            ("/opt/hams/etc/keys/pager_monitor_db.env", "odoo:odoo", 0o600),
+            ("/opt/hams/etc/keys/pager_monitor/pager_monitor_db.env", "odoo:hamsd_pager_monitor", 0o640),
         )
 
     def test_a_rerun_keeps_the_recorded_password_and_alters_nothing(self):
@@ -5632,7 +5632,7 @@ class SharedOdooAccountRatchetTests(unittest.TestCase):
     PINNED_ODOO_UNITS = (
         "backup.worker.service",
         "code.review.sweep.service", "credential.touch.timer.service", "event.ai.enrichment.service",
-        "hams.daemon.keys.service", "pager-os-monitor.service", "stray.odoo.shell.detector.service",
+        "hams.daemon.keys.service", "stray.odoo.shell.detector.service",
         "ticket.triage.event.service", "ticket.triage.service",
     )
 
@@ -5894,7 +5894,7 @@ class OdooUnitSecondTierTests(unittest.TestCase):
 
     def test_the_units_left_out_are_still_left_out(self):
         # A unit that gains RestrictNamespaces or RestrictSUIDSGID later must be a reviewed change: the reasons are above.
-        for unit in ("pager-os-monitor.service", "backup.worker.service", "credential.touch.timer.service"):
+        for unit in ("backup.worker.service", "credential.touch.timer.service"):
             with self.subTest(unit=unit):
                 self.assertEqual(infra.systemd_unit_directive_values(infra.MANIFEST, unit, "RestrictNamespaces"), [])
 
@@ -5939,6 +5939,31 @@ class AdifPipelineAccountTests(unittest.TestCase):
                 self.assertEqual(loaded, {"common.env", "rabbitmq.env"})
                 self.assertEqual(self._values(unit, "UMask"), ["0027"])
                 self.assertEqual(self._values(unit, "ProtectProc"), ["invisible"])
+
+
+class PagerMonitorAccountTests(unittest.TestCase):
+    """pager-os-monitor on its own account, hamsd_pager_monitor: its Odoo key and database login are in keys/pager_monitor, Odoo writes
+    the exported check list into a directory the account reads through the group, and its process checks keep the whole /proc."""
+
+    UNIT = "pager-os-monitor.service"
+
+    def _values(self, directive):
+        return infra.systemd_unit_directive_values(infra.MANIFEST, self.UNIT, directive)
+
+    def test_the_unit_left_the_shared_account_and_reads_its_key_from_the_family_directory(self):
+        self.assertEqual((self._values("User"), self._values("Group")), (["hamsd_pager_monitor"], ["hamsd_pager_monitor"]))
+        self.assertNotIn(self.UNIT, infra.SHARED_ODOO_ACCOUNT_UNITS)
+        self.assertIn("PAGER_KEY_ENV_FILE=/opt/hams/etc/keys/pager_monitor/pager_duty.env", self._values("Environment"))
+
+    def test_the_directories(self):
+        directories = {d["path"]: (d["owner"], d["provision_mode"]) for d in infra.MANIFEST["directories"]}
+        self.assertEqual(directories["/opt/hams/etc/keys/pager_monitor"], ("odoo:hamsd_pager_monitor", "750"))
+        self.assertEqual(directories["/opt/hams/spool/pager_duty"], ("odoo:hamsd_pager_monitor", "750"))
+
+    def test_it_keeps_the_proc_view_and_has_no_other_gap(self):
+        self.assertEqual((self._values("ProtectProc"), self._values("ProcSubset")), ([], []))
+        self.assertEqual(self._values("ReadWritePaths"), [])
+        self.assertEqual(infra.systemd_unit_sandbox_gaps(infra.MANIFEST, self.UNIT), set())
 
 
 class ExceptionReporterAccountTests(unittest.TestCase):
@@ -6280,6 +6305,8 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
                     continue
                 if directive == "ProcSubset" and unit in SIMBOTS_UNITS:
                     continue  # onnxruntime needs /proc/cpuinfo: SimbotsAccountTests pins the omission
+                if rules.get("no_proc_view") and directive in ("ProtectProc", "ProcSubset"):
+                    continue  # the pager monitor's process, uptime and CPU checks read all of /proc: PagerMonitorAccountTests pins it
                 with self.subTest(unit=unit, directive=directive):
                     self.assertEqual(
                         infra.systemd_unit_directive_values(infra.MANIFEST, unit, directive), expected
@@ -8286,8 +8313,8 @@ class PagerOsMonitorUnitTests(_SafePatchTestCase):
             [
                 "/opt/hams/etc/redis.env",
                 "-/opt/hams/etc/rabbitmq.env",
-                "/opt/hams/etc/keys/pager_duty.env",
-                "/opt/hams/etc/keys/pager_monitor_db.env",
+                "/opt/hams/etc/keys/pager_monitor/pager_duty.env",
+                "/opt/hams/etc/keys/pager_monitor/pager_monitor_db.env",
                 "/opt/hams/etc/site_monitor.env",
             ],
         )
@@ -8300,30 +8327,30 @@ class PagerOsMonitorUnitTests(_SafePatchTestCase):
         # default "/"), with no guest fallback. Without rabbitmq.env the check fails "no credentials" and pages.
         self.assertIn("EnvironmentFile=-/opt/hams/etc/rabbitmq.env\n", self._text())
         self.assertLessEqual({"RMQ_USER", "RMQ_PASS"}, set(infra.MANIFEST["env_groups"]["rabbitmq.env"]))
-        # systemd reads EnvironmentFile as root, so the file stays root-only and odoo is given no group access to it
-        self.assertNotIn("rabbitmq.env", " ".join(infra.FAMILY_ACCOUNT_UNITS.get(self.UNIT, {}).get("environment_files", ())))
+        # systemd reads EnvironmentFile as root, so the file stays root-only: the account holds no group access to it
+        self.assertIn("rabbitmq.env", infra.FAMILY_ACCOUNT_UNITS[self.UNIT]["environment_files"])
 
-    def test_unit_names_its_config_file_explicitly_in_a_directory_odoo_can_write(self):
+    def test_unit_names_its_config_file_explicitly_in_a_directory_odoo_writes_and_the_account_reads(self):
         text = self._text()
         self.assertIn("Environment=PAGER_CONFIG_PATH=/opt/hams/spool/pager_duty/pager_config.json\n", text)
         directory = [d for d in infra.MANIFEST["directories"] if d["path"] == "/opt/hams/spool/pager_duty"]
         self.assertEqual(len(directory), 1)
-        self.assertEqual(directory[0]["owner"], "odoo:odoo")
-        self.assertEqual(directory[0]["provision_mode"], "700")
+        self.assertEqual(directory[0]["owner"], "odoo:hamsd_pager_monitor")
+        self.assertEqual(directory[0]["provision_mode"], "750")
 
     def test_unit_is_sandboxed_and_writes_nothing(self):
         text = self._text()
         for line in ("ProtectSystem=strict", "PrivateTmp=true", "PrivateDevices=true", "NoNewPrivileges=true",
-                     "CapabilityBoundingSet=", "User=odoo"):
+                     "CapabilityBoundingSet=", "User=hamsd_pager_monitor"):
             self.assertIn(line + "\n", text)
         self.assertNotIn("ReadWritePaths", text)
         self.assertEqual(infra.systemd_unit_sandbox_gaps(infra.MANIFEST, self.UNIT), set())
 
-    def test_unit_is_prod_only_external_fetch_and_a_listed_shared_odoo_unit(self):
+    def test_unit_is_prod_only_external_fetch_and_a_family_account_unit(self):
         spec = [s for s in infra.MANIFEST["static_files"] if s["path"] == "/opt/hams/systemd/" + self.UNIT][0]
         self.assertEqual(spec["environments"], ["prod"])
         self.assertIn(self.UNIT, infra.external_fetch_unit_names())
-        self.assertIn(self.UNIT, infra.SHARED_ODOO_ACCOUNT_UNITS)
+        self.assertIn(self.UNIT, infra.FAMILY_ACCOUNT_UNITS)
 
     def test_the_file_the_unit_runs_exists_in_hams_open(self):
         here = os.path.dirname(os.path.realpath(infra.__file__))
@@ -8348,7 +8375,7 @@ class PagerOsMonitorUnitTests(_SafePatchTestCase):
         self.assertIn("role_name=pager_monitor_ro", role_call.args[0])
         self.assertIn("CREATE ROLE", role_call.kwargs["input"])
         self.assertIn("GRANT CONNECT ON DATABASE", grant_call.kwargs["input"])
-        self.assertEqual(written["p"], "/opt/hams/etc/keys/pager_monitor_db.env")
+        self.assertEqual(written["p"], "/opt/hams/etc/keys/pager_monitor/pager_monitor_db.env")
         self.assertIn("pager_duty's PostgreSQL ping check", written["c"])
         self.assertIn("DB_USER=pager_monitor_ro\n", written["c"])
 
