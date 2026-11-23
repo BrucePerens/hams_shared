@@ -1,14 +1,12 @@
 """Advisory lint tier (2026-11-23): an advisory failure is reported but does not block; a blocking failure still does."""
 import json
 import os
-import sys
 import tempfile
 import types
 import unittest
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import lint_advisory  # noqa: E402
-import lint_batch  # noqa: E402
+import lint_advisory
+import lint_batch
 
 
 def result(name, code, output=""):
