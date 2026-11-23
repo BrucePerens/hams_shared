@@ -5941,6 +5941,16 @@ class AdifPipelineAccountTests(unittest.TestCase):
                 self.assertEqual(self._values(unit, "ProtectProc"), ["invisible"])
 
 
+    def test_both_units_hold_the_reporter_key_group_so_the_in_process_crash_report_works(self):
+        """The in-process report reads keys/exception_report/exception_reporter.env (odoo:hamsd_exception_report 0640); the account is
+        not in that group, so each unit names it for itself, and only the one group (a unit never gains a group by account membership)."""
+        account = [a for a in infra.MANIFEST["system_accounts"] if a["user"] == "hamsd_adif"][0]
+        self.assertNotIn("hamsd_exception_report", account.get("member_of", []))
+        for unit in self.UNITS:
+            with self.subTest(unit=unit):
+                self.assertEqual(self._values(unit, "SupplementaryGroups"), ["hamsd_exception_report"])
+
+
 class PagerMonitorAccountTests(unittest.TestCase):
     """pager-os-monitor on its own account, hamsd_pager_monitor: its Odoo key and database login are in keys/pager_monitor, Odoo writes
     the exported check list into a directory the account reads through the group, and its process checks keep the whole /proc."""

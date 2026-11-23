@@ -1627,10 +1627,11 @@ FAMILY_ACCOUNT_UNITS = {
         "user": "hamsd_adif",
         "environment_files": frozenset({"common.env", "rabbitmq.env"}),
         "odoo_writes": frozenset({"/opt/hams/spool/adif_uploads"}),
+        "socket_groups": ["hamsd_exception_report"],
     },
     "adif.processor.service": {
         "user": "hamsd_adif",
-        "environment_files": frozenset({"common.env", "rabbitmq.env"}),
+        "environment_files": frozenset({"common.env", "rabbitmq.env"}),        "socket_groups": ["hamsd_exception_report"],
     },
     "gdpr.csv.export.service": {
         "user": "hamsd_gdpr_export",
@@ -1662,7 +1663,8 @@ FAMILY_ACCOUNT_UNITS = {
     "callbook.delta.export.service": {
         "user": "hamsd_dns_export",
         "environment_files": frozenset({"common.env"}),
-        # `socket_groups`: groups the unit holds (SupplementaryGroups=, never account membership) only to reach a daemon's Unix socket.
+        # `socket_groups`: groups the unit holds (SupplementaryGroups=, never account membership) only to reach a daemon's Unix socket
+        # or, for hamsd_exception_report, the reporter key that makes the in-process crash report work.
         "socket_groups": ["hams_relay_signer"],
         # `public_dirs`: written paths whose content is public and read by another account (nginx) by path: 755, not the family's 750.
         "public_dirs": ["/var/lib/hams/callbook_releases"],
@@ -4331,6 +4333,8 @@ ReadWritePaths=/opt/hams/spool/adif_queue /opt/hams/failed_input
 Type=simple
 User=hamsd_adif
 Group=hamsd_adif
+# The exception reporter's key (keys/exception_report, odoo:hamsd_exception_report 0640): without this group the daemon's in-process crash report cannot read it and is a no-op. The unit alone holds the group (never account membership).
+SupplementaryGroups=hamsd_exception_report
 WorkingDirectory=/opt/hams/daemons/adif_processor
 
 EnvironmentFile=-/opt/hams/etc/common.env
@@ -8604,6 +8608,8 @@ ReadWritePaths=/opt/hams/spool/adif_uploads
 Type=simple
 User=hamsd_adif
 Group=hamsd_adif
+# The exception reporter's key (keys/exception_report, odoo:hamsd_exception_report 0640): without this group the daemon's in-process crash report cannot read it and is a no-op. The unit alone holds the group (never account membership).
+SupplementaryGroups=hamsd_exception_report
 WorkingDirectory=/opt/hams/daemons/adif_ingress
 
 EnvironmentFile=-/opt/hams/etc/common.env
