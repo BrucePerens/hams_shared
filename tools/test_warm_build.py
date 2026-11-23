@@ -174,10 +174,10 @@ class FlattenTests(Base):
         open(flag, "w").close()
         self.addCleanup(setattr, warm_build, "WARM_DRAIN_WAIT", warm_build.WARM_DRAIN_WAIT)
         warm_build.WARM_DRAIN_WAIT = 0.05
-        warm_build._sleep = lambda seconds: time.sleep(0.02)
-        started = time.monotonic()
+        sleeps.clear()
+        warm_build._sleep = lambda seconds: (sleeps.append(seconds), time.sleep(0.02))
         self.build("echo z > $M/h", promote=False)
-        self.assertLess(time.monotonic() - started, 20)
+        self.assertTrue(0 < len(sleeps) <= 10, sleeps)  # bounded by the sleep count, not by elapsed time
 
     def test_apply_layer_reads_a_real_whiteout(self):
         lower, upper = os.path.join(self.parent, "l"), os.path.join(self.parent, "u")
