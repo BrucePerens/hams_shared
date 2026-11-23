@@ -5631,7 +5631,7 @@ class SharedOdooAccountRatchetTests(unittest.TestCase):
     # shared odoo account by editing one place. When a unit moves to its own account, delete it here in the same change.
     PINNED_ODOO_UNITS = (
         "backup.worker.service",
-        "code.review.sweep.service", "credential.touch.timer.service", "event.ai.enrichment.service",
+        "code.review.sweep.service", "event.ai.enrichment.service",
         "hams.daemon.keys.service", "stray.odoo.shell.detector.service",
         "ticket.triage.event.service", "ticket.triage.service",
     )
@@ -5894,7 +5894,7 @@ class OdooUnitSecondTierTests(unittest.TestCase):
 
     def test_the_units_left_out_are_still_left_out(self):
         # A unit that gains RestrictNamespaces or RestrictSUIDSGID later must be a reviewed change: the reasons are above.
-        for unit in ("backup.worker.service", "credential.touch.timer.service"):
+        for unit in ("backup.worker.service",):
             with self.subTest(unit=unit):
                 self.assertEqual(infra.systemd_unit_directive_values(infra.MANIFEST, unit, "RestrictNamespaces"), [])
 
@@ -5949,6 +5949,57 @@ class AdifPipelineAccountTests(unittest.TestCase):
         for unit in self.UNITS:
             with self.subTest(unit=unit):
                 self.assertEqual(self._values(unit, "SupplementaryGroups"), ["hamsd_exception_report"])
+
+
+class CredentialTouchAccountTests(unittest.TestCase):
+    """credential.touch.timer on its own account, hamsd_credential_touch (daemon OS isolation): no key, no environment file, one sudoers
+    line per agent that pins the wrapper and the probe's one argument, and the exception reporter's key group for the quota ticket."""
+
+    UNIT = "credential.touch.timer.service"
+    PROBE = r"-p Reply\ with\ exactly\:\ OK"
+
+    def _values(self, directive):
+        return infra.systemd_unit_directive_values(infra.MANIFEST, self.UNIT, directive)
+
+    def test_the_unit_runs_as_its_own_account_and_left_the_shared_odoo_list(self):
+        self.assertEqual((self._values("User"), self._values("Group")), (["hamsd_credential_touch"], ["hamsd_credential_touch"]))
+        self.assertNotIn(self.UNIT, infra.SHARED_ODOO_ACCOUNT_UNITS)
+        self.assertEqual(self._values("EnvironmentFile"), [])
+        self.assertEqual(self._values("SupplementaryGroups"), ["hamsd_exception_report"])
+        self.assertEqual(sorted(self._values("ReadWritePaths")),
+                         [f"{infra.ACCOUNT_HOME_PARENT}/hams_ai_agent", f"{infra.ACCOUNT_HOME_PARENT}/hams_event_agent"])
+
+    def test_the_sudoers_file_has_exactly_one_pinned_line_per_agent(self):
+        grant = [e for e in infra.MANIFEST["static_files"] if e["path"] == "/etc/sudoers.d/credential-touch-claude-sandbox"][0]
+        self.assertEqual(grant["content"].splitlines(), [
+            "hamsd_credential_touch ALL=(hams_ai_agent) NOPASSWD: /usr/local/sbin/run-hams-ai-agent-claude.sh " + self.PROBE,
+            "hamsd_credential_touch ALL=(hams_event_agent) NOPASSWD: /usr/local/sbin/run-hams-event-agent-claude.sh " + self.PROBE,
+        ])
+        self.assertEqual((grant["owner"], grant["mode"]), ("root:root", "440"))
+
+    def test_the_pinned_probe_is_the_daemons_own_argument_and_the_wrappers_are_the_ones_it_names(self):
+        here = os.path.dirname(os.path.abspath(__file__))
+        candidates = [os.path.join(here, up, "hams_com", "daemons", "credential_touch", "main.py") for up in ("../..", "../../..")]
+        found = [path for path in candidates if os.path.exists(path)]
+        if not found:
+            self.skipTest("the hams_com daemons tree is not beside this checkout")
+        source = open(found[0], encoding="utf-8").read()
+        self.assertIn('TOUCH_PROMPT = "Reply with exactly: OK"', source)
+        for agent, command in infra.FAMILY_ACCOUNT_UNITS[self.UNIT]["agent_sudo"].items():
+            self.assertIn(f'("{agent}", "{command.split()[0]}")', source)
+
+    def test_the_sudoers_file_parses_with_visudo(self):
+        visudo = shutil.which("visudo", path=os.environ.get("PATH", "") + ":/usr/sbin")
+        if not visudo:
+            self.skipTest("visudo is not installed")
+        grant = [e for e in infra.MANIFEST["static_files"] if e["path"] == "/etc/sudoers.d/credential-touch-claude-sandbox"][0]
+        with tempfile.NamedTemporaryFile("w", suffix=".sudoers", delete=False) as handle:
+            handle.write(grant["content"])
+        try:
+            result = subprocess.run([visudo, "-c", "-q", "-f", handle.name], capture_output=True, text=True)
+        finally:
+            os.unlink(handle.name)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 class PagerMonitorAccountTests(unittest.TestCase):
