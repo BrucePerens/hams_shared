@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
-Tests for lint_baseline.py, the known-red baseline of the lint run (ADR 0117), and the pieces of
+Tests for lint_baseline.py, the known-red baseline of the lint run (hams.com ADR 0128), and the pieces of
 run_linters.py, lint_batch.py and lint_stamp_gate.py that carry it into a verdict and a pass stamp.
 
 The canary test uses a real git repository with an origin and the real combined-tree builder; only the

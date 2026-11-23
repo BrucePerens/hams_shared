@@ -20,7 +20,6 @@ Tests [@ANCHOR: ext_programs:main]
 """
 
 import contextlib
-import glob
 import io
 import json
 import os
@@ -196,7 +195,7 @@ class WatchTests(unittest.TestCase):
         self.assertTrue(any("extra" in f and "not in ADR" in f for f in cepd.watch_findings(ADR, watch)))
 
     def test_shipped_adr_and_watch_agree(self):
-        adr = glob.glob(os.path.join(HERE, "..", "docs", "adrs", "0114_*.md"))[0]
+        adr = os.path.join(HERE, "data", "external_programs.md")
         with open(adr, encoding="utf-8") as f:
             adr_text = f.read()
         with open(os.path.join(HERE, "dependency_watch.json"), encoding="utf-8") as f:

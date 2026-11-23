@@ -30,7 +30,7 @@ make. A `status: blocked` to-do points into it.
 ## A run, in order
 
 1. **Orient.** Read `~/workspace/hams_com/CLAUDE.md` and
-   `hams_shared/docs/adrs/0102_concurrent_session_isolation_and_merge_gating.md` (per-session git
+   hams.com ADR 0102 (per-session git
    worktrees and branch protection; every PR, this run's own included, waits for Bruce's review --
    replaces ADR-0099, which no longer exists). Run `ListAgents`: interactive sessions Bruce runs
    himself work the same backlog, and so can another run of this agent.
@@ -978,7 +978,7 @@ needs this same `docker run ... chmod` step after it, not just after job-level `
   ADR-0102 after the private-index discipline still let one session's `git checkout-index -a -f`
   destroy another session's uncommitted work: the index dance only ever protected the commit step,
   never the working tree itself. Read
-  `hams_shared/docs/adrs/0102_concurrent_session_isolation_and_merge_gating.md` before your first
+  hams.com ADR 0102 before your first
   commit of a run. Make the worktree at the start of a run with
   `python3 devbox_tools/new_agent_worktree.py <hams_com|hams_open|hams_shared> night-shift/<slug>` (a clean job directory
   `~/workspace/tmp/<job>/`, never inside a repo; `EnterWorktree` nests it under `.claude/worktrees/`, which anchor scans and linters
@@ -1701,7 +1701,7 @@ message. This had already been recorded twice before this run rediscovered half 
 this the fourth instance of one hazard, and the second time a session has written a partial fix for
 it into a skill.
 
-**The authoritative rule is now `hams_shared/docs/adrs/0102_concurrent_session_isolation_and_merge_gating.md`
+**The authoritative rule is now hams.com ADR 0102
 (ADR-0099, above, is retired -- superseded 2026-09-22 after its private-index discipline still let
 one session's working-tree-level command destroy another's uncommitted work).** Read it before your
 first commit in a session; `hams_com/CLAUDE.md` points there too, so every session gets it

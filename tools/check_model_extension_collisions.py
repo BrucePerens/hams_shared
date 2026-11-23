@@ -11,7 +11,7 @@ Odoo's registry merges *silently* -- no error at install time, just
 load-order-dependent behavior that can leave real fields with no backing
 database column, methods that never actually run, or ir.model.access.csv
 rows that never resolve. See:
-  hams_shared/docs/adrs/0086_own_model_extension_consolidation.md
+  hams.com ADR 0086
 
 Two checks, both hard failures:
 

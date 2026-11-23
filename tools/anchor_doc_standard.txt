@@ -663,7 +663,7 @@ hams_s3/README.md
 hams_s3/scripts
 hams_s3/tests
 hams_secret_canary/tests
-hams_shared/docs/adrs/0089_anchor_scheme_reformatting_robustness.md
+docs/adrs/0089_anchor_scheme_reformatting_robustness.md
 hams_shared/docs/stories/pager_duty_domain_updates.md
 hams_shared/scripts
 hams_shared/tools
@@ -1370,9 +1370,9 @@ hams_shared/docs/stories/daemon_registration.md
 hams_shared/docs/modules/pager_duty.md
 hams_shared/docs/modules/knowledge.md
 hams_shared/docs/stories/force_provisioning.md
-hams_shared/docs/adrs/0074_User_Facing_Semantic_Anchors_and_Context-Sensitive_Help.md
+docs/adrs/0074_User_Facing_Semantic_Anchors_and_Context-Sensitive_Help.md
 hams_shared/docs/modules/external.md
-hams_shared/docs/adrs/MASTER_04_MODULARITY_SHARED_SERVICES.md
+docs/adrs/MASTER_04_MODULARITY_SHARED_SERVICES.md
 database_management/docs/stories/user_stories.md
 database_management/README.md
 database_management/docs/journeys/user_journeys.md

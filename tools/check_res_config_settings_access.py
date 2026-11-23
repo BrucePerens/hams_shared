@@ -137,8 +137,8 @@ def main():
         for err in all_errors:
             print(f"    - {err}")
         print(
-            "      [!] DIAGNOSTIC FOR AI: read hams_shared/docs/adrs/"
-            "0096_res_config_settings_authorization_model.md before touching this. "
+            "      [!] DIAGNOSTIC FOR AI: read hams.com ADR 0096 "
+            "(res.config.settings authorization) before touching this. "
             "res.config.settings write access is base.group_system only; a narrower role that "
             "needs to manage one of its own settings values should not be granted access to this "
             "shared model at all -- use Odoo's own Users & Groups mechanism (res.groups' own form "

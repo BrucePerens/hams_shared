@@ -450,7 +450,7 @@ class LintBatch:
             verdict["log"] = log_path
             verdict["batch"] = batch_id
             if verdict.get("status") == batch_queue.PASSED:
-                # The combined run's own record of the known-red failures it tolerated (ADR 0117) goes into the stamp.
+                # The combined run's own record of the known-red failures it tolerated (hams.com ADR 0128) goes into the stamp.
                 selected, known_red = self.run_data.get(member["tip"], (self.last_selected, self.last_known_red))
                 extra = {"known_red": known_red} if known_red else {}
                 self.stamp_writer(member["tip"], selected, batch_id, verdict.get("with") or [], **extra)

@@ -78,14 +78,14 @@ expecting this skill to define it:
 
 - **Semantic Anchors** (`[@ANCHOR: name]`, the regression-prevention/documentation-linking
   convention): defined and evolved across real ADRs --
-  `hams_shared/docs/adrs/0074_User_Facing_Semantic_Anchors_and_Context-Sensitive_Help.md`,
+  hams.com ADR 0074,
   `0089_anchor_scheme_reformatting_robustness.md`, `0090_universal_function_test_anchor_ratchet.md`
   -- with real enforcement tooling in `hams_shared/tools/` (`check_anchor_coverage.py`,
   `verify_anchors.py`, `check_function_test_anchors.py` and its Rust/JS equivalents).
 - **Zero-sudo, service accounts, the Centralized Security Utility pattern, cron batching, ORM/model
   standards**: `odoo-development/SKILL.md` covers all of this in far more current detail than the
   old general doc ever did.
-- **ADRs for major structural decisions**: `hams_shared/docs/adrs/` is the live, actively-used
+- **ADRs for major structural decisions**: the hams.com ADRs is the live, actively-used
   destination -- see the `hams-standing-policy-goes-in-adr-not-proposal` convention.
 - **The burn-list linter** (`docs/LLM_LINTER_GUIDE.md`'s old role as "ultimate authority on syntax"):
   the real current authority is `hams_shared/tools/check_burn_list.py` and the AST-based linter it

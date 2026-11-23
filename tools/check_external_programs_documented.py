@@ -6,7 +6,7 @@ Enforcement of ADR 0114 decision 5: the external programs the relay uses are inv
 
 Usage: check_external_programs_documented.py <repo_root>
 
-Reads the inventory tables of `docs/adrs/0114_*.md` and `tools/dependency_watch.json` (both beside this script)
+Reads the inventory tables of `data/external_programs.md` (the data of hams.com ADR 0114, kept here so the check needs no hams.com checkout) and `tools/dependency_watch.json` (both beside this script)
 and fails (exit 1) when:
   1. the relay's production Rust code (`daemons/hams_local_relay/src`, test code left out) launches a program by a
      literal name (`Command::new("name")`) that no table of the ADR names;
@@ -370,9 +370,9 @@ def main(argv=None):
     if len(argv) != 1:
         print("usage: check_external_programs_documented.py <repo_root>", file=sys.stderr)
         return 2
-    adrs = sorted(glob.glob(os.path.join(HERE, "..", "docs", "adrs", "0114_*.md")))
-    if not adrs:
-        print("[!] ADR 0114 not found beside hams_shared/tools", file=sys.stderr)
+    inventory = os.path.join(HERE, "data", "external_programs.md")
+    if not os.path.isfile(inventory):
+        print("[!] tools/data/external_programs.md (the inventory of ADR 0114) not found beside hams_shared/tools", file=sys.stderr)
         return 2
     target = check_target.require_directory(argv[0], "check_external_programs_documented")
     relay = os.path.join(target, RELAY_DIR)
@@ -383,13 +383,13 @@ def main(argv=None):
         "check_external_programs_documented",
         "relay Rust source files",
     )
-    findings = find_findings(target, adrs[0], os.path.join(HERE, "dependency_watch.json"))
+    findings = find_findings(target, inventory, os.path.join(HERE, "dependency_watch.json"))
     if findings:
         print("[!] ADR 0114: the external programs the relay uses are not all inventoried, pinned and watched:")
         for f in findings:
             print(f"    - {f}")
         print(
-            "      FIX: add the program to a table of hams_shared/docs/adrs/0114_*.md (and, if we ship or build it, "
+            "      FIX: add the program to a table of hams_shared/tools/data/external_programs.md (and, if we ship or build it, "
             "to tools/dependency_watch.json with Watched = yes), in the same pull request."
         )
         return 1

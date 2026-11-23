@@ -438,7 +438,7 @@ def _parse_args(argv):
         "--baseline-refresh",
         action="store_true",
         help="the canary: lint a clean origin/main and record the failing steps and tests as the known-red baseline "
-        "(~/.cache/hams-lint/baseline; ADR 0117), then exit. Skipped when the baseline already belongs to origin/main "
+        "(~/.cache/hams-lint/baseline; hams.com ADR 0128), then exit. Skipped when the baseline already belongs to origin/main "
         "(--baseline-force repeats it)",
     )
     parser.add_argument("--baseline-force", action="store_true", help="with --baseline-refresh: run even when current")
@@ -3047,7 +3047,7 @@ def main():
     )
     results += extra_results
     results, timeout_retried = retry_timed_out_steps(results, all_steps)
-    # Known-red baseline (ADR 0117): failures that were already red on main, with the same message, do not block.
+    # Known-red baseline (hams.com ADR 0128): failures that were already red on main, with the same message, do not block.
     blocking_failed, advisory_failed = lint_advisory.split_failures(results)
     failed_now = {r.name: r.output or "" for r in blocking_failed}
     baseline_verdict = None

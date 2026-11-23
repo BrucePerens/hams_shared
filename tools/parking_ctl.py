@@ -348,7 +348,7 @@ def cmd_archive(args, out):
 def cmd_dns(args, out, api=None):
     out(
         "REFUSED: DNS records are changed only through hams.com's own Odoo (the cloudflare module), never "
-        "through the Cloudflare API. See hams_shared/docs/adrs/0106_tenants_inside_one_odoo.md."
+        "through the Cloudflare API. See hams.com ADR 0106."
     )
     return 2
 

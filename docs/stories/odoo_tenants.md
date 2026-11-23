@@ -6,7 +6,7 @@ production machine without any of them being able to reach hams.com's database, 
 daemon keys. Design: `docs/proposals/MULTI_TENANT_ODOO.md` (hams_com), ADR (Architecture Decision Record) 0106 (the separate-instance design it replaced). (These tools live under `tools/`, which the anchor
 linters do not scan, so this story carries no anchors.)
 
-**Status note.** [ADR 0106](../adrs/0106_tenants_inside_one_odoo.md) decided that perens.com, postopen.org and the parking site are tenants *inside* hams.com's Odoo (one database), not separate instances, and retired the per-instance tooling (`tenant_ctl.py`, `tenant_lib.py`, the `hams-tenant@` units). The scenarios below that use `tenant_ctl` (writing a spec, creating a tenant, backups and removal, upgrading, the tunnel) describe that retired separate-instance design; the current design is in [tenant_sites.md](tenant_sites.md) and [parking.md](parking.md).
+**Status note.** hams.com ADR 0106 decided that perens.com, postopen.org and the parking site are tenants *inside* hams.com's Odoo (one database), not separate instances, and retired the per-instance tooling (`tenant_ctl.py`, `tenant_lib.py`, the `hams-tenant@` units). The scenarios below that use `tenant_ctl` (writing a spec, creating a tenant, backups and removal, upgrading, the tunnel) describe that retired separate-instance design; the current design is in [tenant_sites.md](tenant_sites.md) and [parking.md](parking.md).
 
 ## Scenario: Writing a spec
 

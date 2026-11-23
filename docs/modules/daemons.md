@@ -4,7 +4,7 @@
 
 **Context:** API Contracts for standalone background processes.
 
-*Anchor tags: each bracketed anchor tag below is a Semantic Anchor, a marker that ties one function to its test and to its documentation; the `COMM_` prefix marks anchors owned by `hams_open`. See [MASTER 11](../adrs/MASTER_11_DEVELOPMENT_WORKFLOW_DOCS.md) and [ADR-0090](../adrs/0090_universal_function_test_anchor_ratchet.md).*
+*Anchor tags: each bracketed anchor tag below is a Semantic Anchor, a marker that ties one function to its test and to its documentation; the `COMM_` prefix marks anchors owned by `hams_open`. See hams.com ADR MASTER 11 and hams.com ADR 0090.*
 
 ## 1. Network Integrations
 * **Local Hardware Relay:** A lightweight Flask server running on the user's machine that intercepts `fetch()` requests to command connected transceivers via Hamlib. The `/qsy` endpoint refuses a request that lacks the header `X-Hams-Action: execute` `local_relay_qsy_endpoint`.

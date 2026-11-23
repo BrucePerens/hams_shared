@@ -60,7 +60,7 @@ VERSION_CHECK_TIMEOUT_SECONDS = 30
 AUDIT_TIMEOUT_SECONDS = 300
 # [@ANCHOR: check_pip_audit:timeout_scale]
 # On a saturated machine run_linters.py exports HAMS_LINT_TIMEOUT_SCALE (1 to 4): the limit stretches with it, so a starved audit is not
-# reported as a stalled network (ADR 0117). A bad value means 1.
+# reported as a stalled network (hams.com ADR 0128). A bad value means 1.
 def _timeout_scale(text):
     """The scale in `text` (1 to 4), 1.0 for anything that is not a finite number."""
     try:

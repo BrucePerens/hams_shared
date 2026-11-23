@@ -1,48 +1,8 @@
-# ADR 0114: The External Programs the Relay Uses Are Inventoried, Pinned and Watched
+# External programs the relay uses: the inventory
 
-## Status
-Accepted (Bruce, 2026-11-03). The inventory below was compiled on 2026-11-03 from the relay source
-(`daemons/hams_local_relay/src`, programs launched outside tests), its packaging and installers, the release
-scripts, `dependency_watch.json`, `binary_manifest.json` and `packaging/tnc_loopback_release/SOURCE.txt`.
-
-## Scope
-Programs and tools that are not our own code and are not Cargo or pip packages: programs the relay starts, the
-libraries and toolchains outside the package managers that its builds and installers depend on, and the
-assets it downloads. Cargo crates are governed by `Cargo.lock`, `cargo-deny` and `cargo-audit`; Python
-packages by pip-audit. The server-side and test-infrastructure programs are listed briefly at the end because
-the same weekly watch covers some of them.
-
-## Context
-The relay launches modems, a radio library, audio and security tools; it is installed on Windows, macOS,
-Linux and the Raspberry Pi; and its builds use several toolchains. Until now the list lived in people's
-heads and in scattered comments, so a new program could be added without anyone noticing, an upstream
-release could pass unseen (the weekly watch found four stale pins on 2026-11-03), and Direwolf and ka9q-radio
-had no pin or watch at all. Two rules from `CLAUDE.md` also depend on knowing what runs: the radio modem
-programs must bind loopback in the builds we ship (the patched build is the fix, never a firewall rule), and
-a download is trusted only through hams.com's reviewed mirror with a checked hash.
-
-## Decision
-1. **This ADR is the inventory.** Every external program the relay launches or depends on appears in the tables
-   below with its role, the platforms it is used on, how it is obtained, its version or pin, its licence, and
-   whether the weekly watch covers it. A pull request that adds, removes or changes the way the relay uses an
-   external program, or bumps a pin, updates the table in the same pull request.
-2. **Pin what we ship or build.** A program we build, bundle or download is pinned to an exact version or
-   commit, listed in `hams_shared/tools/dependency_watch.json` (or `binary_manifest.json` for hashed
-   binaries), and checked against upstream by the weekly Dependency Release Watch. A stale pin is fixed or
-   recorded as a deliberate hold with a reason; the watch is not silenced.
-3. **System tools are named, not pinned.** Programs the operating system or the operator provides (shells,
-   `pactl`, `nmcli`, `gpsd`, `chrony`, TPM tools, `launchctl`, PowerShell) are listed with the minimum
-   behaviour the relay relies on. The relay detects them, tolerates their absence and reports what is missing.
-4. **Downloaded tools come from the hams.com mirror** (`ham.relay.tool.release`), reviewed by a maintainer,
-   with the SHA-256 the server reports checked on install. Stock builds of the radio modem programs are never
-   installed; only our loopback-patched builds (release `tnc-loopback-v1` and its successors) with the
-   corresponding source published beside them.
-5. **Enforcement.** `hams_shared/tools/check_external_programs_documented.py`, a step of `run_linters.py`, scans the relay
-   source (test code left out) and the installers for programs launched or detected by a literal name and fails when a
-   name is missing from the tables here; it fails when a table row that names an `owner/repo` is absent from
-   `dependency_watch.json` or not marked watched, and when a watch entry is absent here. It has no baseline. Programs
-   that an installer or script starts without detecting them first (`cp`, `tar`, `curl`, and so on) are not scanned;
-   review covers them.
+Machine-read data of `tools/check_external_programs_documented.py` (hams.com ADR 0114 decision 5 is the policy; this file is the
+inventory it enforces). It lives beside the checker so that the check works in hams_open and hams_shared without hams.com. A pull request
+that adds, removes or changes the way the relay uses an external program, or bumps a pin, updates the tables below in the same pull request.
 
 ## Inventory
 
@@ -121,15 +81,3 @@ The device worker (`device_worker_launch.rs`) is the one launch whose program is
 `bounded_command.rs` is the second: it runs whatever helper its caller hands it (`sh`, a TNC's `-h` or `--version`, and the other programs the first table already names) under a time limit and a size cap. It chooses no program itself, so the file is in `DYNAMIC_LAUNCH_FILES`; every caller that names a literal program is still checked against the tables.
 
 `privileged_action.rs` is the third: `run_pkexec` calls `run_launcher("pkexec", ...)`, and the launcher is a parameter only so a test can stand in a fake for `pkexec`. The one program the relay starts there is `pkexec` (already in the first table), so the file is in `DYNAMIC_LAUNCH_FILES`.
-
-## Known gaps (to-dos)
-- hidapi (vendored in the Mercury tree, follows its pin), RADE (`rade_c` was copied in whole with no recorded upstream commit, so there is nothing honest to pin) and the model files (Hugging Face repositories, not GitHub releases) have no upstream check.
-- Inno Setup, MinGW-w64, wine and the container images are not pinned beyond what the release preflight
-  prints; record the exact versions the next release uses.
-- Pat on macOS (2026-11-15, Bruce's decision): the relay installs upstream's Intel `.pkg` by unpacking its Payload in native Rust (`pkg_unpack`: xar table of contents, gzip, cpio; no `xar`, `gunzip` or `cpio` program since 2026-11-18, no `installer`, no root). The macOS install path has run only on Linux (the unpack against packages built by real `xar` and `cpio`); a run on a real Mac is still to do.
-- Pat and telnet (2026-11-20): a `telnet://` Winlink connect target is run by the relay's own Rust client (`winlink_b2f.rs`, `lzhuf.rs`; differential tests against Pat v1.0.1 as a peer-to-peer station and against wl2k-go's LZHUF), not by Pat; `HAMS_RELAY_WINLINK_TELNET=pat` selects Pat for it. Pat is still run for the radio transports (AX.25, ARDOP, VARA/Mercury) until step 8 onward. Not yet verified against the real CMS.
-
-## Consequences
-One place to look when a security advisory, a licence question or a build failure names a program; each change
-to the set of programs is visible in review; the weekly watch becomes the complete list of what can go stale.
-The cost is keeping the table current, which the enforcement linter will check.

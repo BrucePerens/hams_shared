@@ -9,7 +9,7 @@ behind `--offline-isolation`. First user:
 `ham_shack/tests/test_shack_offline_isolation_tour.py` plus
 `ham_shack/static/tests/tours/shack_offline_isolation_tour.js`. (`ham_shack` is a module of the proprietary `hams_com` repository, not of `hams_open`, so those two files, and the `docs/proposals/` and `CLAUDE.md` files cited below, are not in a public checkout.)
 
-The "local service" above is the **local relay**: `hams_local_relay`, a program from the `hams_com` codebase that an operator installs on their own machine so that radio functions keep working when the hams.com server is unreachable (see [ADR 0097](adrs/0097_server_independent_relay_operation.md)). This harness never runs the real relay; it uses a stand-in (see "The local-relay stand-in").
+The "local service" above is the **local relay**: `hams_local_relay`, a program from the `hams_com` codebase that an operator installs on their own machine so that radio functions keep working when the hams.com server is unreachable (see hams.com ADR 0097). This harness never runs the real relay; it uses a stand-in (see "The local-relay stand-in").
 
 ## The problem this solves
 

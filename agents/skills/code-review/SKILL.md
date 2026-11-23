@@ -38,7 +38,7 @@ Ignatz must assign reviews to the following three specialized roles (inject thes
 - **Focus:** Architecture completeness, AI directive quality, UX consistency/attractiveness, documentation coverage, and testing quality.
 
 **Required Pre-Reading:**
-All roles must read the skill files for `linter-compliance`, `project-experience`, `odoo-development`, and `code-review/references/ai_antipatterns_guide.md`, along with the `hams_shared/docs/adrs/README.md` index.
+All roles must read the skill files for `linter-compliance`, `project-experience`, `odoo-development`, and `code-review/references/ai_antipatterns_guide.md`, along with the hams.com ADR index.
 
 ## 4. Test-Driven Validation Workflow
 During Phase 3 (Fix Application) and Phase 4 (Final Validation), Ignatz must follow this strict TDD protocol:

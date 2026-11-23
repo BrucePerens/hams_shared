@@ -3339,7 +3339,7 @@ Purpose: command line, `check_anchor_docs_standard.py <repo_root>`. Prints each 
 ## External programs of the relay are inventoried, pinned and watched (`check_external_programs_documented.py`, ADR 0114)
 
 `check_external_programs_documented.py <repo_root>` is the linter step of the same name in `run_linters.py`. It reads the tables of
-`docs/adrs/0114_*.md` and `tools/dependency_watch.json` and fails when the relay's source, its installers or the watch disagree with the ADR (the list
+`tools/data/external_programs.md` (the data of hams.com ADR 0114) and `tools/dependency_watch.json` and fails when the relay's source, its installers or the watch disagree with the ADR (the list
 of checks is in the module docstring). No baseline file exists; findings go to zero and stay there. Exit 0 passes, 1 fails with one line per finding and a
 `FIX:` line, 2 is a usage error or a missing ADR. A repository without `daemons/hams_local_relay` (hams_open) is checked only for the watch rules.
 Limits: a program an installer starts without first testing for it (`cp`, `tar`, `curl`) is not scanned; a program started through a variable is covered
@@ -3406,7 +3406,7 @@ Raises `OSError` or `json.JSONDecodeError` when the ADR or the watch file cannot
 ### `[@ANCHOR: ext_programs:main]` `main(argv=None)`
 
 Purpose: the command line. Argument `argv` (list of str, default `sys.argv[1:]`): exactly one item, the repository root. Returns 0 when there are no findings, 1
-after printing them, 2 for a wrong argument count or when no `docs/adrs/0114_*.md` is found beside `tools`.
+after printing them, 2 for a wrong argument count or when no `data/external_programs.md` is found beside `tools`.
 
 ## Watching and stopping processes (`agent_procs.py`)
 
@@ -7727,7 +7727,7 @@ Every class of the tools that is not a function, with its fields, who creates it
 | `identifiers` | `set = set()` | Names defined or used in tracked source files, for function-name references. |
 | `words` | `set = set()` | Environment-variable and configuration-parameter words found in tracked source. |
 | `units` | `set = set()` | systemd unit names, normalised (template instances folded to the template), from file names and script text. |
-| `adrs` | `set = set()` | ADR numbers taken from the file names of the ADR documents. |
+| `adrs` | `set` | ADR numbers: those listed in `tools/data/adr_numbers.txt` (the numbers of hams.com's `docs/adrs/`, which is not in this repository) plus those taken from the file names of any ADR documents tracked in the checked repositories. |
 | `_argparse` | `dict = {}` | Cache of the argparse flags parsed per script by `argparse_flags`, filled on first use. |
 
 **Methods.** `__init__(self, files, roots)`, `exists`, `logical_dirs`, `argparse_flags`, and the private `_add_path`, `_add_aliases`, `_add_source`.

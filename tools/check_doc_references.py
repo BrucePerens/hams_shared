@@ -10,7 +10,7 @@ Scans the tracked Markdown of one repository (hams_open includes hams_shared) an
   path      a file or directory in backticks or in a link target that exists nowhere (relative to the document, to a parent
             directory of it, to a repository root, or as the tail of any tracked path)
   flag      `script.py --flag` where the script's argparse does not define the flag
-  adr       `ADR 0090` with no docs/adrs/0090_*.md in hams_com, hams_open or hams_shared
+  adr       `ADR 0090` that is neither in tools/data/adr_numbers.txt (the numbers of hams_com's docs/adrs) nor a docs/adrs/0090_*.md file
   anchor    `#heading` link (same or other document) with no such heading ([@ANCHOR] tags are verify_anchors.py's job)
   unit      `name.service` / `.timer` / `.socket` that no tracked non-Markdown file mentions
   config    `HAMS_...` environment variable, or a dotted config parameter on a line that talks about parameters/settings,
@@ -64,6 +64,7 @@ WORD_RE = re.compile(r"[A-Za-z0-9_.\-]+")
 ENV_RE = re.compile(r"^HAMS_[A-Z0-9_]+$")
 PARAM_RE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 FUNC_RE = re.compile(r"^((?:[A-Za-z_][A-Za-z0-9_]*(?:\.|::))*)([A-Za-z_][A-Za-z0-9_]*)\(.*\)$")
+ADR_NUMBERS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "adr_numbers.txt")
 ADR_RE = re.compile(r"\bADR[ -]?0*(\d{1,4})\b")
 LINK_RE = re.compile(r"!?\[[^\]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 HEADING_RE = re.compile(r"^ {0,3}#{1,6}\s+(.*?)\s*#*\s*$")
@@ -115,7 +116,8 @@ class Knowledge:
         self.identifiers = set()
         self.words = set()
         self.units = set()
-        self.adrs = set()
+        with open(ADR_NUMBERS_FILE, encoding="utf-8") as handle:  # the ADRs live in hams_com (private); the list of their numbers ships here
+            self.adrs = {int(line) for line in (raw.strip() for raw in handle) if line and not line.startswith("#")}
         self._argparse = {}
         for path in files:
             self._add_path(path)

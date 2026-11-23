@@ -13,8 +13,7 @@ already defines (as opposed to a genuinely third-party model like Odoo core's `r
 `res.users`, which can only be extended via `_inherit` since the base definition isn't ours to
 edit), the user's stated preference is to move the extension's fields, methods, and view changes
 directly into the base model's own file instead of adding a second, cross-module `_inherit`
-declaration. This is now a formal, numbered rule: ADR 0086 (`hams_open/hams_shared/docs/adrs/
-0086_own_model_extension_consolidation.md`), added at the user's explicit request after this
+declaration. This is now a formal, numbered rule: hams.com ADR 0086, added at the user's explicit request after this
 pattern kept producing real bugs, not just style debt.
 
 The pattern has repeatedly caused genuine, hard-to-diagnose defects, each invisible from reading

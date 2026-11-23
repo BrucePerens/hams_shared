@@ -392,7 +392,7 @@ def machine_wide_lock(step_name, directory=None):
             handle.close()
 
 
-# ---- timeouts under load (ADR 0117) ------------------------------------------------------------------
+# ---- timeouts under load (hams.com ADR 0128) ------------------------------------------------------------------
 
 PRESSURE_PATH = "/proc/pressure/cpu"
 TIMEOUT_TEXT = re.compile(

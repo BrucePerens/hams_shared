@@ -47,9 +47,10 @@ root and, where relevant, the sibling repo, from whichever one it's given.
   Odoo-core type-stub tree at `tools/odoo_type_stubs/`), `pre_flight_check.py`, `mcp_watchdog.py`
   (the shared MCP (Model Context Protocol, how AI tools call outside tools) queue/executor coordination layer described in the `avoiding-api-costs` skill
   below), and dozens more single-purpose checkers, each with its own test suite.
-* **`docs/adrs/`** (35 ADRs as of this writing): the formal Architecture Decision Record set --
-  cross-cutting standing policy for both parent repos lives here, not in either repo's own
-  `docs/proposals/`.
+* **ADRs** (Architecture Decision Records): since 2026-11-23 they are all kept in the hams.com repository (`docs/adrs/`
+  there, with an index and an old-to-new number table), not here. Code and docs here refer to one as "hams.com ADR NNNN".
+  The numbers that exist are listed in `tools/data/adr_numbers.txt`; cross-cutting standing policy for all three
+  repositories is an ADR, not a `docs/proposals/` file.
 * **`agents/skills/`** (17 skill packages): reusable Claude Code skills shared by both repos'
   sessions, activated on demand rather than loaded unconditionally into every session. Three of
   these are where this repo's own former `docs/LLM_*.md` instruction files ended up when they were
