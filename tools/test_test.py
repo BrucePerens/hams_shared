@@ -51,6 +51,25 @@ def _load_test_py_module():
 _test_runner = _load_test_py_module()
 
 
+class TopLevelSubmountsTests(unittest.TestCase):
+    """An overlay of /home hides the mounts below it, so the isolated run re-binds them (wt.py overlay worktrees)."""
+
+    # Tests [@ANCHOR: test:top_level_submounts]
+    def test_lists_the_mounts_below_the_prefix_without_nested_ones_and_decodes_escapes(self):
+        info = "\n".join([
+            "26 1 259:2 / / rw - ext4 /dev/nvme0n1p2 rw",
+            "90 26 0:50 / /home/bruce/agent_work/tp-probe/hams_com rw - overlay hams-wt rw",
+            "91 90 0:51 / /home/bruce/agent_work/tp-probe/hams_com/inner rw - tmpfs t rw",
+            "92 26 0:52 / /home/bruce/with\\040space rw - tmpfs t rw",
+            "93 26 0:53 / /homeless/x rw - tmpfs t rw",
+            "94 26 0:54 / /home rw - tmpfs t rw",
+        ])
+        self.assertEqual(
+            _test_runner.top_level_submounts("/home", info),
+            ["/home/bruce/agent_work/tp-probe/hams_com", "/home/bruce/with space"],
+        )
+
+
 class RobustReapGroupTests(unittest.TestCase):
     """robust_reap must not stop at the leader's exit while a child in its group ignored SIGTERM."""
 
