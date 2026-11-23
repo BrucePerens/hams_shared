@@ -21,6 +21,7 @@ import time
 import batch_queue
 import check_target
 import lint_cache
+import lint_advisory
 import lint_exec
 import lint_trace_cache
 import lint_batch
@@ -3044,7 +3045,8 @@ def main():
     results += extra_results
     results, timeout_retried = retry_timed_out_steps(results, all_steps)
     # Known-red baseline (ADR 0117): failures that were already red on main, with the same message, do not block.
-    failed_now = {r.name: r.output or "" for r in results if r.returncode != 0}
+    blocking_failed, advisory_failed = lint_advisory.split_failures(results)
+    failed_now = {r.name: r.output or "" for r in blocking_failed}
     baseline_verdict = None
     known_red = ""
     if failed_now:
@@ -3063,12 +3065,15 @@ def main():
             document = lint_remote.results_document("local", results)
             document["known_red"] = known_red
             document["timeout_retried"] = timeout_retried
+            document["advisory"] = [r.name for r in advisory_failed]
             # The combined run of a batch (lint_batch.py) attributes failures from these.
             document["selected"] = [step.name for step in all_steps]
             document["outputs"] = {r.name: (r.output or "")[-200000:] for r in results if r.returncode != 0}
             json.dump(document, handle)
     wall = time.monotonic() - wall_start
-    linters_failed = any(r.returncode != 0 for r in results)
+    linters_failed = bool(blocking_failed)
+    for line in lint_advisory.report_lines(advisory_failed):
+        print(f"[!] {line} (advisory: does not block)")
     if baseline_verdict is not None and baseline_verdict["passes"]:
         linters_failed = False
     missing = steps_without_result([step.name for step in all_steps], results)
