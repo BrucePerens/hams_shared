@@ -1692,6 +1692,9 @@ def main():
     # `_run_per_target_checker`'s own docstring).
     _per_target_steps(_add, python_exec, dir_path, "check_shebang.py", scope_for("check_shebang"))
 
+    # check_conflict_markers -- a git merge-conflict block left in any tracked text file (one call per target).
+    _per_target_steps(_add, python_exec, dir_path, "check_conflict_markers.py", scope_for("check_conflict_markers"))
+
     # 16. check_summation_bias
     # Hardening, 2026-09-10: pin `cwd` to `repo_root` explicitly rather than inheriting
     # run_linters.py's own ambient process cwd. check_summation_bias.py resolves ITS OWN repo
