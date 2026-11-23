@@ -211,6 +211,17 @@ class CreateTests(SnapshotTestBase):
         return run
 
     # Tests [@ANCHOR: gate_snapshot:create_snapshot]
+    def test_pinned_commits_are_snapshotted_even_after_main_moved_on(self):
+        pinned = {"com_commit": git(self.ws.path("hams_com"), "rev-parse", "origin/main"),
+                  "open_commit": git(self.ws.path("hams_open"), "rev-parse", "origin/main")}
+        self.ws.advance("hams_com", "com", "after_the_pin.txt")
+        manifest = self.create(**pinned)
+        self.assertEqual(manifest["trees"]["com_commit"], pinned["com_commit"])
+        self.assertEqual(git(manifest["trees"]["com"], "rev-parse", "HEAD"), pinned["com_commit"])
+        self.assertEqual(manifest["trees"]["open_commit"], pinned["open_commit"])
+        self.assertNotEqual(pinned["com_commit"], git(self.ws.path("hams_com"), "rev-parse", "origin/main"))
+
+    # Tests [@ANCHOR: gate_snapshot:create_snapshot]
     def test_a_merge_during_the_build_keeps_the_first_snapshot_without_retrying(self):
         manifest = self.create(run=self.racing_run(9))
         self.assertNotEqual(manifest["trees"]["com_commit"], git(self.ws.path("hams_com"), "rev-parse", "origin/main"))

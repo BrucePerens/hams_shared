@@ -487,13 +487,14 @@ def verify_snapshot(gate_dir, fetch=True, environ=None, cargo_target_dir=None):
 
 
 def _create_snapshot_once(workspace=DEFAULT_WORKSPACE, parent=None, shards=DEFAULT_SHARDS, shards_file=None, fetch=True,
-                    build=True, cargo_target_dir=None, run=None, out=print, hostname=None, balance=None):
+                    build=True, cargo_target_dir=None, run=None, out=print, hostname=None, balance=None,
+                    com_commit=None, open_commit=None):
     """One attempt of `create_snapshot`; raises `SnapshotBehind` when the finished snapshot verifies except that origin/main moved on."""
     refuse_production(hostname)
     parent = os.path.abspath(parent or os.path.join(workspace, "tmp"))
     cargo_target_dir = cargo_target_dir or os.environ.get("CARGO_TARGET_DIR") or os.path.expanduser("~/.cache/hams-test/gate/cargo-target")
-    com_commit = origin_main(os.path.join(workspace, "hams_com"), fetch)
-    open_commit = origin_main(os.path.join(workspace, "hams_open"), fetch)
+    com_commit = com_commit or origin_main(os.path.join(workspace, "hams_com"), fetch)
+    open_commit = open_commit or origin_main(os.path.join(workspace, "hams_open"), fetch)
     if fetch:
         _git(os.path.join(workspace, "hams_open", "hams_shared"), "fetch", "-q", "origin", "main")
     shared_commit = recorded_shared_commit(os.path.join(workspace, "hams_open"), open_commit)
@@ -557,7 +558,8 @@ def _create_snapshot_once(workspace=DEFAULT_WORKSPACE, parent=None, shards=DEFAU
 
 # [@ANCHOR: gate_snapshot:create_snapshot]
 def create_snapshot(workspace=DEFAULT_WORKSPACE, parent=None, shards=DEFAULT_SHARDS, shards_file=None, fetch=True,
-                    build=True, cargo_target_dir=None, run=None, out=print, hostname=None, balance=None):
+                    build=True, cargo_target_dir=None, run=None, out=print, hostname=None, balance=None,
+                    com_commit=None, open_commit=None):
     """Builds the gate tree for the current `origin/main` commits and returns its manifest (also written to
     `<gate>/gate_snapshot.json`, with `gate_shards.json` beside it). Steps: refuse on a production host; fetch and read the
     three commits; make the worktrees; build every artifact (unless `build` is False); choose the shards (from `shards_file`,
@@ -567,9 +569,12 @@ def create_snapshot(workspace=DEFAULT_WORKSPACE, parent=None, shards=DEFAULT_SHA
     A snapshot tests an exact set of commits (recorded in the manifest), so one that origin/main moved past while it was being
     built (merges during a long build) is kept as it is: `deploy_to_production.py` still refuses a checkout that is not at
     origin/main. Only a real problem (a tree missing, dirty or at the wrong commit, a missing artifact, an inconsistent
-    hams_shared pointer) raises `SnapshotError`; nothing is retried."""
+    hams_shared pointer) raises `SnapshotError`; nothing is retried.
+    `com_commit` / `open_commit` pin the snapshot to those commits instead of the current origin/main (a round that linted exact commits
+    gates the same ones, so merges need no freeze); hams_shared is the commit hams_open's `open_commit` records."""
     try:
-        return _create_snapshot_once(workspace, parent, shards, shards_file, fetch, build, cargo_target_dir, run, out, hostname, balance)
+        return _create_snapshot_once(workspace, parent, shards, shards_file, fetch, build, cargo_target_dir, run, out, hostname, balance,
+                                     com_commit, open_commit)
     except SnapshotBehind as error:
         out("gate_snapshot: origin/main moved during the snapshot; keeping it, it tests the commits it built")
         return error.manifest
