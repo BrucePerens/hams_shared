@@ -36,6 +36,7 @@ enables only postgresql, redis-server and rabbitmq-server. Full entries for ever
 import base64
 import fcntl
 import glob
+import grp
 import os
 import re
 import secrets
@@ -986,6 +987,28 @@ def start(run, env_vars, orig_user, tools_dir, repo_root, workspace=None, git_ke
             "systemd": systemd, "lock": lock}
 
 
+# [@ANCHOR: provision_test_environment:provision_runner_traverse]
+def provision_runner_traverse(runner_user, run, report, plan=False, group_members=None):
+    """Puts the runner account in `hams_traverse`, the group whose traverse-only (--x) ACL on /opt/hams and /opt/hams/etc is
+    the only way a non-owner account gets through them (they are 0750 hams_com). Without it test.py dies reading
+    /opt/hams/etc/test_slots with PermissionError. `group_members(name)` returns the member list or None when the group does
+    not exist (the MANIFEST accounts step makes it; nothing to do before that)."""
+    if runner_user in ("root", "odoo"):
+        return
+    members = (group_members or _group_members)("hams_traverse")
+    if members is None or runner_user in members or plan:
+        return
+    run(["usermod", "-aG", "hams_traverse", runner_user])
+    report.changed(f"added {runner_user} to hams_traverse (traverse-only access to /opt/hams)")
+
+
+def _group_members(name):
+    try:
+        return grp.getgrnam(name).gr_mem
+    except KeyError:
+        return None
+
+
 # [@ANCHOR: provision_test_environment:finish]
 def finish(state, run, env_vars, os_id, self_check=True, plan=False):
     """Steps 3 to 10 of the module docstring on the state start() returned. Returns the Report; exits 1 when the
@@ -1002,6 +1025,7 @@ def finish(state, run, env_vars, os_id, self_check=True, plan=False):
     if not plan:
         provision_database(run, runner_user, report)
     provision_test_host_requirements(run, report, plan)
+    provision_runner_traverse(runner_user, run, report, plan)
     provision_user_tools(layout, run, as_user, home, report)
     provision_ml_assets(layout, run, report, plan)
     values = provision_profile(layout, env_vars, home, runner_user, report, plan)
