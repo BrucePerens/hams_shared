@@ -74,6 +74,9 @@ PLAYWRIGHT_CDN_URL = "https://cdn.playwright.dev/"
 ML_ASSET_ROOT = "/var/lib/odoo/hams_ml_assets"  # the root ham_shack/controllers/offline.py serves from
 ML_ASSET_SCRIPT = os.path.join("ham_shack", "tools", "provision_ml_assets.py")
 ML_ASSET_HOSTS = ("https://registry.npmjs.org/", "https://huggingface.co/")  # what that script downloads from
+# Where batch trees go when the runner's home is private and the checkouts are under it (dirname and the directory
+# are chowned to the runner; /var/tmp/hams-test stays root-owned and world-traversable for the odoo account).
+BATCH_TREE_FALLBACK = "/var/tmp/hams-test/workspace/tmp"
 LOCK_PATH = "/var/lib/hams-test-environment.lock"
 ODOO_SOURCE_LIST = "/etc/apt/sources.list.d/odoo.list"
 # Building the Odoo package from its source tree (debian/ ships in it).
@@ -873,15 +876,18 @@ def profile_text(values):
 
 
 # [@ANCHOR: provision_test_environment:profile_values]
-def profile_values(existing, environ, layout, home_mode):
+def profile_values(existing, environ, layout, home_mode, home=None):
     """The variables for the profile: HAMS_CRYPTO_KEY (the existing one, else 32 random bytes in base64, the format
     provisioning generates); HAMS_BATCH_TREE_DIR=<workspace>/workspace/tmp when the runner's home is not traversable
-    by others (mode lacks o+x: the odoo user could not read a batch tree under it); HAMS_LINT_REMOTE=local in a
+    by others (mode lacks o+x: the odoo user could not read a batch tree under it), or BATCH_TREE_FALLBACK when the
+    workspace itself is inside that home (the default: the checkouts are cloned under ~/); HAMS_LINT_REMOTE=local in a
     cloud session (the LAN lint machines are unreachable). `existing` is parse_profile of the current file."""
     values = {"HAMS_CRYPTO_KEY": existing.get("HAMS_CRYPTO_KEY")
               or base64.b64encode(secrets.token_bytes(32)).decode("ascii")}
     if not home_mode & stat.S_IXOTH:
-        values["HAMS_BATCH_TREE_DIR"] = os.path.join(layout["workspace"], "workspace", "tmp")
+        inside_home = home and os.path.realpath(layout["workspace"]).startswith(os.path.realpath(home) + os.sep)
+        values["HAMS_BATCH_TREE_DIR"] = BATCH_TREE_FALLBACK if inside_home else os.path.join(
+            layout["workspace"], "workspace", "tmp")
     if environ.get("CLAUDE_CODE_REMOTE") == "true":
         values["HAMS_LINT_REMOTE"] = "local"
     return values
@@ -897,7 +903,7 @@ def provision_profile(layout, environ, home, runner_user, report, plan=False, pa
             old_text = current.read()
     except FileNotFoundError:
         old_text = ""
-    values = profile_values(parse_profile(old_text), environ, layout, stat.S_IMODE(os.stat(home).st_mode))
+    values = profile_values(parse_profile(old_text), environ, layout, stat.S_IMODE(os.stat(home).st_mode), home)
     text = profile_text(values)
     if plan:
         print(f"PLAN write {path} ({', '.join(sorted(values))})", flush=True)

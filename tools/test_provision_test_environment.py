@@ -901,6 +901,8 @@ class ProfileTests(unittest.TestCase):
         closed = pte.profile_values({}, {"CLAUDE_CODE_REMOTE": "true"}, self.layout, 0o700)
         self.assertEqual(closed["HAMS_BATCH_TREE_DIR"], os.path.join(self.tmp, "workspace", "tmp"))
         self.assertEqual(closed["HAMS_LINT_REMOTE"], "local")
+        under_home = pte.profile_values({}, {}, self.layout, 0o700, os.path.dirname(self.tmp))
+        self.assertEqual(under_home["HAMS_BATCH_TREE_DIR"], pte.BATCH_TREE_FALLBACK)
         open_home = pte.profile_values({}, {}, self.layout, 0o755)
         self.assertEqual(set(open_home), {"HAMS_CRYPTO_KEY"})
 
