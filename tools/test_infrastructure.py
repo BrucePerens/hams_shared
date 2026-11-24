@@ -3783,7 +3783,7 @@ class CrawlClaudeWrapperTests(unittest.TestCase):
                 f.write('#!/bin/bash\necho "args=$*"\necho "count=$#"\n')
             os.chmod(fake, 0o755)
             script = self._rendered().replace(f"{infra.ACCOUNT_HOME_PARENT}/hams_ai_agent", home)
-            return subprocess.run(["bash", "-c", script, "wrapper", *argv], capture_output=True, text=True, cwd=tmp)
+            return subprocess.run(["bash", "-c", script, "wrapper", *[a.replace(f"{infra.ACCOUNT_HOME_PARENT}/hams_ai_agent", home) for a in argv]], capture_output=True, text=True, cwd=tmp)
 
     # [@ANCHOR: infrastructure:test_crawl_claude_wrapper_pins_sandbox]
     def test_the_daemons_argv_runs_the_pinned_sandbox_without_bypass_permissions(self):
@@ -3819,6 +3819,67 @@ class CrawlClaudeWrapperTests(unittest.TestCase):
         for entry in infra.MANIFEST["static_files"]:
             if entry["path"].startswith("/etc/sudoers.d/") and entry["path"] != grant["path"]:
                 self.assertNotIn("hamsd_club_crawl", entry.get("content") or "", entry["path"])
+
+
+class TriageClaudeWrapperTests(unittest.TestCase):
+    """Tests [@ANCHOR: infrastructure:triage_claude_wrapper_pins_sandbox]
+
+    The ticket triage account's sudo grant used to run the general wrapper (`claude "$@"`), so the no-tools,
+    triage-MCP-only sandbox was only the caller's argv. The triage wrapper pins it. Runs the rendered MANIFEST
+    content under bash with a stand-in `claude` that reports its arguments."""
+
+    PATH = "/usr/local/sbin/run-hams-triage-claude.sh"
+    MCP = f"{infra.ACCOUNT_HOME_PARENT}/hams_ai_agent/.claude/mcp_config.json"
+    # daemons/ticket_triage_agent/main.py CLAUDE_COMMAND after the sudo part.
+    DAEMON_ARGV = ["-p", "--output-format", "json", "--mcp-config", MCP, "--strict-mcp-config", "--tools", "",
+                   "--permission-mode", "bypassPermissions", "--model", "sonnet"]
+
+    def _run(self, argv):
+        entry = next(e for e in infra.MANIFEST["static_files"] if e["path"] == self.PATH)
+        self.assertEqual((entry["owner"], entry["mode"], entry["environments"]), ("root:root", "755", ["prod"]))
+        with tempfile.TemporaryDirectory() as tmp:
+            home = os.path.join(tmp, "hams_ai_agent")
+            os.makedirs(os.path.join(home, ".claude"))
+            os.makedirs(os.path.join(home, ".local", "bin"))
+            fake = os.path.join(home, ".local", "bin", "claude")
+            with open(fake, "w") as f:
+                f.write('#!/bin/bash\necho "args=$*"\n')
+            os.chmod(fake, 0o755)
+            script = infra.format_env(entry["content"], {}).replace(f"{infra.ACCOUNT_HOME_PARENT}/hams_ai_agent", home)
+            result = subprocess.run(["bash", "-c", script, "wrapper", *[a.replace(f"{infra.ACCOUNT_HOME_PARENT}/hams_ai_agent", home) for a in argv]], capture_output=True, text=True, cwd=tmp)
+            return result, home
+
+    # [@ANCHOR: infrastructure:test_triage_claude_wrapper_pins_sandbox]
+    def test_the_daemons_argv_runs_the_pinned_sandbox(self):
+        done, home = self._run(self.DAEMON_ARGV)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(
+            done.stdout.strip(),
+            f"args=-p --output-format json --mcp-config {home}/.claude/mcp_config.json --strict-mcp-config --tools  "
+            "--permission-mode bypassPermissions --model sonnet",
+        )
+
+    def test_version_alone_is_allowed(self):
+        done, _home = self._run(["--version"])
+        self.assertEqual((done.returncode, done.stdout.strip()), (0, "args=--version"))
+
+    def test_any_other_argument_is_refused_before_the_cli_starts(self):
+        for extra in (["--dangerously-skip-permissions"], ["--tools", "Bash"], ["--mcp-config", "/tmp/x.json"],
+                      ["--permission-mode", "acceptEdits"], ["--model", "../../bin/sh"], ["--allowedTools", "Bash"],
+                      ["--output-format", "stream-json"], ["write a file"], ["--settings", "/tmp/s.json"],
+                      ["--add-dir", "/"], ["--model"]):
+            with self.subTest(extra=extra):
+                done, _home = self._run(self.DAEMON_ARGV + extra)
+                self.assertEqual(done.returncode, 64, done.stdout)
+                self.assertNotIn("args=", done.stdout)
+        done, _home = self._run(["--version", "--tools", "Bash"])
+        self.assertEqual(done.returncode, 64)
+        done, _home = self._run(["--mcp-config", "/tmp/other.json"] + self.DAEMON_ARGV[:3])
+        self.assertEqual(done.returncode, 64)
+
+    def test_the_triage_account_may_run_only_this_wrapper_as_the_agent(self):
+        grant = next(e for e in infra.MANIFEST["static_files"] if e["path"] == "/etc/sudoers.d/ticket-triage-claude-sandbox")
+        self.assertEqual(grant["content"], "hamsd_ticket_triage ALL=(hams_ai_agent) NOPASSWD: /usr/local/sbin/run-hams-triage-claude.sh\n")
 
 
 class SystemdUnitPathTests(unittest.TestCase):
@@ -5995,7 +6056,7 @@ class TicketTriageAccountTests(unittest.TestCase):
             for line in entry["content"].splitlines() if line.startswith("hamsd_ticket_triage ")
         )
         self.assertEqual(lines, [
-            "hamsd_ticket_triage ALL=(hams_ai_agent) NOPASSWD: /usr/local/sbin/run-hams-ai-agent-claude.sh",
+            "hamsd_ticket_triage ALL=(hams_ai_agent) NOPASSWD: /usr/local/sbin/run-hams-triage-claude.sh",
             "hamsd_ticket_triage ALL=(root) NOPASSWD: /usr/local/sbin/hams-triage-stop [0-9]* KILL",
         ])
         helper = self._static("/usr/local/sbin/hams-triage-stop")
