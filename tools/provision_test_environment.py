@@ -592,6 +592,24 @@ def provision_kopia(run, report, plan=False):
     report.changed("installed /usr/bin/kopia")
 
 
+# [@ANCHOR: provision_test_environment:provision_git_identity]
+GIT_IDENTITY = ("hams.com test environment", "noreply@hams.com")
+
+
+def provision_git_identity(run, as_user, report, plan=False, runner=subprocess.run):
+    """Sets the runner's global git user.name and user.email when either is unset: tests that make real commits in a
+    scratch repository (devbox_tools/test_pr_truth.py) fail with 'Committer identity unknown' on a fresh image. An
+    identity the operator already configured is never touched. The values are not a person, so nothing signed or pushed
+    under them is attributable to anyone."""
+    missing = [(key, value) for key, value in zip(("user.name", "user.email"), GIT_IDENTITY)
+               if runner(as_user(["git", "config", "--global", "--get", key]), capture_output=True).returncode != 0]
+    if plan or not missing:
+        return
+    for key, value in missing:
+        run(as_user(["git", "config", "--global", key, value]))
+    report.changed("set the runner's global git identity for test commits")
+
+
 # [@ANCHOR: provision_test_environment:provision_user_tools]
 def provision_user_tools(layout, run, as_user, home, report, reachable=url_reachable):
     """As the runner user: `cargo install --locked cargo-deny` when cargo exists and `cargo deny` does not (the
@@ -1070,6 +1088,7 @@ def finish(state, run, env_vars, os_id, self_check=True, plan=False):
         provision_database(run, runner_user, report)
     provision_test_host_requirements(run, report, plan)
     provision_runner_traverse(runner_user, run, report, plan)
+    provision_git_identity(run, as_user, report, plan)
     provision_user_tools(layout, run, as_user, home, report)
     provision_ml_assets(layout, run, report, plan)
     values = provision_profile(layout, env_vars, home, runner_user, report, plan)

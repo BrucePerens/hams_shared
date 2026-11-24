@@ -616,6 +616,30 @@ class HomeAccessTests(unittest.TestCase):
         self.assertEqual(self._go("/home/ai", 0o700, plan=True)[0].calls, [])
 
 
+class GitIdentityTests(unittest.TestCase):
+    # Tests [@ANCHOR: provision_test_environment:provision_git_identity]
+
+    def _go(self, set_keys, plan=False):
+        run, report = Recorder(), pte.Report(plan)
+
+        def runner(cmd, **kw):
+            return subprocess.CompletedProcess(cmd, 0 if cmd[-1] in set_keys else 1)
+
+        pte.provision_git_identity(run, lambda argv: argv, report, plan, runner=runner)
+        return run, report
+
+    def test_an_unset_identity_is_set(self):
+        run, report = self._go(set())
+        self.assertEqual([c[-2:] for c in run.calls], [["user.name", "hams.com test environment"],
+                                                       ["user.email", "noreply@hams.com"]])
+        self.assertEqual(len(report.changes), 1)
+
+    def test_only_the_missing_key_is_set_and_an_existing_identity_or_plan_changes_nothing(self):
+        self.assertEqual([c[-2] for c in self._go({"user.name"})[0].calls], ["user.email"])
+        self.assertEqual(self._go({"user.name", "user.email"})[0].calls, [])
+        self.assertEqual(self._go(set(), plan=True)[0].calls, [])
+
+
 class KopiaAndUserToolTests(unittest.TestCase):
     # Tests [@ANCHOR: provision_test_environment:provision_kopia]
     # Tests [@ANCHOR: provision_test_environment:provision_user_tools]
