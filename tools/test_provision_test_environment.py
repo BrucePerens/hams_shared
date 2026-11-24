@@ -549,6 +549,17 @@ class OdooTests(unittest.TestCase):
         build.assert_called_once()
         self.assertEqual(run.calls, [])
 
+    def test_nightly_path_installs_gnupg_before_the_key(self):
+        order = []
+        with patch.object(pte.infrastructure, "_installed_apt_packages", return_value=set()), \
+                patch.object(pte, "_install_apt", side_effect=lambda run, pkgs, label, report: order.append(tuple(pkgs))), \
+                patch.object(pte.provision_cache, "fetch"), patch.object(pte.provision_cache, "install"), \
+                patch.object(pte.infrastructure, "hook_install_odoo_key",
+                             side_effect=lambda *a: order.append("key")), \
+                patch("builtins.open", MagicMock()):
+            pte.provision_odoo(Recorder(), pte.Report(), systemd=False, reachable=lambda: True)
+        self.assertEqual(order, [("gnupg",), "key"])
+
     def test_systemd_host_disables_the_odoo_service(self):
         with patch.object(pte.infrastructure, "_installed_apt_packages", return_value=set()), \
                 patch.object(pte, "_build_odoo_from_github"):
