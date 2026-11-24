@@ -1034,6 +1034,24 @@ def _group_members(name):
         return None
 
 
+# [@ANCHOR: provision_test_environment:provision_home_access]
+def provision_home_access(home, run, report, plan=False, mode=None, acl_user="odoo"):
+    """Lets the `odoo` account traverse the runner's private home (a Debian cloud image's home is 0700) with an ACL
+    entry `u:odoo:--x` on the home directory only: test.py re-executes as odoo and reads the checkouts and the combined
+    batch tree under the workspace. Nothing is listed or readable in the home itself. No-op when others can traverse
+    it already, for root's home, and under --plan. `mode` is the home's permission bits (looked up when None)."""
+    if plan or home == "/root":
+        return
+    mode = stat.S_IMODE(os.stat(home).st_mode) if mode is None else mode
+    if mode & stat.S_IXOTH:
+        return
+    shown = subprocess.run(["getfacl", "-p", home], capture_output=True, text=True, check=False).stdout
+    if f"user:{acl_user}:" in shown:
+        return
+    run(["setfacl", "-m", f"u:{acl_user}:--x", home])
+    report.changed(f"gave {acl_user} traverse-only (--x) access to {home}")
+
+
 # [@ANCHOR: provision_test_environment:finish]
 def finish(state, run, env_vars, os_id, self_check=True, plan=False):
     """Steps 3 to 10 of the module docstring on the state start() returned. Returns the Report; exits 1 when the
