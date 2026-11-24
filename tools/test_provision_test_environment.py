@@ -615,6 +615,7 @@ class KopiaAndUserToolTests(unittest.TestCase):
 
 class MlAssetsTests(unittest.TestCase):
     # Tests [@ANCHOR: provision_test_environment:provision_ml_assets]
+    # Tests [@ANCHOR: provision_test_environment:odoo_can_read]
 
     def _run(self, exists, script_exists=True, reachable=True, plan=False):
         tmp = tempfile.mkdtemp()
@@ -636,20 +637,9 @@ class MlAssetsTests(unittest.TestCase):
         run, report = Recorder(), pte.Report(False)
         with patch.object(pte.os, "geteuid", return_value=0):
             _quiet(pte.provision_ml_assets, {"hams_com": tmp}, run, report, False, reachable=lambda url: True,
-                   manifest_exists=lambda path: False)
+                   manifest_exists=lambda path: False, readable_by_odoo=lambda path: False)
         self.assertEqual(run.calls, [])
         self.assertEqual(len(report.skipped), 1)
-
-    # Tests [@ANCHOR: provision_test_environment:world_readable_path]
-    def test_world_readable_path(self):
-        tmp = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, tmp)
-        path = os.path.join(tmp, "f")
-        open(path, "w").close()
-        os.chmod(path, 0o644)
-        os.chmod(tmp, 0o700)
-        self.assertFalse(pte.world_readable_path(path))
-        self.assertTrue(pte.world_readable_path("/usr/bin/env"))
 
     def test_a_host_with_the_manifest_downloads_nothing_but_still_verifies_the_pins(self):
         tmp, run, report = self._run(exists=True)
@@ -669,6 +659,13 @@ class MlAssetsTests(unittest.TestCase):
             _quiet(pte.provision_ml_assets, {"hams_com": tmp}, run, pte.Report(False), False, reachable=lambda url: True,
                    manifest_exists=lambda path: False, is_link=lambda path: path == pte.ML_ASSET_ROOT, readable_by_odoo=lambda path: True)
         self.assertEqual(run.calls, [])
+
+    def test_odoo_can_read_asks_as_odoo(self):
+        with patch.object(pte.os, "geteuid", return_value=0), \
+                patch.object(pte.subprocess, "run", return_value=subprocess.CompletedProcess([], 1)) as probe:
+            self.assertFalse(pte.odoo_can_read("/home/ai/x"))
+        self.assertEqual(probe.call_args[0][0][-3:], ["test", "-r", "/home/ai/x"])
+        self.assertIn("runuser", probe.call_args[0][0])
 
     def test_a_failed_verification_of_an_existing_manifest_stops_provisioning(self):
         # The script writes the manifest before the verification: a run whose verification failed must fail again, never turn green.

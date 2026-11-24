@@ -613,24 +613,17 @@ def provision_user_tools(layout, run, as_user, home, report, reachable=url_reach
         report.changed("npm ci in hams_shared")
 
 
-# [@ANCHOR: provision_test_environment:world_readable_path]
-def world_readable_path(path):
-    """True when any account can read `path`: it and every directory above it grants others r (file) / x (directories).
-    A checkout under a private home (mode 700, the Debian cloud image default) is not."""
-    if not os.stat(path).st_mode & stat.S_IROTH:
-        return False
-    parent = os.path.dirname(os.path.abspath(path))
-    while True:
-        if not os.stat(parent).st_mode & stat.S_IXOTH:
-            return False
-        if parent == os.path.dirname(parent):
-            return True
-        parent = os.path.dirname(parent)
+# [@ANCHOR: provision_test_environment:odoo_can_read]
+def odoo_can_read(path):
+    """True when the `odoo` account can read `path` (a checkout under a private home is not readable by it until
+    provision_home_access runs). Uses `test -r` as odoo, so ACLs and every directory above count."""
+    wrap = as_user_command("odoo", "/var/lib/odoo")
+    return subprocess.run(wrap(["test", "-r", path]), capture_output=True, check=False).returncode == 0
 
 
 # [@ANCHOR: provision_test_environment:provision_ml_assets]
 def provision_ml_assets(layout, run, report, plan=False, reachable=url_reachable, manifest_exists=os.path.isfile,
-                        is_link=os.path.islink, readable_by_odoo=world_readable_path):
+                        is_link=os.path.islink, readable_by_odoo=odoo_can_read):
     """The browser ML assets a test host serves, made the way production makes them: the root /var/lib/odoo/hams_ml_assets
     owned by `odoo`, then hams_com's own `ham_shack/tools/provision_ml_assets.py` run as `odoo` (nice 10) when the root has
     no `manifest.json` (the script writes it last, so a half-finished download is repeated), then `--verify-relay-pins`. The pin
@@ -644,8 +637,8 @@ def provision_ml_assets(layout, run, report, plan=False, reachable=url_reachable
     script = os.path.join(layout["hams_com"], ML_ASSET_SCRIPT)
     manifest = os.path.join(ML_ASSET_ROOT, "manifest.json")
     if not plan and os.geteuid() == 0 and os.path.isfile(script) and not readable_by_odoo(script):
-        report.skip(f"browser ML assets: the `odoo` account cannot read {script} (the checkout is under a private home "
-                    "directory); put the workspace somewhere world-readable (--workspace) to provision them; "
+        report.skip(f"browser ML assets: the `odoo` account cannot read {script} (the checkout is under a directory it cannot "
+                    "traverse); put the workspace somewhere readable (--workspace) to provision them; "
                     "ham_shack's TestMlAssetsRoute fails here")
         return
     if manifest_exists(manifest):
