@@ -2743,6 +2743,13 @@ def main():
     ],
     )
 
+    # 51a. check_config_parameter_rules -- a module's ir.model.access.csv row on ir.config_parameter gives its group the whole table (every secret);
+    # it is allowed only with an ir.rule naming the group's own keys (the two config service gatekeeper groups are exempt).
+    _add(
+        "check_config_parameter_rules",
+        [python_exec, os.path.join(dir_path, "tools", "check_config_parameter_rules.py"), dir_path],
+    )
+
     # 51b. relay structural tests -- the relay's fast group of source-scanning `cargo test` tests (relay_structural.py): the privilege inventory, the
     # exposure audit, the keying and key-material scans, the demo-lock route table, the manuals rules. Lint ran none of the relay's cargo tests, and three
     # relay merges on 2026-11-08 turned relay main red with tests of exactly this kind. Selected when a file of the relay, of a crate it depends on or of a
