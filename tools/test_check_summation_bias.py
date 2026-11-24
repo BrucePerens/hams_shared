@@ -47,9 +47,10 @@ def _commit_file(repo, relpath, content, message="add"):
     _git(repo, "commit", "-q", "-m", message)
 
 
-def _run(repo, *args):
+def _run(repo, *args, env=None):
     result = subprocess.run(
-        [sys.executable, _SCRIPT, *args], cwd=repo, capture_output=True, text=True, timeout=30
+        [sys.executable, _SCRIPT, *args], cwd=repo, capture_output=True, text=True, timeout=30,
+        env={**os.environ, **env} if env else None,
     )
     return result.returncode, result.stdout + result.stderr
 
@@ -103,6 +104,24 @@ class CheckSummationBiasTests(unittest.TestCase):
         _git(self.tmp, "rm", "-q", "a.md")
         code, out = _run(self.tmp, "--staged")
         self.assertEqual(code, 0, out)
+
+    def test_a_file_named_in_hams_summation_ok_passes_and_is_announced(self):
+        _commit_file(self.tmp, "foo.py", "x = 1\n" * 100)
+        _write(os.path.join(self.tmp, "foo.py"), "x = 1\n" * 50)
+        code, out = _run(self.tmp, env={"HAMS_SUMMATION_OK": "other.py, foo.py"})
+        self.assertEqual(code, 0, out)
+        self.assertIn("HAMS_SUMMATION_OK: foo.py", out)
+        self.assertNotIn("SUMMATION BIAS DETECTED", out)
+
+    def test_hams_summation_ok_does_not_exempt_files_it_does_not_name(self):
+        _commit_file(self.tmp, "foo.py", "x = 1\n" * 100)
+        _commit_file(self.tmp, "bar.py", "x = 1\n" * 100)
+        _write(os.path.join(self.tmp, "foo.py"), "x = 1\n" * 50)
+        _write(os.path.join(self.tmp, "bar.py"), "x = 1\n" * 50)
+        code, out = _run(self.tmp, env={"HAMS_SUMMATION_OK": "foo.py"})
+        self.assertEqual(code, 1, out)
+        self.assertIn("SUMMATION BIAS DETECTED in bar.py", out)
+        self.assertNotIn("SUMMATION BIAS DETECTED in foo.py", out)
 
     def test_a_python_file_shrunk_more_than_5_percent_is_flagged(self):
         _commit_file(self.tmp, "foo.py", "x = 1\n" * 100)
