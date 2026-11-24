@@ -1770,7 +1770,7 @@ FAMILY_ACCOUNT_UNITS = {
         "socket_groups": ["hamsd_exception_report"],
         "no_proc_view": True,
         "extra_caps": ["CAP_KILL"],
-        "agent_sudo": {"hams_ai_agent": "/usr/local/sbin/run-hams-ai-agent-claude.sh"},
+        "agent_sudo": {"hams_ai_agent": "/usr/local/sbin/run-hams-triage-claude.sh"},
         "root_sudo": {"/usr/local/sbin/hams-triage-stop": "[0-9]* KILL"},
         "key_in_wrapper": True,
     },
@@ -1781,7 +1781,7 @@ FAMILY_ACCOUNT_UNITS = {
         "socket_groups": ["hamsd_exception_report"],
         "no_proc_view": True,
         "extra_caps": ["CAP_KILL"],
-        "agent_sudo": {"hams_ai_agent": "/usr/local/sbin/run-hams-ai-agent-claude.sh"},
+        "agent_sudo": {"hams_ai_agent": "/usr/local/sbin/run-hams-triage-claude.sh"},
         "root_sudo": {"/usr/local/sbin/hams-triage-stop": "[0-9]* KILL"},
         "key_in_wrapper": True,
         "odoo_writes": frozenset({"/opt/hams/spool/ticket_triage"}),
@@ -9473,6 +9473,84 @@ exec @ACCOUNT_HOME_PARENT@/hams_ai_agent/.local/bin/claude -p --output-format js
             "environments": ["prod"],
         },
         {
+            # [@ANCHOR: infrastructure:triage_claude_wrapper_pins_sandbox]
+            # Verified by [@ANCHOR: infrastructure:test_triage_claude_wrapper_pins_sandbox]
+            # The ticket triage account's ONLY reach into another account. It used to name the general
+            # run-hams-ai-agent-claude.sh (`claude "$@"`), so the "no tools, only the triage MCP server" sandbox lived in
+            # the caller's argv: a compromised triage daemon could run the model account's CLI with every tool and
+            # every MCP server. This wrapper pins it as run-hams-crawl-claude.sh does: it always runs
+            # `claude -p --output-format json --mcp-config <hams_ai_agent's mcp_config.json> --strict-mcp-config --tools ""
+            # --permission-mode bypassPermissions --model M` (bypass is needed so the MCP tools run unprompted; it is safe
+            # only because --tools "" is pinned). The caller may choose only the model (sonnet|haiku|opus) or ask for
+            # --version; the pinned flags themselves are accepted (already set), anything else is refused (exit 64)
+            # before the CLI starts. The prompt arrives on stdin. Same HOME/CWD and ci_oauth_token handling as the others.
+            "path": "/usr/local/sbin/run-hams-triage-claude.sh",
+            "content": """\
+@BASH_SHEBANG@
+set -u
+mcp_config=@ACCOUNT_HOME_PARENT@/hams_ai_agent/.claude/mcp_config.json
+model=sonnet
+version=no
+refused=
+if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then
+    version=yes
+    shift
+fi
+while [ "$#" -gt 0 ]; do
+    arg=$1
+    value=
+    if [ "$#" -ge 2 ]; then
+        value=$2
+    fi
+    case "$arg" in
+        -p|--print|--strict-mcp-config)
+            shift ;;
+        --output-format)
+            [ "$#" -ge 2 ] && [ "$value" = "json" ] || refused=1
+            shift 2 2>/dev/null || shift ;;
+        --tools)
+            [ "$#" -ge 2 ] && [ -z "$value" ] || refused=1
+            shift 2 2>/dev/null || shift ;;
+        --permission-mode)
+            [ "$#" -ge 2 ] && [ "$value" = "bypassPermissions" ] || refused=1
+            shift 2 2>/dev/null || shift ;;
+        --mcp-config)
+            [ "$#" -ge 2 ] && [ "$value" = "$mcp_config" ] || refused=1
+            shift 2 2>/dev/null || shift ;;
+        --model)
+            case "$value" in
+                sonnet|haiku|opus) model=$value ;;
+                *) refused=1 ;;
+            esac
+            shift 2 2>/dev/null || shift ;;
+        *)
+            refused=1
+            shift ;;
+    esac
+    if [ -n "$refused" ]; then
+        echo "run-hams-triage-claude.sh: argument not allowed: $arg" >&2
+        exit 64
+    fi
+done
+
+cd @ACCOUNT_HOME_PARENT@/hams_ai_agent || exit 1
+export HOME=@ACCOUNT_HOME_PARENT@/hams_ai_agent
+CI_OAUTH_TOKEN_FILE=@ACCOUNT_HOME_PARENT@/hams_ai_agent/.claude/ci_oauth_token
+if [ -s "$CI_OAUTH_TOKEN_FILE" ]; then
+    export CLAUDE_CODE_OAUTH_TOKEN
+    CLAUDE_CODE_OAUTH_TOKEN="$(cat "$CI_OAUTH_TOKEN_FILE")"
+fi
+
+if [ "$version" = "yes" ]; then
+    exec @ACCOUNT_HOME_PARENT@/hams_ai_agent/.local/bin/claude --version
+fi
+exec @ACCOUNT_HOME_PARENT@/hams_ai_agent/.local/bin/claude -p --output-format json --mcp-config "$mcp_config" --strict-mcp-config --tools "" --permission-mode bypassPermissions --model "$model"
+""",
+            "owner": "root:root",
+            "mode": "755",
+            "environments": ["prod"],
+        },
+        {
             # Same gap, same fix, sibling account -- see the run-hams-ai-agent-claude.sh entry
             # above for the full reasoning (including its 2026-10-02 ci_oauth_token re-sync
             # anchor). Content likewise copied verbatim from hams1.
@@ -10186,12 +10264,12 @@ WantedBy=timers.target
         },
         {
             # The ticket triage's own account (hamsd_ticket_triage): the one reach it has into the model's account, the Claude Code CLI wrapper as
-            # hams_ai_agent, with the CLI's own flags (the equivalent of the `odoo` grant it replaces; the `odoo` grant stays for the repeater
-            # import in Odoo, which uses the same wrapper). A wrapper that pins the flags, as run-hams-crawl-claude.sh does, is a follow-up.
+            # hams_ai_agent, through run-hams-triage-claude.sh, which pins the no-tools, triage-MCP-only sandbox itself (the `odoo` grant stays for
+            # the repeater import in Odoo, which uses the general wrapper).
             "path": "/etc/sudoers.d/ticket-triage-claude-sandbox",
             "content": (
                 "hamsd_ticket_triage ALL=(hams_ai_agent) NOPASSWD: "
-                "/usr/local/sbin/run-hams-ai-agent-claude.sh\n"
+                "/usr/local/sbin/run-hams-triage-claude.sh\n"
             ),
             "owner": "root:root",
             "mode": "440",
