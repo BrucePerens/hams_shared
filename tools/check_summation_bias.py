@@ -198,6 +198,8 @@ def main():
         sys.exit(2)
 
     violation = False
+    # HAMS_SUMMATION_OK="path1,path2" (repo-relative): an intentional deletion, named and announced, not a silent bypass.
+    exempt = {x.strip() for x in os.environ.get("HAMS_SUMMATION_OK", "").split(",") if x.strip()}
 
     for filepath in modified_files:
         # Real bug found 2026-09-10: `git diff --name-only` always reports paths relative to
@@ -259,6 +261,9 @@ def main():
                 continue
             if reduction_ratio > 0.05 and staged and _trim_recorded(filepath, repo_root):
                 print(f"✓ {filepath} shrank by {reduction_ratio:.1%}, but only to-do bullets were removed and a staged history entry records them as fixed.")
+                continue
+            if reduction_ratio > 0.05 and filepath in exempt:
+                print(f"!!! HAMS_SUMMATION_OK: {filepath} shrank by {reduction_ratio:.1%} and is EXEMPTED by name (intentional deletion; say why in the commit message).")
                 continue
             if reduction_ratio > 0.05:
                 print(f"❌ SUMMATION BIAS DETECTED in {filepath}")

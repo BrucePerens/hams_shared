@@ -5043,6 +5043,8 @@ missing sentences otherwise. `check_summation_bias.py` (the pre-commit hook and 
 than 5 % is accepted only when its whole HEAD text is present verbatim in the Markdown files of the same change (staged ones for `--staged`; a new file
 must be added to the index, an untracked one does not count). Tests: `test_check_no_rule_lost.py`, `MovedNotLostTests` in `test_check_summation_bias.py`.
 
+**Intentional deletions (`HAMS_SUMMATION_OK`, 2026-11-24).** `check_summation_bias.py` skips a file named in `HAMS_SUMMATION_OK="path1,path2"` (repo-relative, comma separated) and prints a `!!! HAMS_SUMMATION_OK:` line for each, so the exemption shows in the commit output. Only the named files are exempt; every other check is unchanged. Use it on the commit command line, e.g. `HAMS_SUMMATION_OK=a.py git commit`, and say why in the commit message. Tests: `test_check_summation_bias.py`.
+
 ### `[@ANCHOR: check_no_rule_lost:normalize]` `normalize(text)`
 
 Purpose: the comparison form. Argument `text` (str). Returns the text with every run of whitespace (newlines, indentation, tabs) collapsed to one space and
