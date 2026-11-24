@@ -528,6 +528,15 @@ class OdooTests(unittest.TestCase):
             raise urllib.error.URLError("403")
 
         self.assertFalse(pte.url_reachable(pte.ODOO_KEY_URL, refused))
+
+        def answers(code):
+            def opener(request, timeout):
+                raise urllib.error.HTTPError(request.full_url, code, "x", {}, None)
+            return opener
+
+        self.assertTrue(pte.url_reachable(pte.PLAYWRIGHT_CDN_URL, answers(400)))
+        for code in (403, 407, 502):
+            self.assertFalse(pte.url_reachable(pte.PLAYWRIGHT_CDN_URL, answers(code)))
         response = MagicMock(status=200)
         response.__enter__ = MagicMock(return_value=response)
         response.__exit__ = MagicMock(return_value=False)

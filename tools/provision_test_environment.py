@@ -499,11 +499,14 @@ def odoo_changelog_entry(sha, day, date_rfc2822, branch=ODOO_BRANCH):
 
 # [@ANCHOR: provision_test_environment:url_reachable]
 def url_reachable(url, opener=urllib.request.urlopen, timeout=15):
-    """True when `url` answers a HEAD request with 2xx or 3xx. A cloud session's proxy refuses some hosts
-    (nightly.odoo.com, cdn.playwright.dev) with 403, which is False here."""
+    """True when the host behind `url` answers a HEAD request: 2xx or 3xx, or a 4xx other than 403 and 407 (the CDN root
+    cdn.playwright.dev answers 400 and is up). A cloud session's proxy refuses some hosts (nightly.odoo.com,
+    cdn.playwright.dev) with 403, which is False here, as is any 5xx or a connection failure."""
     try:
         with opener(urllib.request.Request(url, method="HEAD"), timeout=timeout) as response:
             return 200 <= response.status < 400
+    except urllib.error.HTTPError as e:
+        return e.code < 500 and e.code not in (403, 407)
     except (urllib.error.URLError, OSError):
         return False
 
