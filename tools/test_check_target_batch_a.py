@@ -35,6 +35,7 @@ BATCH_A = {
     "check_module_subpackage_imports.py": ((), None),
     "check_rabbitmq_pool.py": ((), None),
     "check_registry_test_cr_usage.py": ((), None),
+    "check_config_parameter_rules.py": ((), None),
     "check_res_config_settings_access.py": ((), None),
     "check_self_writeable_field_tests.py": ((), None),
     "check_shebang.py": ((), None),
