@@ -517,6 +517,8 @@ def provision_odoo(run, report, systemd, plan=False, reachable=lambda: url_reach
     if reachable():
         source = next(f for f in infrastructure.MANIFEST["static_files"] if f["path"] == ODOO_SOURCE_LIST)
         if not plan:
+            # A fresh Debian cloud image has no gpg, and the key install runs `gpg --dearmor`.
+            _install_apt(run, ["gnupg"], "gnupg", report)
             fetched = provision_cache.fetch(ODOO_KEY_URL)
             provision_cache.install(fetched, "/tmp/hams-odoo.key", 0o644)
             infrastructure.hook_install_odoo_key({}, "", "/tmp/hams-odoo.key", run)
