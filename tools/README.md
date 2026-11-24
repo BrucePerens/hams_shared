@@ -2711,7 +2711,7 @@ the coordinator runs those.
 
 ### `[@ANCHOR: infrastructure:test_environment_apt_packages]` `MANIFEST["test_environment_apt_packages"]`
 
-Purpose: the apt packages a test runner needs beyond MANIFEST `apt_packages`: socat (HamsHttpCase's TLS: Transport Layer Security proxy),
+Purpose: the apt packages a test runner needs beyond MANIFEST `apt_packages`: libnss3-tools (certutil, for demo_kiosk), socat (HamsHttpCase's TLS: Transport Layer Security proxy),
 iproute2, nodejs and npm, chromium and fonts, golang-go, the Rust crates' and the relay's build dependencies,
 python3-lxml-html-clean and the daemons' test libraries. Kept out of `apt_packages` on purpose: `test.py`'s pre-flight
 requires every `apt_packages` entry on every host (the dev box included), and production needs none of these.
