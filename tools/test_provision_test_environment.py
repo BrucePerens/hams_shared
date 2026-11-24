@@ -636,8 +636,31 @@ class MlAssetsTests(unittest.TestCase):
         run, report = Recorder(), pte.Report(plan)
         with patch.object(pte.os, "geteuid", return_value=0):
             _quiet(pte.provision_ml_assets, {"hams_com": tmp}, run, report, plan, reachable=lambda url: reachable,
-                   manifest_exists=lambda path: exists)
+                   manifest_exists=lambda path: exists, readable_by_odoo=lambda path: True)
         return tmp, run, report
+
+    def test_a_checkout_the_odoo_account_cannot_read_is_a_reported_skip(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp)
+        os.makedirs(os.path.join(tmp, "ham_shack", "tools"))
+        open(os.path.join(tmp, "ham_shack", "tools", "provision_ml_assets.py"), "w").close()
+        run, report = Recorder(), pte.Report(False)
+        with patch.object(pte.os, "geteuid", return_value=0):
+            _quiet(pte.provision_ml_assets, {"hams_com": tmp}, run, report, False, reachable=lambda url: True,
+                   manifest_exists=lambda path: False)
+        self.assertEqual(run.calls, [])
+        self.assertEqual(len(report.skipped), 1)
+
+    # Tests [@ANCHOR: provision_test_environment:world_readable_path]
+    def test_world_readable_path(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp)
+        path = os.path.join(tmp, "f")
+        open(path, "w").close()
+        os.chmod(path, 0o644)
+        os.chmod(tmp, 0o700)
+        self.assertFalse(pte.world_readable_path(path))
+        self.assertTrue(pte.world_readable_path("/usr/bin/env"))
 
     def test_a_host_with_the_manifest_downloads_nothing_but_still_verifies_the_pins(self):
         tmp, run, report = self._run(exists=True)
@@ -655,7 +678,7 @@ class MlAssetsTests(unittest.TestCase):
         run = Recorder()
         with patch.object(pte.os, "geteuid", return_value=0), self.assertRaisesRegex(RuntimeError, "symbolic link"):
             _quiet(pte.provision_ml_assets, {"hams_com": tmp}, run, pte.Report(False), False, reachable=lambda url: True,
-                   manifest_exists=lambda path: False, is_link=lambda path: path == pte.ML_ASSET_ROOT)
+                   manifest_exists=lambda path: False, is_link=lambda path: path == pte.ML_ASSET_ROOT, readable_by_odoo=lambda path: True)
         self.assertEqual(run.calls, [])
 
     def test_a_failed_verification_of_an_existing_manifest_stops_provisioning(self):
@@ -668,7 +691,7 @@ class MlAssetsTests(unittest.TestCase):
         def failing(command, **kwargs):
             raise subprocess.CalledProcessError(1, command)
         with patch.object(pte.os, "geteuid", return_value=0), self.assertRaises(subprocess.CalledProcessError):
-            _quiet(pte.provision_ml_assets, {"hams_com": tmp}, failing, pte.Report(False), False, manifest_exists=lambda path: True)
+            _quiet(pte.provision_ml_assets, {"hams_com": tmp}, failing, pte.Report(False), False, manifest_exists=lambda path: True, readable_by_odoo=lambda path: True)
 
     def test_a_host_with_the_manifest_and_no_script_has_nothing_to_verify_with(self):
         _tmp, run, report = self._run(exists=True, script_exists=False)
