@@ -568,6 +568,25 @@ class OdooTests(unittest.TestCase):
         self.assertEqual(run.calls, [["systemctl", "disable", "--now", "odoo"]])
 
 
+class RunnerTraverseTests(unittest.TestCase):
+    # Tests [@ANCHOR: provision_test_environment:provision_runner_traverse]
+
+    def _go(self, user, members, plan=False):
+        run, report = Recorder(), pte.Report(plan)
+        pte.provision_runner_traverse(user, run, report, plan, group_members=lambda name: members)
+        return run, report
+
+    def test_runner_is_added_to_the_group(self):
+        run, report = self._go("ai", ["hamsd_x"])
+        self.assertEqual(run.calls, [["usermod", "-aG", "hams_traverse", "ai"]])
+        self.assertEqual(len(report.changes), 1)
+
+    def test_member_missing_group_plan_and_root_change_nothing(self):
+        for args in (("ai", ["ai"]), ("ai", None), ("root", []), ("odoo", [])):
+            self.assertEqual(self._go(*args)[0].calls, [])
+        self.assertEqual(self._go("ai", [], plan=True)[0].calls, [])
+
+
 class KopiaAndUserToolTests(unittest.TestCase):
     # Tests [@ANCHOR: provision_test_environment:provision_kopia]
     # Tests [@ANCHOR: provision_test_environment:provision_user_tools]
