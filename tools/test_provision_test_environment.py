@@ -866,6 +866,19 @@ class ServiceAndDatabaseTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 pte.role_sql(bad)
 
+    def test_an_odoo_role_that_is_not_a_superuser_is_altered(self):
+        def probe(cmd, **kw):
+            sql = cmd[-1]
+            text = "postgres\nroot\n" if "rolsuper" in sql else (
+                "postgres\nodoo\nroot\n" if "pg_roles" in sql else "postgres\nhams_test\n")
+            return subprocess.CompletedProcess(cmd, 0, stdout=text)
+
+        run, report = Recorder(), pte.Report()
+        with patch.object(pte.subprocess, "run", side_effect=probe):
+            pte.provision_database(run, "root", report)
+        self.assertEqual([c[-1] for c in run.calls], ["ALTER ROLE odoo WITH SUPERUSER LOGIN"])
+        self.assertEqual(len(report.changes), 1)
+
     def test_database_steps_only_when_missing(self):
         def probe(cmd, **kw):
             text = "postgres\nodoo\nroot\n" if "pg_roles" in cmd[-1] else "postgres\nhams_test\n"
