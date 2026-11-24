@@ -345,7 +345,6 @@
  "docs/deploy/HAMS_COM_PEN_APPLICATION.md|path|ham_onboarding/tests/test_lotw_consume.py",
  "docs/deploy/HAMS_COM_PEN_APPLICATION.md|path|night_shift_todo/medium/wire-up-assigned-pen-66926-in-auth-gateway-e14a7c2f.md",
  "docs/deploy/LOTW_CA_CHAIN.md|config|HAMS_LOTW_REAL_TQ6",
- "docs/deploy/LOTW_CA_CHAIN.md|function|X509StoreContext()",
  "docs/deploy/LOTW_CA_CHAIN.md|path|LOTW_USER_GUIDE.md",
  "docs/deploy/LOTW_CA_CHAIN.md|path|ham_onboarding/LOTW_MTLS_SETUP.md",
  "docs/deploy/LOTW_CA_CHAIN.md|path|ham_onboarding/controllers/lotw_auth.py",
