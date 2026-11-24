@@ -801,13 +801,21 @@ def _psql(sql):
 
 # [@ANCHOR: provision_test_environment:provision_database]
 def provision_database(run, runner_user, report):
-    """The odoo and runner roles (role_sql) and an empty TEST_DATABASE owned by odoo, each only when missing."""
+    """The odoo and runner roles (role_sql) and an empty TEST_DATABASE owned by odoo, each only when missing; odoo is
+    made a superuser when the package created it without."""
     roles = subprocess.run(_psql("SELECT rolname FROM pg_roles"), capture_output=True, text=True, check=True)
     have = set(roles.stdout.split())
     wanted = {"odoo"} | ({runner_user} if runner_user not in ("postgres",) else set())
     if not wanted <= have:
         run(_psql(role_sql(runner_user)))
         report.changed(f"created PostgreSQL role(s) {' '.join(sorted(wanted - have))}")
+    # The odoo package's postinst creates the role without SUPERUSER; test.py's schema rebuild runs as odoo and
+    # needs CREATE EXTENSION vector ("permission denied to create extension").
+    supers = subprocess.run(_psql("SELECT rolname FROM pg_roles WHERE rolsuper"), capture_output=True, text=True,
+                            check=True)
+    if "odoo" in have and "odoo" not in supers.stdout.split():
+        run(_psql("ALTER ROLE odoo WITH SUPERUSER LOGIN"))
+        report.changed("made the PostgreSQL role odoo a superuser (test hosts only)")
     dbs = subprocess.run(_psql("SELECT datname FROM pg_database"), capture_output=True, text=True, check=True)
     if TEST_DATABASE not in dbs.stdout.split():
         run(["runuser", "-u", "postgres", "--", "createdb", "-O", "odoo", TEST_DATABASE])
