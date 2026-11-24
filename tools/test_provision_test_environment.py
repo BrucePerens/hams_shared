@@ -596,6 +596,26 @@ class RunnerTraverseTests(unittest.TestCase):
         self.assertEqual(self._go("ai", [], plan=True)[0].calls, [])
 
 
+class HomeAccessTests(unittest.TestCase):
+    # Tests [@ANCHOR: provision_test_environment:provision_home_access]
+
+    def _go(self, home, mode, acl_text="", plan=False):
+        run, report = Recorder(), pte.Report(plan)
+        with patch.object(pte.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, stdout=acl_text)):
+            pte.provision_home_access(home, run, report, plan, mode=mode)
+        return run, report
+
+    def test_a_private_home_gets_a_traverse_only_entry_for_odoo(self):
+        run, report = self._go("/home/ai", 0o700)
+        self.assertEqual(run.calls, [["setfacl", "-m", "u:odoo:--x", "/home/ai"]])
+        self.assertEqual(len(report.changes), 1)
+
+    def test_open_homes_existing_entries_plan_and_root_change_nothing(self):
+        for args in (("/home/ai", 0o755), ("/home/ai", 0o700, "user:odoo:--x\n"), ("/root", 0o700)):
+            self.assertEqual(self._go(*args)[0].calls, [])
+        self.assertEqual(self._go("/home/ai", 0o700, plan=True)[0].calls, [])
+
+
 class KopiaAndUserToolTests(unittest.TestCase):
     # Tests [@ANCHOR: provision_test_environment:provision_kopia]
     # Tests [@ANCHOR: provision_test_environment:provision_user_tools]
