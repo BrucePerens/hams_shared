@@ -77,6 +77,7 @@ pagerduty-maintenance status                                              # exit
   and failures during maintenance do not count: after it ends, a check still failing needs the normal consecutive failures
   before it pages. The monitors only read the file (their units run with a read-only `/etc`); `start` and `status` remove an
   expired file.
+- `site_monitor.py`: a reply cut off in flight (`http.client.HTTPException`) from a paging channel or the heartbeat URL is a failed send, logged, not a crash that skips saving the state [@ANCHOR: site_monitor:http_exception_is_a_failed_send].
 - Install the command on any host that runs the daemon: `sudo install -m 0755 pager_duty/daemon/pagerduty_maintenance.py
   /usr/local/sbin/pagerduty-maintenance` (it is one stdlib-only Python 3 file) and `sudo install -d -m 0755 /etc/pagerduty`.
   `hams_shared/tools/infrastructure.py` does both on hosts it provisions.
