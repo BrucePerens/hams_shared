@@ -5483,9 +5483,15 @@ class ExternalFetchUnitsNeverActivatedInTestTests(unittest.TestCase):
             self.assertGreaterEqual(len(secret), 43)
             self.assertRegex(secret, r"^[A-Za-z0-9_=+/-]+$")
             self.assertEqual(secret, open(bot).read().strip())
-            for path in wrote:
-                self.assertEqual(0o600, stat.S_IMODE(os.stat(path).st_mode))
+            self.assertEqual(0o640, stat.S_IMODE(os.stat(keys).st_mode))
+            self.assertEqual(0o600, stat.S_IMODE(os.stat(bot).st_mode))
             self.assertEqual([], sf_fixtures.generate_band_keys(band_keys_file=keys, bot_key_file=bot))
+            grouped, owned = [], []
+            sf_fixtures.generate_band_keys(band_keys_file=keys + "2", bot_key_file=bot + "2",
+                                           chown=lambda path, who: owned.append((path, who)),
+                                           chown_group=lambda path, group: grouped.append((path, group)))
+            self.assertEqual([(keys + "2", "hamsd_simband")], grouped)
+            self.assertEqual([(bot + "2", "odoo"), (os.path.dirname(bot + "2"), "odoo")], owned)
             self.assertNotEqual(sf_fixtures.new_band_secret(), sf_fixtures.new_band_secret())
 
     def test_deployed_source_layout_is_mirrored_for_the_units_that_run_from_it(self):

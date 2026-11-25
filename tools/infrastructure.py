@@ -13661,7 +13661,10 @@ def prepare_test_host_for_smoketest(run_cmd_func, env_vars, hams_com_dir, hams_o
         {"hams_com": hams_com_dir, "hams_open": hams_open_dir},
         chown=lambda path, owner: shutil.chown(path, owner, owner),
     )
-    sf.generate_band_keys(chown=lambda path, owner: shutil.chown(path, owner, owner))
+    sf.generate_band_keys(
+        chown=lambda path, owner: shutil.chown(path, owner, owner),
+        chown_group=lambda path, group: shutil.chown(path, "root", group),
+    )
     try:
         sf.install_observer_dependencies(run_cmd_func)
     except (subprocess.CalledProcessError, OSError) as e:
