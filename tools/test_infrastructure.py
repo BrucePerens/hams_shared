@@ -5502,6 +5502,9 @@ class ExternalFetchUnitsNeverActivatedInTestTests(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(copied[0], "publish.py")))
             self.assertFalse(os.path.exists(os.path.join(copied[0], "__pycache__")))
 
+    def test_dnspython_is_a_manifest_apt_package_because_ham_ipv6net_depends_on_it(self):
+        self.assertIn("python3-dnspython", {p["name"] for p in infra.MANIFEST["apt_packages"]})
+
     def test_the_exception_reporter_is_installed_with_the_module_it_imports(self):
         paths = {f.get("path") for f in infra.MANIFEST["static_files"]}
         self.assertIn("/opt/hams/daemons/exception_reporter.py", paths)
