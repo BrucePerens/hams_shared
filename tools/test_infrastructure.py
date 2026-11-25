@@ -5490,7 +5490,7 @@ class ExternalFetchUnitsNeverActivatedInTestTests(unittest.TestCase):
             sf_fixtures.generate_band_keys(band_keys_file=keys + "2", bot_key_file=bot + "2",
                                            chown=lambda path, who: owned.append((path, who)),
                                            chown_group=lambda path, group: grouped.append((path, group)))
-            self.assertEqual([(keys + "2", "hamsd_simband")], grouped)
+            self.assertEqual([(keys + "2", "hams_band_keys")], grouped)
             self.assertEqual([(bot + "2", "odoo"), (os.path.dirname(bot + "2"), "odoo")], owned)
             self.assertNotEqual(sf_fixtures.new_band_secret(), sf_fixtures.new_band_secret())
 
@@ -6287,11 +6287,26 @@ class SimulatedBandAccountTests(unittest.TestCase):
         self.assertEqual(len(entry), 1)
         self.assertEqual(
             (entry[0]["owner"], entry[0]["provision_mode"], entry[0]["environments"]),
-            ("root:hamsd_simband", "750", ["prod", "test"]),
+            ("root:hams_band_keys", "750", ["prod", "test"]),
         )
         # Only the directory: provisioning never writes, re-owns or re-modes the secrets inside it.
         self.assertNotIn("recursive_owner", entry[0])
         self.assertEqual([e for e in infra.MANIFEST["static_files"] if e["path"].startswith("/etc/hams-band/")], [])
+
+    def test_odoo_cannot_read_the_band_keys_only_the_sfu_account_is_in_their_group(self):
+        # odoo is in hamsd_simband to read the recordings, so the key directory must not be group hamsd_simband: a group odoo is in
+        # would let it (and any addon code) read every bot host's secret. The keys get a group of their own.
+        entry = [d for d in infra.MANIFEST["directories"] if d["path"] == "/etc/hams-band"][0]
+        group = entry["owner"].split(":")[1]
+        self.assertNotEqual(group, "hamsd_simband")
+        accounts = infra.MANIFEST["system_accounts"]
+        for acc in accounts:
+            if acc["group"] == group:
+                self.assertNotIn("odoo", acc.get("add_to_users", []))
+        sfu = [a for a in accounts if a["user"] == "hamsd_simband"][0]
+        self.assertIn(group, sfu["member_of"])
+        self.assertEqual(
+            [a["user"] for a in accounts if a["user"] != "hamsd_simband" and group in a.get("member_of", [])], [])
 
     def test_the_account_is_a_nologin_family_account_odoo_reads_through(self):
         account = [a for a in infra.MANIFEST["system_accounts"] if a["user"] == "hamsd_simband"]
@@ -6299,7 +6314,7 @@ class SimulatedBandAccountTests(unittest.TestCase):
         self.assertEqual(
             {k: account[0][k] for k in ("group", "home", "shell", "add_to_users", "member_of", "not_member_of", "environments")},
             {"group": "hamsd_simband", "home": "/nonexistent", "shell": "/usr/sbin/nologin", "add_to_users": ["odoo"],
-             "member_of": ["hams_traverse"], "not_member_of": ["hams_com"], "environments": ["prod", "test"]},
+             "member_of": ["hams_traverse", "hams_band_keys"], "not_member_of": ["hams_com"], "environments": ["prod", "test"]},
         )
         rules = infra.FAMILY_ACCOUNT_UNITS[self.UNIT]
         self.assertTrue(rules["no_key"] and rules["odoo_reads"] and rules["no_state"])
@@ -6430,7 +6445,8 @@ class FamilyAccountUnitTests(_SafePatchTestCase):
                     self.assertIn("odoo", account["add_to_users"])
                 # The traversal group (not hams_com) is what lets the account reach /opt/hams, and the
                 # account is taken out of hams_com so it cannot read the ADIF queue or other hams_com data.
-                self.assertEqual(account["member_of"], ["hams_traverse"])
+                # The SFU also joins hams_band_keys, the group of its hand-placed secrets (odoo is not in it).
+                self.assertEqual(account["member_of"], ["hams_traverse"] + (["hams_band_keys"] if unit == "hams.simulated.band.service" else []))
                 self.assertEqual(account["not_member_of"], ["hams_com"])
                 self.assertEqual(account["environments"], ["prod", "test"])
 
