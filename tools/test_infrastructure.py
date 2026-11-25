@@ -466,6 +466,8 @@ class PdnsPublicConfigTests(_TmpDirTestCase):
         self.assertEqual(c["gsqlite3-callbook-database"], "/var/lib/powerdns/callbook/callbook.sqlite3")
         self.assertNotIn("recursor", c)
         self.assertNotIn("local-port", c, "port 53 is the default")
+        # ns1 has AAAA glue: listen on IPv6 too, but never fail to start on a host with IPv6 disabled
+        self.assertEqual((c["local-address"], c["local-address-nonexist-fail"]), ("0.0.0.0, ::", "no"))
         # hams1 is the primary for prove1 (ns2) only: transfers to its address, no NOTIFY accepted, main backend DNSSEC-capable (hams.com unsigned)
         self.assertEqual((c["primary"], c["secondary"], c["disable-axfr"], c["allow-notify-from"]), ("yes", "no", "no", ""))
         self.assertEqual((c["allow-axfr-ips"], c["also-notify"], c["default-api-rectify"]), ("149.28.221.130", "149.28.221.130", "yes"))
