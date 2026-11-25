@@ -3211,6 +3211,18 @@ def test_env_call_with_su_true_is_forbidden_privilege_escalation():
     assert any("su=True" in e and "PRIVILEGE ESCALATION" in e for e in errors)
 
 
+def test_sudo_reached_through_methodcaller_or_getattribute_is_forbidden():
+    for source in (
+        "rec = operator.methodcaller('sudo')(rec)\n",
+        "rec = rec.__getattribute__('sudo')()\n",
+        "fn = operator.attrgetter('sudo')(rec)\n",
+    ):
+        errors, _warnings = _dict_findings(source)
+        assert any("Obfuscated use of sudo" in e for e in errors), source
+    errors, _warnings = _dict_findings("rec = operator.methodcaller('exists')(rec)\n")
+    assert not any("Obfuscated use of sudo" in e for e in errors)
+
+
 def test_commit_on_env_cr_inside_a_test_file_is_test_cursor_corruption():
     source = "self.env.cr.commit()\n"
     errors, _warnings = _dict_findings(
