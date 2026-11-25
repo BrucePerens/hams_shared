@@ -3544,6 +3544,17 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                             "CRITICAL AI LAZINESS: Hollow assertion (comparing a variable to itself) is banned.",
                         )
 
+            if (
+                self.is_odoo_module
+                and getattr(node.func, "attr", getattr(node.func, "id", ""))
+                in ("methodcaller", "attrgetter", "__getattribute__", "__getattr__")
+                and any(isinstance(a, ast.Constant) and a.value == "sudo" for a in node.args)
+            ):
+                self.add_error(
+                    node.lineno,
+                    "[!] DIAGNOSTIC FOR AI: Obfuscated use of sudo via methodcaller()/attrgetter()/__getattribute__() detected and blocked.",
+                )
+
             if getattr(node.func, "attr", getattr(node.func, "id", "")) == "env":
                 for kw in node.keywords:
                     if kw.arg == "su" and self.is_odoo_module:
