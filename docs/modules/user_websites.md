@@ -1098,6 +1098,10 @@ The tour `owner_site_tour` (`static/tests/tours/owner_site_tour.js`), started by
 
 `_own_page(self, profile_user, profile_group, page_id)`. Loads the page as the service account and **returns** it, or raises 404 when it does not exist, belongs to another user or group, or its `url` is not `/<slug>` or under `/<slug>/`. The last check keeps a page that was somehow moved out of the owner's address space from being edited here. Archived pages are not found (see `_own_page_any`). Test: `test_21_page_urls_stay_in_the_owners_namespace` and `test_11_cannot_touch_other_members_content`.
 
+### `user_websites:fn_check_member_page_url` [@ANCHOR: user_websites:fn_check_member_page_url]
+
+`_check_member_page_url(self, url, owner_user_id, group_id)` on `website.page`, called from `create()` and from `write()` when `url` is in the values. For an administrator, the service account, the ownership-bypass group or a superuser environment it does nothing. For any other caller it raises `AccessError` unless `url` is `/<slug>` or starts with `/<slug>/` for the page's owner (a member or a group, slug read through the service account) and has no `..` segment. This keeps a member who calls the ORM directly from claiming `/privacy-update` or another member's address; the site editor already builds only such addresses. **Returns:** nothing. Test: `test_05b_member_page_url_stays_in_own_namespace`.
+
 ### `user_websites:fn_owner_back_to_editor` [@ANCHOR: user_websites:fn_owner_back_to_editor]
 
 `_back_to_editor(self, slug, page_id, error)`. **Returns:** a redirect (Odoo's default 303) to `/my/site/<slug>/page/<page_id>?error=<error>`, or to `.../page/new` when `page_id` is not ASCII digits. Used by the save route when an existing page is not editable (`not_editable`). `slug` is quoted. Test: `test_helper_functions_are_exercised`.
