@@ -3979,8 +3979,9 @@ MANIFEST = {
             # `ufw allow 53/tcp` by hand. default-soa-content gives every zone
             # pdns_sync creates a real SOA instead of PowerDNS's built-in
             # 'a.misconfigured.dns.server.invalid'; existing zones keep theirs.
-            # IPv4 only for now: listening on '::' too would fail pdns.service on
-            # a host with IPv6 disabled (local-address-nonexist-fail).
+            # Listens on IPv4 and IPv6 (ns1's glue has an AAAA record).
+            # local-address-nonexist-fail=no keeps pdns.service starting on a host
+            # with IPv6 disabled: the '::' listener is then just skipped.
             #
             # ONE PowerDNS owns port 53 and answers both the personal zones (backend
             # "main") and callbook.{DOMAIN} (backend "callbook", its own SQLite file,
@@ -4024,7 +4025,8 @@ gsqlite3-main-database=/var/lib/powerdns/pdns.sqlite3
 gsqlite3-main-dnssec=yes
 gsqlite3-callbook-database=/var/lib/powerdns/callbook/callbook.sqlite3
 gsqlite3-callbook-dnssec=no
-local-address=0.0.0.0
+local-address=0.0.0.0, ::
+local-address-nonexist-fail=no
 default-soa-content=ns1.{DOMAIN} hostmaster.{DOMAIN} 0 600 300 604800 300
 api=yes
 api-key={PDNS_API_KEY}
