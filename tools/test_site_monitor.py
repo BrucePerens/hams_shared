@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 # Copyright © Bruce Perens K6BP. License: AGPL-3.0.
 """Tests for site_monitor.py and its MANIFEST units (hams1 readiness audit row 3)."""
+import http.client
 import json
 import os
 import subprocess
@@ -351,6 +352,29 @@ class DeliveryTests(unittest.TestCase):
             raise OSError("down")
 
         self.assertEqual(sm.deliver([("page", "odoo", "dead")], env, "h", channels=self._channels(bad, bad)), [])
+
+    def test_a_channel_that_gets_a_cut_off_reply_is_a_failed_send_not_a_crash(self):
+        # Tests [@ANCHOR: site_monitor:http_exception_is_a_failed_send]
+        # A webhook that answers with garbage or hangs up mid-reply raises http.client.HTTPException, which is not an OSError.
+        # Uncaught, it ended the pass before the state was saved, so the failure count never advanced and nothing paged.
+        env = {"PAGER_FALLBACK_EMAIL": "a@b", "SMTP_HOST": "m", "PAGER_WEBHOOK_URL": "https://h"}
+        mails = []
+
+        def cut_off(*a, **k):
+            raise http.client.BadStatusLine("")
+
+        done = sm.deliver([("page", "odoo", "dead")], env, "h",
+                          channels=self._channels(webhook=cut_off, email=lambda e, k, t, x: mails.append(t)))
+        self.assertEqual(len(done), 1)
+        self.assertEqual(mails, ["[hams.com DOWN] odoo"])
+
+    def test_a_heartbeat_with_a_cut_off_reply_is_a_failed_ping_not_a_crash(self):
+        # Tests [@ANCHOR: site_monitor:http_exception_is_a_failed_send]
+        def cut_off(request, timeout=0):
+            raise http.client.IncompleteRead(b"")
+
+        with self.assertLogs(sm.logger, level="ERROR"):
+            self.assertFalse(sm.ping_heartbeat("https://beat/ping", urlopen=cut_off))
 
     def test_a_new_channel_is_one_entry_and_unconfigured_channels_are_skipped(self):
         got = []

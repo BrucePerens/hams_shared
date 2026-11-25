@@ -40,6 +40,7 @@ instead of looking like protection that is not there.
 Exit status: 0 all checks pass; 1 at least one check fails; 2 no paging channel configured; 3 a page could not be
 delivered on any channel.
 """
+import http.client
 import json
 import logging
 import math
@@ -449,7 +450,8 @@ def deliver(messages, env, host, channels=CHANNELS):
                 send(env, kind, title, text)
                 sent = True
                 logger.info("%s message sent for %s via %s", kind, check, name)
-            except (OSError, urllib.error.URLError, ValueError, smtplib.SMTPException) as exc:
+            # [@ANCHOR: site_monitor:http_exception_is_a_failed_send]
+            except (OSError, urllib.error.URLError, ValueError, smtplib.SMTPException, http.client.HTTPException) as exc:
                 logger.error("%s page failed: %s", name, exc)
         if sent:
             delivered.append((kind, check, detail))
@@ -465,7 +467,7 @@ def ping_heartbeat(url, urlopen=urllib.request.urlopen, token=None):
         with urlopen(request, timeout=15):
             pass
         return True
-    except (OSError, urllib.error.URLError, ValueError) as exc:
+    except (OSError, urllib.error.URLError, ValueError, http.client.HTTPException) as exc:
         logger.error("Dead-man heartbeat ping failed: %s", exc)
         return False
 
