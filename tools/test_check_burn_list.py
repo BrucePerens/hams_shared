@@ -3221,6 +3221,19 @@ def test_sudo_reached_through_methodcaller_or_getattribute_is_forbidden():
         assert any("Obfuscated use of sudo" in e for e in errors), source
     errors, _warnings = _dict_findings("rec = operator.methodcaller('exists')(rec)\n")
     assert not any("Obfuscated use of sudo" in e for e in errors)
+def test_with_user_on_the_administrator_by_id_or_keyword_is_forbidden_in_module_code():
+    for source in (
+        "rows = self.env['x'].with_user(2).search([], limit=1)\n",
+        "rows = self.env['x'].with_user(user=1).search([], limit=1)\n",
+        "rows = self.env['x'].with_user(self.env.ref('base.user_admin').id).search([], limit=1)\n",
+    ):
+        errors, _warnings = _dict_findings(source)
+        assert any("ZERO-SUDO VIOLATION" in e for e in errors), source
+    tests_path = "/tmp/some_module/tests/test_x.py"
+    errors, _warnings = _dict_findings(
+        "rows = self.env['x'].with_user(self.env.ref('base.user_admin').id).search([], limit=1)\n", tests_path
+    )
+    assert not any("ZERO-SUDO VIOLATION" in e for e in errors)
 
 
 def test_commit_on_env_cr_inside_a_test_file_is_test_cursor_corruption():

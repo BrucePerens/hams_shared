@@ -2572,8 +2572,32 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
                         "Ambiguous ORM call: Use `self.env['your.model']...`",
                     )
                 elif attr in ("with_user", "with_context"):
-                    if attr == "with_user" and getattr(node, "args", []):
-                        arg0 = node.args[0]
+                    if attr == "with_user" and (node.args or node.keywords):
+                        arg0 = node.args[0] if node.args else node.keywords[0].value
+                        # `with_user(user=1)` is the same call as `with_user(1)`; uid 2 is base.user_admin, a
+                        # group_system user, and `ref('base.user_admin').id` reaches it through an xmlid; tests
+                        # may still impersonate the administrator, like the ref() form below.
+                        in_tests = "/tests/" in self.filepath.replace("\\", "/")
+                        if (
+                            not in_tests
+                            and (
+                                (isinstance(arg0, ast.Constant) and arg0.value == 2)
+                                or (
+                                    isinstance(arg0, ast.Attribute)
+                                    and arg0.attr == "id"
+                                    and isinstance(arg0.value, ast.Call)
+                                    and isinstance(arg0.value.func, ast.Attribute)
+                                    and arg0.value.func.attr == "ref"
+                                    and arg0.value.args
+                                    and isinstance(arg0.value.args[0], ast.Constant)
+                                    and arg0.value.args[0].value in ("base.user_admin", "base.user_root")
+                                )
+                            )
+                        ):
+                            self.add_error(
+                                node.lineno,
+                                "CRITICAL ZERO-SUDO VIOLATION: Using .with_user() on the administrator (uid 2 or base.user_admin/base.user_root .id) runs module code as the administrator. Resolve a designated service account with zero_sudo.security.utils._get_service_uid() instead.",
+                            )
                         if isinstance(arg0, ast.Constant) and arg0.value == 1:
                             self.add_error(
                                 node.lineno,
