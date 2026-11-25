@@ -3256,6 +3256,8 @@ def test_assigning_su_on_an_environment_is_forbidden_privilege_escalation():
     assert any("'.su'" in e and "PRIVILEGE ESCALATION" in e for e in errors)
     errors, _warnings = _dict_findings("flag = self.env.su\n")
     assert not any("PRIVILEGE ESCALATION" in e for e in errors)
+    errors, _warnings = _dict_findings("env.su = False\n", "/tmp/some_module/tests/test_fake_env.py")
+    assert not any("PRIVILEGE ESCALATION" in e for e in errors)
 
 
 def test_commit_on_env_cr_inside_a_test_file_is_test_cursor_corruption():

@@ -2274,7 +2274,12 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
 
         def visit_Attribute(self, node):
             if self.is_odoo_module:
-                if node.attr == "su" and isinstance(node.ctx, ast.Store):
+                if (
+                    node.attr == "su"
+                    and isinstance(node.ctx, ast.Store)
+                    # Tests build fake environments (a dict subclass with `.su`) that never reach the ORM.
+                    and "/tests/" not in self.filepath.replace("\\", "/")
+                ):
                     # `env.su = True` flips the shared Environment into superuser mode for every later caller.
                     self.add_error(
                         node.lineno,
