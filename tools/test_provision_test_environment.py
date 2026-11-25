@@ -979,6 +979,30 @@ class ProfileTests(unittest.TestCase):
             self.assertEqual(bashrc.read().count(path), 2)  # one line: `[ -f P ] && . P`
 
 
+class BashrcLineTests(unittest.TestCase):
+    # Tests [@ANCHOR: provision_test_environment:provision_profile]
+
+    def test_a_line_appended_below_the_interactive_guard_is_moved_to_the_top(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home, path = os.path.join(tmp, "home"), os.path.join(tmp, "profile.sh")
+            os.makedirs(home)
+            line = f"[ -f {path} ] && . {path}"
+            guard = "case $- in\n    *i*) ;;\n      *) return;;\nesac\n"
+            with open(os.path.join(home, ".bashrc"), "w") as f:
+                f.write(guard + line + "\n")
+            user = __import__("pwd").getpwuid(os.getuid()).pw_name
+            layout = {"workspace": tmp, "hams_com": tmp}
+            with redirect_stdout(io.StringIO()):
+                pte.provision_profile(layout, {}, home, user, pte.Report(), path=path)
+                again = pte.Report()
+                pte.provision_profile(layout, {}, home, user, again, path=path)
+            with open(os.path.join(home, ".bashrc")) as f:
+                text = f.read()
+            self.assertEqual(text.splitlines()[0], line)
+            self.assertIn(guard, text)
+            self.assertEqual(again.changes, [])
+
+
 class SelfCheckTests(unittest.TestCase):
     # Tests [@ANCHOR: provision_test_environment:self_check_commands]
     # Tests [@ANCHOR: provision_test_environment:run_self_check]
