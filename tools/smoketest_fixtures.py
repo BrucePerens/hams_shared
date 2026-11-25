@@ -233,7 +233,11 @@ def manual_catalog_files(root):
     files = [catalog_source]
     for node in tree.body:
         if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "MANUAL_CATALOG" for t in node.targets):
-            files += [os.path.join(e["module"], e["path"]) for e in ast.literal_eval(node.value).values()]
+            # The titles are `_lt("...")` calls, which literal_eval refuses: read only the constant module/path pairs.
+            for entry in node.value.values:
+                pair = {k.value: v.value for k, v in zip(entry.keys, entry.values)
+                        if isinstance(k, ast.Constant) and isinstance(v, ast.Constant)}
+                files.append(os.path.join(pair["module"], pair["path"]))
     return files
 
 
