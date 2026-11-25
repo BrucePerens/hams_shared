@@ -1789,12 +1789,12 @@ FAMILY_ACCOUNT_UNITS = {
     # AI correction of scraped hamfest listings (daemons/event_ai_enrichment). Its Odoo key is in its family key directory; the MCP server the
     # model starts (run-event-enrichment-mcp.sh) runs as this same account (the sudoers line of hams_event_agent names it), so the account holds
     # both the key and the Web Bot Auth signing key of its page fetches. It reaches the model only through the one sudoers line below: the
-    # wrapper, with the CLI's own flags (the equivalent of the odoo grant it replaces; a wrapper that pins them is a follow-up).
+    # wrapper, with the pinned-sandbox wrapper run-hams-event-claude.sh.
     "event.ai.enrichment.service": {
         "user": "hamsd_event_enrichment",
         "environment_files": frozenset({"common.env"}),
         "socket_groups": ["hamsd_exception_report"],
-        "agent_sudo": {"hams_event_agent": "/usr/local/sbin/run-hams-event-agent-claude.sh"},
+        "agent_sudo": {"hams_event_agent": "/usr/local/sbin/run-hams-event-claude.sh"},
     },
     # The twice-daily touch of the two Claude Code CLI service accounts' OAuth sessions. It holds no Odoo key, loads no environment file and
     # writes no file of its own: it only runs `sudo -u <agent> <wrapper> -p <probe>`, one sudoers line per agent with the probe's argument
@@ -9570,6 +9570,90 @@ exec @ACCOUNT_HOME_PARENT@/hams_ai_agent/.local/bin/claude -p --output-format js
             "environments": ["prod"],
         },
         {
+            # [@ANCHOR: infrastructure:event_claude_wrapper_pins_sandbox]
+            # Verified by [@ANCHOR: infrastructure:test_event_claude_wrapper_pins_sandbox]
+            # The event enrichment account's (and odoo's) reach into hams_event_agent. They used to name the general
+            # run-hams-event-agent-claude.sh (`claude "$@"`), so the "no tools, only the enrichment MCP server" sandbox
+            # lived in the caller's argv, the gap run-hams-crawl-claude.sh and run-hams-triage-claude.sh already closed for
+            # the other two callers. This wrapper pins it: always `claude -p --output-format json --mcp-config C
+            # --strict-mcp-config --tools "" --permission-mode bypassPermissions --model M`, where C is hams_event_agent's own
+            # mcp_config.json or the inline empty config the organizer backfill uses (the only two the daemon sends), and M is
+            # sonnet|haiku|opus. `--version` alone is allowed; anything else is refused (exit 64) before the CLI starts.
+            "path": "/usr/local/sbin/run-hams-event-claude.sh",
+            "content": """\
+@BASH_SHEBANG@
+set -u
+mcp_config=@ACCOUNT_HOME_PARENT@/hams_event_agent/.claude/mcp_config.json
+empty_config=$(printf '\\173"mcpServers":\\173\\175\\175')
+chosen_config=$mcp_config
+model=sonnet
+version=no
+refused=
+if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then
+    version=yes
+    shift
+fi
+while [ "$#" -gt 0 ]; do
+    arg=$1
+    value=
+    if [ "$#" -ge 2 ]; then
+        value=$2
+    fi
+    case "$arg" in
+        -p|--print|--strict-mcp-config)
+            shift ;;
+        --output-format)
+            [ "$#" -ge 2 ] && [ "$value" = "json" ] || refused=1
+            shift 2 2>/dev/null || shift ;;
+        --tools)
+            [ "$#" -ge 2 ] && [ -z "$value" ] || refused=1
+            shift 2 2>/dev/null || shift ;;
+        --permission-mode)
+            [ "$#" -ge 2 ] && [ "$value" = "bypassPermissions" ] || refused=1
+            shift 2 2>/dev/null || shift ;;
+        --mcp-config)
+            if [ "$#" -lt 2 ]; then
+                refused=1
+            elif [ "$value" = "$mcp_config" ] || [ "$value" = "$empty_config" ]; then
+                chosen_config=$value
+            else
+                refused=1
+            fi
+            shift 2 2>/dev/null || shift ;;
+        --model)
+            case "$value" in
+                sonnet|haiku|opus) model=$value ;;
+                *) refused=1 ;;
+            esac
+            shift 2 2>/dev/null || shift ;;
+        *)
+            refused=1
+            shift ;;
+    esac
+    if [ -n "$refused" ]; then
+        echo "run-hams-event-claude.sh: argument not allowed: $arg" >&2
+        exit 64
+    fi
+done
+
+cd @ACCOUNT_HOME_PARENT@/hams_event_agent || exit 1
+export HOME=@ACCOUNT_HOME_PARENT@/hams_event_agent
+CI_OAUTH_TOKEN_FILE=@ACCOUNT_HOME_PARENT@/hams_event_agent/.claude/ci_oauth_token
+if [ -s "$CI_OAUTH_TOKEN_FILE" ]; then
+    export CLAUDE_CODE_OAUTH_TOKEN
+    CLAUDE_CODE_OAUTH_TOKEN="$(cat "$CI_OAUTH_TOKEN_FILE")"
+fi
+
+if [ "$version" = "yes" ]; then
+    exec @ACCOUNT_HOME_PARENT@/hams_event_agent/.local/bin/claude --version
+fi
+exec @ACCOUNT_HOME_PARENT@/hams_event_agent/.local/bin/claude -p --output-format json --mcp-config "$chosen_config" --strict-mcp-config --tools "" --permission-mode bypassPermissions --model "$model"
+""",
+            "owner": "root:root",
+            "mode": "755",
+            "environments": ["prod"],
+        },
+        {
             # Same gap, same fix, sibling account -- see the run-hams-ai-agent-claude.sh entry
             # above for the full reasoning (including its 2026-10-02 ci_oauth_token re-sync
             # anchor). Content likewise copied verbatim from hams1.
@@ -10301,7 +10385,7 @@ WantedBy=timers.target
             "path": "/etc/sudoers.d/event-enrichment-claude-sandbox",
             "content": (
                 "hamsd_event_enrichment ALL=(hams_event_agent) NOPASSWD: "
-                "/usr/local/sbin/run-hams-event-agent-claude.sh\n"
+                "/usr/local/sbin/run-hams-event-claude.sh\n"
             ),
             "owner": "root:root",
             "mode": "440",
@@ -10435,7 +10519,7 @@ if __name__ == "__main__":
             "path": "/etc/sudoers.d/odoo-event-agent-claude-sandbox",
             "content": (
                 "odoo ALL=(hams_event_agent) NOPASSWD: "
-                "/usr/local/sbin/run-hams-event-agent-claude.sh\n"
+                "/usr/local/sbin/run-hams-event-claude.sh\n"
             ),
             "owner": "root:root",
             "mode": "440",

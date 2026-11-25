@@ -3882,6 +3882,77 @@ class TriageClaudeWrapperTests(unittest.TestCase):
         self.assertEqual(grant["content"], "hamsd_ticket_triage ALL=(hams_ai_agent) NOPASSWD: /usr/local/sbin/run-hams-triage-claude.sh\n")
 
 
+class EventClaudeWrapperTests(unittest.TestCase):
+    """Tests [@ANCHOR: infrastructure:event_claude_wrapper_pins_sandbox]
+
+    The event enrichment account's (and odoo's) sudo grant used to run the general wrapper (`claude "$@"`), so the
+    no-tools, enrichment-MCP-only sandbox was only the caller's argv. The event wrapper pins it. Runs the rendered MANIFEST
+    content under bash with a stand-in `claude` that reports its arguments."""
+
+    PATH = "/usr/local/sbin/run-hams-event-claude.sh"
+    MCP = f"{infra.ACCOUNT_HOME_PARENT}/hams_event_agent/.claude/mcp_config.json"
+    # daemons/event_ai_enrichment/main.py CLAUDE_COMMAND after the sudo part.
+    DAEMON_ARGV = ["-p", "--output-format", "json", "--mcp-config", MCP, "--strict-mcp-config", "--tools", "",
+                   "--permission-mode", "bypassPermissions", "--model", "sonnet"]
+
+    def _run(self, argv):
+        entry = next(e for e in infra.MANIFEST["static_files"] if e["path"] == self.PATH)
+        self.assertEqual((entry["owner"], entry["mode"], entry["environments"]), ("root:root", "755", ["prod"]))
+        with tempfile.TemporaryDirectory() as tmp:
+            home = os.path.join(tmp, "hams_event_agent")
+            os.makedirs(os.path.join(home, ".claude"))
+            os.makedirs(os.path.join(home, ".local", "bin"))
+            fake = os.path.join(home, ".local", "bin", "claude")
+            with open(fake, "w") as f:
+                f.write('#!/bin/bash\necho "args=$*"\n')
+            os.chmod(fake, 0o755)
+            script = infra.format_env(entry["content"], {}).replace(f"{infra.ACCOUNT_HOME_PARENT}/hams_event_agent", home)
+            result = subprocess.run(["bash", "-c", script, "wrapper", *[a.replace(f"{infra.ACCOUNT_HOME_PARENT}/hams_event_agent", home) for a in argv]], capture_output=True, text=True, cwd=tmp)
+            return result, home
+
+    # [@ANCHOR: infrastructure:test_event_claude_wrapper_pins_sandbox]
+    def test_the_daemons_argv_runs_the_pinned_sandbox(self):
+        done, home = self._run(self.DAEMON_ARGV)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(
+            done.stdout.strip(),
+            f"args=-p --output-format json --mcp-config {home}/.claude/mcp_config.json --strict-mcp-config --tools  "
+            "--permission-mode bypassPermissions --model sonnet",
+        )
+
+    def test_the_organizer_backfill_may_pass_the_inline_empty_config_and_nothing_else_inline(self):
+        argv = [("{\"mcpServers\":{}}" if a == self.MCP else a) for a in self.DAEMON_ARGV]
+        done, _home = self._run(argv)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn('--mcp-config {"mcpServers":{}} --strict-mcp-config', done.stdout)
+        done, _home = self._run([("{\"mcpServers\":{\"x\":{\"command\":\"/bin/sh\"}}}" if a == self.MCP else a) for a in self.DAEMON_ARGV])
+        self.assertEqual(done.returncode, 64)
+
+    def test_version_alone_is_allowed(self):
+        done, _home = self._run(["--version"])
+        self.assertEqual((done.returncode, done.stdout.strip()), (0, "args=--version"))
+
+    def test_any_other_argument_is_refused_before_the_cli_starts(self):
+        for extra in (["--dangerously-skip-permissions"], ["--tools", "Bash"], ["--mcp-config", "/tmp/x.json"],
+                      ["--permission-mode", "acceptEdits"], ["--model", "../../bin/sh"], ["--allowedTools", "Bash"],
+                      ["--output-format", "stream-json"], ["write a file"], ["--settings", "/tmp/s.json"],
+                      ["--add-dir", "/"], ["--model"]):
+            with self.subTest(extra=extra):
+                done, _home = self._run(self.DAEMON_ARGV + extra)
+                self.assertEqual(done.returncode, 64, done.stdout)
+                self.assertNotIn("args=", done.stdout)
+        done, _home = self._run(["--version", "--tools", "Bash"])
+        self.assertEqual(done.returncode, 64)
+        done, _home = self._run(["--mcp-config", "/tmp/other.json"] + self.DAEMON_ARGV[:3])
+        self.assertEqual(done.returncode, 64)
+
+    def test_the_event_accounts_may_run_only_this_wrapper_as_the_agent(self):
+        grant = next(e for e in infra.MANIFEST["static_files"] if e["path"] == "/etc/sudoers.d/event-enrichment-claude-sandbox")
+        self.assertEqual(grant["content"], "hamsd_event_enrichment ALL=(hams_event_agent) NOPASSWD: /usr/local/sbin/run-hams-event-claude.sh\n")
+        odoo = next(e for e in infra.MANIFEST["static_files"] if e["path"] == "/etc/sudoers.d/odoo-event-agent-claude-sandbox")
+        self.assertEqual(odoo["content"], "odoo ALL=(hams_event_agent) NOPASSWD: /usr/local/sbin/run-hams-event-claude.sh\n")
+
+
 class SystemdUnitPathTests(unittest.TestCase):
     """A path in ReadWritePaths= that does not exist stops the service before it starts (systemd
     status 226/NAMESPACE) unless it has a leading "-". The first production release hit this on
@@ -6185,16 +6256,16 @@ class EventEnrichmentAccountTests(unittest.TestCase):
 
     def test_a_family_run_writes_the_mcp_grant_and_its_wrapper_besides_the_accounts_own_grant(self):
         self.assertEqual(infra.daemon_family_sudo_commands({"hamsd_event_enrichment"}),
-                         {"/usr/local/sbin/run-hams-event-agent-claude.sh", "/usr/local/sbin/run-event-enrichment-mcp.sh"})
+                         {"/usr/local/sbin/run-hams-event-claude.sh", "/usr/local/sbin/run-event-enrichment-mcp.sh"})
         for path in ("/etc/sudoers.d/hams_event_agent-mcp-servers", "/etc/sudoers.d/event-enrichment-claude-sandbox",
-                     "/usr/local/sbin/run-event-enrichment-mcp.sh", "/usr/local/sbin/run-hams-event-agent-claude.sh"):
+                     "/usr/local/sbin/run-event-enrichment-mcp.sh", "/usr/local/sbin/run-hams-event-claude.sh"):
             with self.subTest(path=path), infra.only_daemon_families({"hamsd_event_enrichment"}):
                 spec = [e for e in infra.MANIFEST["static_files"] if e["path"] == path][0]
                 self.assertTrue(infra._spec_selected(spec), path)
 
     def test_the_account_reaches_the_cli_through_one_sudoers_line(self):
         grant = self._static("/etc/sudoers.d/event-enrichment-claude-sandbox")
-        self.assertEqual(grant["content"], "hamsd_event_enrichment ALL=(hams_event_agent) NOPASSWD: /usr/local/sbin/run-hams-event-agent-claude.sh\n")
+        self.assertEqual(grant["content"], "hamsd_event_enrichment ALL=(hams_event_agent) NOPASSWD: /usr/local/sbin/run-hams-event-claude.sh\n")
         self.assertEqual((grant["owner"], grant["mode"], grant["environments"]), ("root:root", "440", ["prod"]))
         self.assertNotIn(self.UNIT, infra.SHARED_ODOO_ACCOUNT_UNITS)
 
@@ -8043,7 +8114,7 @@ class EventAiEnrichmentTimerUnitTests(unittest.TestCase):
             if spec["path"] == "/etc/sudoers.d/odoo-event-agent-claude-sandbox"
         ]
         self.assertEqual(len(grants), 1)
-        self.assertIn("odoo ALL=(hams_event_agent) NOPASSWD: /usr/local/sbin/run-hams-event-agent-claude.sh", grants[0]["content"])
+        self.assertIn("odoo ALL=(hams_event_agent) NOPASSWD: /usr/local/sbin/run-hams-event-claude.sh", grants[0]["content"])
 
 
 class CallsignParkingProvisioningTests(_TmpDirTestCase):
