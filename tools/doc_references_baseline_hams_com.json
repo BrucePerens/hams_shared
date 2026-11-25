@@ -62,7 +62,6 @@
  "daemons/code_review_sweep/README.md|path|hams_com/docs/code_review_reports/",
  "daemons/code_review_sweep/README.md|path|target/debug/",
  "daemons/credential_touch/README.md|adr|ADR 0070",
- "daemons/event_ai_enrichment/README.md|path|run-hams-event-agent-claude.sh",
  "daemons/event_sync/README.md|function|stored_venue_key()",
  "daemons/event_sync/README.md|function|visible_lines()",
  "daemons/fcc_uls_sync/README.md|adr|ADR 0018",
