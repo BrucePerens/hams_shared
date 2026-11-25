@@ -5502,6 +5502,11 @@ class ExternalFetchUnitsNeverActivatedInTestTests(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(copied[0], "publish.py")))
             self.assertFalse(os.path.exists(os.path.join(copied[0], "__pycache__")))
 
+    def test_the_exception_reporter_is_installed_with_the_module_it_imports(self):
+        paths = {f.get("path") for f in infra.MANIFEST["static_files"]}
+        self.assertIn("/opt/hams/daemons/exception_reporter.py", paths)
+        self.assertIn("/opt/hams/daemons/pagerduty_maintenance.py", paths)
+
     def test_manual_catalog_files_reads_a_catalogue_whose_titles_are_lazy_translation_calls(self):
         with tempfile.TemporaryDirectory() as tmp:
             controllers = os.path.join(tmp, "ham_relay_bridge", "controllers")
@@ -7490,7 +7495,7 @@ class DeployedDaemonsCopyTests(_TmpDirTestCase):
         self.assertEqual(flagged, {"/opt/hams/daemons", "/opt/hams/daemons/backup_worker"} | {
             "/opt/hams/daemons/" + n for n in (
                 "robots_txt_policy.py", "ssrf_safe_fetch.py", "glyph_normalizer.py", "repeater_page_text.py", "club_spam.py",
-                "exception_reporter.py")})
+                "exception_reporter.py", "pagerduty_maintenance.py")})
 
 
 class PreserveExistingDirectoryTests(_TmpDirTestCase):
