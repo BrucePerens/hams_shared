@@ -180,11 +180,11 @@ def new_band_secret():
 
 
 def generate_band_keys(owner="odoo", band_keys_file=BAND_KEYS_FILE, bot_key_file=BOT_KEY_FILE, chown=None,
-                       chown_group=None, band_group="hamsd_simband"):
+                       chown_group=None, band_group="hams_band_keys"):
     """Writes a throwaway band key file and the matching bot key file, each with a fresh random secret.
 
     The bot key file is 0600 (systemd's LoadCredential reads it as root). The band key file is the SFU's
-    HAMS_BAND_BOT_KEYS_FILE: root:`band_group` 0640 inside the MANIFEST's root:hamsd_simband 0750 /etc/hams-band, so the
+    HAMS_BAND_BOT_KEYS_FILE: root:`band_group` 0640 inside the MANIFEST's root:hams_band_keys 0750 /etc/hams-band, so the
     SFU's own account reads it (the SFU accepts 0600 or 0640); `chown_group(path, band_group)` sets that, and the
     MANIFEST's directory is left alone. Never overwrites a key file that already exists (a test host an operator keyed
     by hand keeps their key). Returns the paths it wrote."""

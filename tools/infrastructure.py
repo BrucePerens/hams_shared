@@ -1715,7 +1715,7 @@ FAMILY_ACCOUNT_UNITS = {
     },
     # The Simulated Band's SFU holds no Odoo key and loads no environment file. It writes only the QSO recordings, through the
     # production drop-in qso-recording.conf (so the base unit's ReadWritePaths= is empty: `no_state`), and odoo reads those
-    # recordings through the group (`odoo_reads`). Its hand-placed secrets are in /etc/hams-band, root:hamsd_simband 0750.
+    # recordings through the group (`odoo_reads`). Its hand-placed secrets are in /etc/hams-band, root:hams_band_keys 0750 (odoo is not in that group).
     "hams.simulated.band.service": {
         "user": "hamsd_simband",
         "environment_files": frozenset(),
@@ -2019,6 +2019,16 @@ MANIFEST = {
             # entry exists to create the group, and each family account lists it in member_of.
             "user": "hams_traverse",
             "group": "hams_traverse",
+            "home": "/nonexistent",
+            "shell": "/usr/sbin/nologin",
+            "environments": ["prod", "test"],
+        },
+        {
+            # The group of the Simulated Band's hand-placed secrets (/etc/hams-band: band_bot_keys, the identity key). Only the SFU's
+            # account is in it (member_of of hamsd_simband). It is NOT hamsd_simband's own group, because odoo is in that one to read
+            # the recordings, and a group odoo is in would let odoo and its addons read every bot host's secret.
+            "user": "hams_band_keys",
+            "group": "hams_band_keys",
             "home": "/nonexistent",
             "shell": "/usr/sbin/nologin",
             "environments": ["prod", "test"],
@@ -2328,7 +2338,7 @@ MANIFEST = {
             "home": "/nonexistent",
             "shell": "/usr/sbin/nologin",
             "add_to_users": ["odoo"],
-            "member_of": ["hams_traverse"],
+            "member_of": ["hams_traverse", "hams_band_keys"],
             "not_member_of": ["hams_com"],
             "environments": ["prod", "test"],
         },
@@ -3724,13 +3734,13 @@ MANIFEST = {
             # The band server's hand-placed secrets: band_bot_keys (HAMS_BAND_BOT_KEYS_FILE, one name:secret line per bot
             # host, minted with daemons/hams_simulated_band/tools/new_bot_key.sh) and, where a host sets it, the identity
             # key (HAMS_BAND_IDENT_KEY_FILE, tools/new_ident_key.py). Their content is placed by a person, never by
-            # provisioning; only the directory is the MANIFEST's. Owned by root (only root edits a key), group hamsd_simband,
-            # 0750: the SFU's account reads through the group, nobody else lists it. The SFU re-reads band_bot_keys on every bot
+            # provisioning; only the directory is the MANIFEST's. Owned by root (only root edits a key), group hams_band_keys (odoo is
+            # in hamsd_simband, so that group would hand it the keys), 0750: the SFU's account reads through the group, nobody else lists it. The SFU re-reads band_bot_keys on every bot
             # connection and on a sweep (bot_auth.rs: deleting a line revokes a host at once), so the file stays a real path
-            # the account reads, mode 0640 root:hamsd_simband (the SFU accepts 0600 or 0640 and nothing wider); a
+            # the account reads, mode 0640 root:hams_band_keys (the SFU accepts 0600 or 0640 and nothing wider); a
             # LoadCredential= snapshot would end that revocation.
             "path": "/etc/hams-band",
-            "owner": "root:hamsd_simband",
+            "owner": "root:hams_band_keys",
             "provision_mode": "750",
             "environments": ["prod", "test"],
         },
@@ -9089,8 +9099,8 @@ WorkingDirectory=/opt/hams/daemons/hams_simulated_band
 # on hams1 (/etc/systemd/system/hams.simulated.band.service.d/bot-keys.conf,
 # dated 2026-09-24). It is a file *path*, not a secret: the per-host bot key
 # lines (minted with daemons/hams_simulated_band/tools/new_bot_key.sh) stay
-# hand-placed at this path, root:hamsd_simband 0640 (the directory is the
-# MANIFEST's, root:hamsd_simband 0750), never in this unit text. Without
+# hand-placed at this path, root:hams_band_keys 0640 (the directory is the
+# MANIFEST's, root:hams_band_keys 0750), never in this unit text. Without
 # the variable the SFU starts but refuses every QAI (bot) client; with it set
 # and the file missing, the SFU fails fast at startup by design (bot_auth.rs).
 # Since 2026-10-04 a production-style provisioning run also enables this unit at boot
