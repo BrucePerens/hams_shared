@@ -27,7 +27,7 @@ Maintenance: while the pagerduty maintenance flag (`/etc/pagerduty/maintenance`,
 by `pagerduty-maintenance start`, root only) is active, every check still runs and is logged, but no page and no
 "recovered" notice is sent, failures do not count toward FAILS_BEFORE_PAGE, and check state is reset on each pass so
 paging restarts from zero afterwards. The flag expires by itself, is capped at 2 hours, and a malformed one is ignored
-(paging stays on). The monitor only reads it. The dead-man heartbeat is still sent during maintenance.
+(paging stays on). The monitor only reads it. The dead-man heartbeat is still sent during maintenance, and failing checks exit 0 then (the unit does not show as failed).
 
 Logging: quiet on success. A check's "ok" is logged once when it first appears and again when it recovers; a failing check
 is logged at ERROR on every pass. The missing-heartbeat warning is logged once per boot of the host, not every minute.
@@ -37,7 +37,7 @@ Configuration is read from the environment (the unit loads `/opt/hams/etc/site_m
 With no paging channel configured the monitor says so loudly on every run and exits 2, so the unit shows as failed
 instead of looking like protection that is not there.
 
-Exit status: 0 all checks pass; 1 at least one check fails; 2 no paging channel configured; 3 a page could not be
+Exit status: 0 all checks pass (or fail only during maintenance); 1 at least one check fails; 2 no paging channel configured; 3 a page could not be
 delivered on any channel.
 """
 import json
@@ -501,6 +501,11 @@ def main(env=None, now=None, deps=None, host=None):
         state, messages = decide(load_state(state_path), results, now)
     configured = channels_configured(env)
     status = 0 if all(ok for ok, _d in results.values()) else 1
+    # [@ANCHOR: site_monitor:maintenance_exit_zero]
+    # A planned restart is not a failure of this unit: a non-zero exit would leave hams-site-monitor.service "failed" for the
+    # whole deploy window, and the failed-units checks report it. Exit 2 and 3 (cannot page) stay loud.
+    if in_maintenance and status == 1:
+        status = 0
     if not any(configured.values()):
         logger.critical("No paging channel is configured (PAGER_FALLBACK_EMAIL with SMTP_HOST, or PAGER_WEBHOOK_URL): "
                         "this monitor cannot page anyone. See docs/runbooks/SITE_MONITORING.md in hams_com.")
@@ -519,7 +524,7 @@ def main(env=None, now=None, deps=None, host=None):
     heartbeat = env.get("HAMS_MONITOR_HEARTBEAT_URL")
     # During maintenance the heartbeat is sent even though checks fail: the planned restart must not trip the
     # off-host dead-man page, and the monitor having run proves the host and timer are alive. It is capped by the flag.
-    if heartbeat and (status == 0 or (in_maintenance and status == 1)):
+    if heartbeat and status == 0:
         ping_heartbeat(heartbeat, token=env.get("HAMS_MONITOR_HEARTBEAT_TOKEN"), **deps.get("heartbeat", {}))
     if heartbeat:
         run_status["heartbeat_warned_boot"] = ""

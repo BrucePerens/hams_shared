@@ -602,6 +602,12 @@ class MaintenanceTests(MainTests):
     def test_absent_flag_is_normal_operation(self):
         self.assertEqual(sm.read_maintenance(os.path.join(self.tmp.name, "none"), self.NOW)["state"], "absent")
 
+    def test_failing_checks_during_maintenance_exit_zero_so_the_unit_does_not_fail(self):
+        # Tests [@ANCHOR: site_monitor:maintenance_exit_zero]
+        # A non-zero exit leaves hams-site-monitor.service "failed", which the failed-units checks then report for the whole deploy.
+        status = sm.main(env=self._menv(self._active()), now=self.NOW, deps=self._deps(ok=False), host="h")
+        self.assertEqual(status, 0)
+
     def test_heartbeat_is_still_sent_during_maintenance(self):
         sm.main(env=self._menv(self._active()), now=self.NOW, deps=self._deps(ok=False), host="h")
         self.assertEqual(self.pings, ["https://beat/ping"])

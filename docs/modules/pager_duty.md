@@ -73,6 +73,7 @@ pagerduty-maintenance status                                              # exit
   unprivileged user or a compromised service account cannot silence paging. `status` needs no privilege.
 - While it is active the daemon's SMTP fallback logs at warning and sends no mail, and the monitor neither counts nor reports a failing check (the row still shows `Failing`); after it ends a check that is still failing needs its normal consecutive failures again. hams_shared's `site_monitor.py`
   (the optional host-level monitor) keeps running and logging every check but sends no page and no "recovered" notice,
+  and exits 0 while it is active (the unit does not show as failed during a deploy) [@ANCHOR: site_monitor:maintenance_exit_zero],
   and failures during maintenance do not count: after it ends, a check still failing needs the normal consecutive failures
   before it pages. The monitors only read the file (their units run with a read-only `/etc`); `start` and `status` remove an
   expired file.
