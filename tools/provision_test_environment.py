@@ -909,8 +909,8 @@ def profile_values(existing, environ, layout, home_mode):
 # [@ANCHOR: provision_test_environment:provision_profile]
 def provision_profile(layout, environ, home, runner_user, report, plan=False, path=PROFILE_PATH):
     """Writes PROFILE_PATH (mode 644) when its content would change, creates HAMS_BATCH_TREE_DIR (mode 755, owned by
-    the runner) when set, and adds one line sourcing the profile to the runner's ~/.bashrc (non-login shells skip
-    /etc/profile.d). Returns the values. The key is never printed."""
+    the runner) when set, and puts one line sourcing the profile at the top of the runner's ~/.bashrc (non-login shells skip
+    /etc/profile.d; above the interactive-shell guard so non-interactive ssh commands get it). Returns the values. The key is never printed."""
     try:
         with open(path, encoding="utf-8") as current:
             old_text = current.read()
@@ -937,14 +937,16 @@ def provision_profile(layout, environ, home, runner_user, report, plan=False, pa
     line = f"[ -f {path} ] && . {path}"
     try:
         with open(bashrc, encoding="utf-8") as current:
-            has_line = line in current.read()
+            text = current.read()
     except FileNotFoundError:
-        has_line = False
-    if not has_line:
-        with open(bashrc, "a", encoding="utf-8") as out:
-            out.write(line + "\n")
+        text = ""
+    # First line, above Debian's `case $- in *i*) ;; *) return;; esac` guard: a non-interactive ssh command (the remote
+    # test runners') reads ~/.bashrc only up to that guard, and test.py needs HAMS_CRYPTO_KEY there.
+    if line not in text.splitlines()[:3]:
+        with open(bashrc, "w", encoding="utf-8") as out:
+            out.write(line + "\n" + text)
         shutil.chown(bashrc, runner_user)
-        report.changed(f"added the profile to {bashrc}")
+        report.changed(f"added the profile to the top of {bashrc}")
     return values
 
 
