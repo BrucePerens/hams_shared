@@ -5502,6 +5502,17 @@ class ExternalFetchUnitsNeverActivatedInTestTests(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(copied[0], "publish.py")))
             self.assertFalse(os.path.exists(os.path.join(copied[0], "__pycache__")))
 
+    def test_manual_catalog_files_reads_a_catalogue_whose_titles_are_lazy_translation_calls(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            controllers = os.path.join(tmp, "ham_relay_bridge", "controllers")
+            os.makedirs(controllers)
+            with open(os.path.join(controllers, "binary_download.py"), "w") as f:
+                f.write('MANUAL_CATALOG = {"a": {"title": _lt("A"), "module": "m1", "path": "data/a.html"},\n'
+                        '                  "b": {"title": _lt("B"), "module": "m2", "path": "data/b.html"}}\n')
+            self.assertEqual([os.path.join("ham_relay_bridge", "controllers", "binary_download.py"),
+                              "m1/data/a.html", "m2/data/b.html"], sf_fixtures.manual_catalog_files(tmp))
+        self.assertEqual([], sf_fixtures.manual_catalog_files("/nonexistent"))
+
     def test_observer_libraries_install_only_from_hash_pinned_wheels(self):
         with open(sf_fixtures.OBSERVER_REQUIREMENTS) as f:
             entries = sf_fixtures.parse_requirements(f.read())
