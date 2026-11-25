@@ -11783,6 +11783,12 @@ WantedBy=timers.target
             "environments": ["early_prod"],
         },
         {
+            # ham_ipv6net's external_dependencies python "dns" (dnspython): Odoo refuses to install the module without it.
+            "name": "python3-dnspython",
+            "debian_name": "python3-dnspython",
+            "environments": ["early_prod"],
+        },
+        {
             "name": "python3-websocket",
             "debian_name": "python3-websocket",
             "environments": ["early_prod"],
