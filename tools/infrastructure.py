@@ -4382,6 +4382,15 @@ WantedBy=multi-user.target
             "environments": ["prod", "test"],
         },
         {
+            # exception_reporter.py imports it (devbox_tools/deploy_to_production.py ships it flat for the same reason).
+            "src": "{HAMS_COMMUNITY_DIR}/pager_duty/daemon/pagerduty_maintenance.py",
+            "path": "/opt/hams/daemons/pagerduty_maintenance.py",
+            "deployed_by_sync_daemons": True,
+            "owner": "hams_com:hams_com",
+            "mode": "644",
+            "environments": ["prod", "test"],
+        },
+        {
             "path": "/opt/hams/systemd/system-startup.service",
             "external_fetch": "its ExecStart starts amsat.tle.sync.service, an external fetch",
             "content": """\
