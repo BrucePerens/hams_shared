@@ -781,6 +781,11 @@ class WaitStartTimeTests(ProcTestCase):
         self.assertIn("already gone", done.stdout)
 
 
+# Every wait-selector test names its sleepers by a token; another run of this file on the same box (a round and an agent, two rounds)
+# would otherwise match them too ("ambiguous: 3 matches", round 194c). The process id makes the tokens this run's own.
+RUN_TOKEN = f"p{os.getpid()}"
+
+
 class WaitSelectorTests(ProcTestCase):
     """`wait` by selector: one match waits, several is an error (or --all), none is an error (or --allow-missing)."""
 
@@ -796,15 +801,15 @@ class WaitSelectorTests(ProcTestCase):
         return done, time.monotonic() - began
 
     def test_one_match_waits_until_it_ends(self):
-        self.sleeper("toksel1", 10)  # long: a loaded box can start the wait CLI seconds late
-        done, took = self.wait_sel("--cmd-contains", "toksel1", "--timeout", "30")
+        self.sleeper(f"toksel1{RUN_TOKEN}", 10)  # long: a loaded box can start the wait CLI seconds late
+        done, took = self.wait_sel("--cmd-contains", f"toksel1{RUN_TOKEN}", "--timeout", "30")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertGreater(took, 1.0)
 
     def test_two_matches_is_an_error_listing_both_and_how_to_name_one(self):
-        first = self.sleeper("toksel2", 30)
-        second = self.sleeper("toksel2", 30)
-        done, took = self.wait_sel("--cmd-contains", "toksel2", "--timeout", "30")
+        first = self.sleeper(f"toksel2{RUN_TOKEN}", 30)
+        second = self.sleeper(f"toksel2{RUN_TOKEN}", 30)
+        done, took = self.wait_sel("--cmd-contains", f"toksel2{RUN_TOKEN}", "--timeout", "30")
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertLess(took, 10)
         self.assertIn("ambiguous: 2 matches", done.stderr)
@@ -815,38 +820,38 @@ class WaitSelectorTests(ProcTestCase):
         self.assertTrue(self.alive(first) and self.alive(second))
 
     def test_all_waits_for_every_match(self):
-        self.sleeper("toksel3", 1.5)
-        self.sleeper("toksel3", 10)
-        done, took = self.wait_sel("--cmd-contains", "toksel3", "--all", "--timeout", "30")
+        self.sleeper(f"toksel3{RUN_TOKEN}", 1.5)
+        self.sleeper(f"toksel3{RUN_TOKEN}", 10)
+        done, took = self.wait_sel("--cmd-contains", f"toksel3{RUN_TOKEN}", "--all", "--timeout", "30")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertGreater(took, 2.0, "must wait for the longer one too")
 
     def test_all_times_out_while_one_still_runs(self):
-        self.sleeper("toksel3b", 1)
-        self.sleeper("toksel3b", 60)
-        done, _ = self.wait_sel("--cmd-contains", "toksel3b", "--all", "--timeout", "2")
+        self.sleeper(f"toksel3b{RUN_TOKEN}", 1)
+        self.sleeper(f"toksel3b{RUN_TOKEN}", 60)
+        done, _ = self.wait_sel("--cmd-contains", f"toksel3b{RUN_TOKEN}", "--all", "--timeout", "2")
         self.assertEqual(done.returncode, 75, done.stdout + done.stderr)
 
     def test_no_match_is_an_error_unless_allowed(self):
-        done, took = self.wait_sel("--cmd-contains", "tokselnothingruns", "--timeout", "30")
+        done, took = self.wait_sel("--cmd-contains", f"tokselnothingruns{RUN_TOKEN}", "--timeout", "30")
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertIn("nothing matches", done.stderr)
         self.assertLess(took, 10)
-        allowed, _ = self.wait_sel("--cmd-contains", "tokselnothingruns", "--allow-missing", "--timeout", "30")
+        allowed, _ = self.wait_sel("--cmd-contains", f"tokselnothingruns{RUN_TOKEN}", "--allow-missing", "--timeout", "30")
         self.assertEqual(allowed.returncode, 0, allowed.stdout + allowed.stderr)
 
     def test_the_waiter_its_ancestors_and_its_own_shell_never_match(self):
         """The text of the selector sits in the waiter's own command line, in the `bash -c` that holds it and in this test's
         runner command line: none of them may count, so a selector that only they match is 'nothing matches'."""
-        done = subprocess.run(["bash", "-c", f"{sys.executable} {TOOL} wait --cmd-contains tokselselfonly --timeout 5"],
+        done = subprocess.run(["bash", "-c", f"{sys.executable} {TOOL} wait --cmd-contains tokselselfonly{RUN_TOKEN} --timeout 5"],
                               capture_output=True, text=True, env=dict(os.environ, **self.env), timeout=30)
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertIn("nothing matches", done.stderr)
 
     def test_a_forked_copy_of_the_waiters_shell_never_matches(self):
         """`wait --cmd-contains X | tail` in a shell: the pipeline's subshell copy holds the whole script text (and X)."""
-        script = (f"for i in 1; do {sys.executable} {TOOL} wait --cmd-contains tokselclone --timeout 5 2>&1 | cat; done; "
-                  "# tokselclone")
+        script = (f"for i in 1; do {sys.executable} {TOOL} wait --cmd-contains tokselclone{RUN_TOKEN} --timeout 5 2>&1 | cat; done; "
+                  f"# tokselclone{RUN_TOKEN}")
         done = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=dict(os.environ, **self.env), timeout=30)
         self.assertIn("nothing matches", done.stdout)
         clone = ap.ProcInfo(900001, 900000, 1, 1, 0, "u", "S", 1, "bash", ("bash", "-c", "t"), None)
@@ -856,12 +861,12 @@ class WaitSelectorTests(ProcTestCase):
         self.assertEqual(ap.shell_clones(fake, {900000}), {900001})
 
     def test_a_selector_wait_never_signals_and_all_flags_need_a_selector(self):
-        victim = self.sleeper("toksel6", 30)
+        victim = self.sleeper(f"toksel6{RUN_TOKEN}", 30)
         done = cli("wait", "--pid", str(victim.pid), "--all", "--timeout", "1", env=self.env)
         self.assertEqual(done.returncode, 2)
         self.assertIn("selector", done.stderr)
         self.assertTrue(self.alive(victim))
-        both = cli("wait", "--cmd-contains", "toksel6", "--job", "x", env=self.env)
+        both = cli("wait", "--cmd-contains", f"toksel6{RUN_TOKEN}", "--job", "x", env=self.env)
         self.assertEqual(both.returncode, 2)
         self.assertTrue(self.alive(victim))
 
