@@ -11835,6 +11835,7 @@ WantedBy=timers.target
     # devbox_tools/cloud_session_setup.sh until 2026-11-07.
     "test_environment_apt_packages": [
         {"name": "socat", "why": "HamsHttpCase's TLS proxy (zero_sudo/tests/common.py)"},
+        {"name": "libnss3-tools", "why": "certutil: devbox_tools demo_kiosk (trusts the demo CA in the browser's NSS db)"},
         {"name": "iproute2", "why": "test.py brings up lo in its network namespace with `ip`"},
         {"name": "nodejs", "why": "test.py's JS pre-flight and run_linters.py's JS checks", "skip_if_command": "node"},
         {"name": "npm", "why": "`npm ci` in hams_shared (ESLint, acorn)", "skip_if_command": "npm"},
