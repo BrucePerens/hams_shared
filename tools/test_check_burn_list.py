@@ -3234,6 +3234,30 @@ def test_with_user_on_the_administrator_by_id_or_keyword_is_forbidden_in_module_
         "rows = self.env['x'].with_user(self.env.ref('base.user_admin').id).search([], limit=1)\n", tests_path
     )
     assert not any("ZERO-SUDO VIOLATION" in e for e in errors)
+def test_environment_constructor_with_su_is_forbidden_privilege_escalation():
+    for source in (
+        "e = Environment(cr, 5, {}, su=True)\n",
+        "e = api.Environment(cr, 5, {}, True)\n",
+        "e = Environment(cr, 5, {}, **opts)\n",
+    ):
+        errors, _warnings = _dict_findings(source)
+        assert any("PRIVILEGE ESCALATION" in e and "su" in e for e in errors), source
+    errors, _warnings = _dict_findings("e = Environment(cr, 5, {})\n")
+    assert not any("PRIVILEGE ESCALATION" in e for e in errors)
+
+
+def test_env_call_with_unpacked_options_could_carry_su_and_is_forbidden():
+    errors, _warnings = _dict_findings("scoped_env = self.env(**options)\n")
+    assert any("PRIVILEGE ESCALATION" in e for e in errors)
+
+
+def test_assigning_su_on_an_environment_is_forbidden_privilege_escalation():
+    errors, _warnings = _dict_findings("self.env.su = True\n")
+    assert any("'.su'" in e and "PRIVILEGE ESCALATION" in e for e in errors)
+    errors, _warnings = _dict_findings("flag = self.env.su\n")
+    assert not any("PRIVILEGE ESCALATION" in e for e in errors)
+    errors, _warnings = _dict_findings("env.su = False\n", "/tmp/some_module/tests/test_fake_env.py")
+    assert not any("PRIVILEGE ESCALATION" in e for e in errors)
 
 
 def test_commit_on_env_cr_inside_a_test_file_is_test_cursor_corruption():

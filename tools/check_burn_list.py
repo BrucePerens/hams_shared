@@ -2274,6 +2274,17 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
 
         def visit_Attribute(self, node):
             if self.is_odoo_module:
+                if (
+                    node.attr == "su"
+                    and isinstance(node.ctx, ast.Store)
+                    # Tests build fake environments (a dict subclass with `.su`) that never reach the ORM.
+                    and "/tests/" not in self.filepath.replace("\\", "/")
+                ):
+                    # `env.su = True` flips the shared Environment into superuser mode for every later caller.
+                    self.add_error(
+                        node.lineno,
+                        "CRITICAL PRIVILEGE ESCALATION: Assigning to '.su' is strictly forbidden (Zero-Sudo evasion).",
+                    )
                 if node.attr == "sudo":
                     # Deliberately NOT `self.node_span_text(node)` here, unlike
                     # every other site that scans a statement's full span --
@@ -3368,6 +3379,17 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
             if func_name == "Environment" or (
                 isinstance(node.func, ast.Attribute) and node.func.attr == "Environment"
             ):
+                # Environment(cr, uid, context, su=False): the superuser flag is the 4th argument, so
+                # `Environment(cr, 5, {}, su=True)` and `Environment(cr, 5, {}, True)` are sudo() by another name.
+                su_arg = node.args[3] if len(node.args) >= 4 else None
+                for kw in node.keywords:
+                    if kw.arg == "su" or kw.arg is None:
+                        su_arg = kw.value
+                if su_arg is not None and not (isinstance(su_arg, ast.Constant) and su_arg.value is False):
+                    self.add_error(
+                        node.lineno,
+                        "CRITICAL PRIVILEGE ESCALATION: Environment(..., su=...) is strictly forbidden (Zero-Sudo evasion).",
+                    )
                 uid_arg = None
                 if len(node.args) >= 2:
                     uid_arg = node.args[1]
@@ -3581,7 +3603,8 @@ def check_ast_vulnerabilities(filepath, content, lines, is_odoo_module=False):
 
             if getattr(node.func, "attr", getattr(node.func, "id", "")) == "env":
                 for kw in node.keywords:
-                    if kw.arg == "su" and self.is_odoo_module:
+                    # `env(**options)` can carry su=True where the scanner cannot see it.
+                    if (kw.arg == "su" or kw.arg is None) and self.is_odoo_module:
                         self.add_error(
                             node.lineno,
                             "CRITICAL PRIVILEGE ESCALATION: Environment modification with 'su=True' is strictly forbidden (Zero-Sudo evasion).",
