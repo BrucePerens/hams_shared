@@ -62,7 +62,7 @@ Each entry below describes one anchored function in full. The code is in `daemon
 
 | Argument | Type | Meaning |
 |---|---|---|
-| `tls` | `&HaTls` | Exactly one of `ca_pem` (PEM text of the owner's certificate authority, or of the server's own self-signed certificate) and `pin_sha256` (a fingerprint, see `radioctl_station_tls_parse_pin`). Borrowed. |
+| `tls` | `&HaTls` | Exactly one of `ca_pem` (PEM text of the owner's certificate authority; a server certificate itself only if it is a CA:FALSE leaf, a self-signed CA:TRUE one is refused, so pin it) and `pin_sha256` (a fingerprint, see `radioctl_station_tls_parse_pin`). Borrowed. |
 
 **Returns.** A `TlsConnector` that uses the safe default protocol versions and the `ring` crypto provider. With a CA the connector verifies the chain and the name against those roots; with a pin it accepts exactly the certificate whose SHA-256 matches (any name, any expiry) but still checks the handshake signature, so the peer must hold the private key.
 
