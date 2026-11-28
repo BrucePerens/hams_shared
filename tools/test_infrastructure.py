@@ -7129,7 +7129,7 @@ class WebBotAuthSigningUnitTests(_SafePatchTestCase):
         "arrl.hamfests.sync.service": "hamsd_event_sync", "event.cover.image.sync.service": "hamsd_event_sync",
         "rac.events.sync.service": "hamsd_event_sync", "sm3cer.contest.sync.service": "hamsd_event_sync",
         "electronicsfleamarket.sync.service": "hamsd_event_sync", "radio.history.events.sync.service": "hamsd_event_sync",
-        "hamstudy.sessions.sync.service": "hamsd_event_sync",
+        "hamstudy.sessions.sync.service": "hamsd_event_sync", "microwave.events.sync.service": "hamsd_event_sync",
         "monthly.events.recheck.service": "hamsd_event_sync", "callbook.geo.enrich.service": "hamsd_callbook_geo",
         "ncvec.sync.service": "hamsd_ncvec_sync", "pota.sync.service": "hamsd_activator_sync",
         "sota.sync.service": "hamsd_activator_sync", "skimmer.list.sync.service": "hamsd_dx_daemon",
