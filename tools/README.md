@@ -3571,6 +3571,10 @@ Purpose: where a chrome keeps its profile, to tell a test run's chrome from anyo
 
 Argument `argv`: the command-line list of a process. Returns the text after the first `--user-data-dir=`, or None when no argument has it (the `--user-data-dir PATH` two-word form is not recognised). `protected_reason` (line 361) calls it so a chrome is protected unless its profile is under the caller's own `TMPDIR`; the person's browser is therefore never signalled. Pure. Test: `test_agent_procs.py`.
 
+### `[@ANCHOR: agent_procs:is_systemd_run]` `is_systemd_run(info)`
+
+Purpose: tell the real `systemd-run` launcher of a job from the protected `systemd` manager. Returns True only when the basename of `/proc/PID/exe` is `systemd-run`; argv[0] and comm are ignored (a process can set both), and an unreadable exe is False (protected). `protected_reason` uses it to skip only the `systemd` word; every other rule (owner, `postgres` and the other words in the whole command line) still applies. Test: `test_agent_procs.py`.
+
 ### `[@ANCHOR: agent_procs:protected_reason]` `protected_reason(info, caller_uid=None, worktree=None, tmpdir=None, family=())`
 
 Purpose: the single place that says "an agent must never signal this". Called by `find` (flag), `stop_job` (every group member) and `kill_pid`.

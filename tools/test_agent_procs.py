@@ -297,9 +297,40 @@ class ProtectedReasonTests(ProcTestCase):
             self.assertIsNotNone(ap.protected_reason(self.fake(name)), name)
 
     def test_the_jobs_own_systemd_run_launcher_is_not_protected_but_the_manager_is(self):
-        self.assertIsNone(ap.protected_reason(self.fake("systemd-run")))
-        self.assertIsNotNone(ap.protected_reason(self.fake("/usr/bin/systemd-run postgres")))
+        """Tests [@ANCHOR: agent_procs:is_systemd_run]: only a process whose /proc exe is systemd-run is exempt; an
+        argv[0] or comm of systemd-run on any other program (the manager, a copy of sleep) stays protected."""
+        if not ap.user_scope_works():
+            self.skipTest("systemd-run --user --scope is unavailable here")
+        proc = self.spawn("exec systemd-run --user --pipe --wait -q sleep 30")
+        self.until(lambda: (ap.read_proc(proc.pid) or ap.ProcInfo(0, 0, 0, 0, 0, "", "", 0, "", ("",), None)).comm
+                   == "systemd-run")
+        real = ap.read_proc(proc.pid)
+        self.assertTrue(ap.is_systemd_run(real))
+        self.assertIsNone(ap.protected_reason(real))
+        wrapping = ap.ProcInfo(**dict(dataclasses.asdict(real), argv=("systemd-run", "--scope", "postgres")))
+        self.assertIsNotNone(ap.protected_reason(wrapping))
+        for spoof in ("systemd-run", "/usr/bin/systemd-run", "systemd-run postgres"):
+            info = self.fake(spoof)
+            self.assertFalse(ap.is_systemd_run(info), spoof)
+            self.assertIsNotNone(ap.protected_reason(info), spoof)
         self.assertIsNotNone(ap.protected_reason(self.fake("/lib/systemd/systemd --user")))
+        self.assertFalse(ap.is_systemd_run(ap.ProcInfo(2 ** 22 + 5, 1, 1, 1, 0, "x", "S", 1, "systemd-run", ("systemd-run",), None)))
+
+    def test_systemd_run_exemption_does_not_lift_owner_checks(self):
+        """A systemd-run owned by another user is refused by the uid rule whatever its exe; a systemd-run process of the
+        caller that is not in the job's group is not touched by `stop`."""
+        if not ap.user_scope_works():
+            self.skipTest("systemd-run --user --scope is unavailable here")
+        proc = self.spawn("exec systemd-run --user --pipe --wait -q sleep 30")
+        self.until(lambda: (ap.read_proc(proc.pid) or ap.ProcInfo(0, 0, 0, 0, 0, "", "", 0, "", ("",), None)).comm
+                   == "systemd-run")
+        real = ap.read_proc(proc.pid)
+        other = ap.ProcInfo(**dict(dataclasses.asdict(real), uid=os.getuid() + 1))
+        self.assertIn("not by the caller", ap.protected_reason(other))
+        with self.assertRaises(ap.ProcError) as raised:
+            ap.kill_pid(proc.pid, directory=self.tmp)
+        self.assertEqual(raised.exception.code, ap.EX_REFUSED)
+        self.assertIsNone(proc.poll())
 
     def test_claude_application_is_protected(self):
         reason = ap.protected_reason(self.fake("claude"))
