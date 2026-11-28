@@ -384,7 +384,9 @@ def protected_reason(info, caller_uid=None, worktree=None, tmpdir=None, family=(
     if info.uid != caller_uid or info.uid == 0 or info.user in PROTECTED_USERS:
         return f"it is owned by {info.user}, not by the caller (system and other users' processes are never signalled)"
     for word in PROTECTED_WORDS:
-        if word in haystack:
+        # The wrapper's own `systemd-run --user --scope` launcher is the job's command until it execs it (a moment, longer under
+        # load): stopping a job in that window was refused with exit 3 (cycle 199). Its name is not the `systemd` manager.
+        if word in haystack and not (word == "systemd" and base == "systemd-run"):
             return f"its command contains '{word}' (a shared service; a signal can crash everyone's work)"
     if info.comm in ("claude", "Claude") or base in ("claude", "claude-desktop"):
         return "it is the claude application"

@@ -296,6 +296,11 @@ class ProtectedReasonTests(ProcTestCase):
                      "sshd: bruce", "gdm-session-worker", "gnome-shell", "claude-desktop"):
             self.assertIsNotNone(ap.protected_reason(self.fake(name)), name)
 
+    def test_the_jobs_own_systemd_run_launcher_is_not_protected_but_the_manager_is(self):
+        self.assertIsNone(ap.protected_reason(self.fake("systemd-run")))
+        self.assertIsNotNone(ap.protected_reason(self.fake("/usr/bin/systemd-run postgres")))
+        self.assertIsNotNone(ap.protected_reason(self.fake("/lib/systemd/systemd --user")))
+
     def test_claude_application_is_protected(self):
         reason = ap.protected_reason(self.fake("claude"))
         self.assertIn("claude application", reason)
