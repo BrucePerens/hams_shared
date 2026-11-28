@@ -365,6 +365,17 @@ def chrome_data_dir(argv):
     return None
 
 
+# [@ANCHOR: agent_procs:is_systemd_run]
+def is_systemd_run(info):
+    """True when the executable of `info` really is `systemd-run` (/proc/PID/exe, which a process cannot rename by setting
+    argv[0] or its comm). Fails closed: an unreadable or vanished exe is not systemd-run."""
+    try:
+        exe = os.readlink(f"/proc/{info.pid}/exe")
+    except OSError:
+        return False
+    return os.path.basename(exe.removesuffix(" (deleted)")) == "systemd-run"
+
+
 # [@ANCHOR: agent_procs:protected_reason]
 def protected_reason(info, caller_uid=None, worktree=None, tmpdir=None, family=()):
     """Why `info` must never be signalled by an agent, or `None` when it is the caller's own ordinary process.
@@ -386,7 +397,7 @@ def protected_reason(info, caller_uid=None, worktree=None, tmpdir=None, family=(
     for word in PROTECTED_WORDS:
         # The wrapper's own `systemd-run --user --scope` launcher is the job's command until it execs it (a moment, longer under
         # load): stopping a job in that window was refused with exit 3 (cycle 199). Its name is not the `systemd` manager.
-        if word in haystack and not (word == "systemd" and base == "systemd-run"):
+        if word in haystack and not (word == "systemd" and is_systemd_run(info)):
             return f"its command contains '{word}' (a shared service; a signal can crash everyone's work)"
     if info.comm in ("claude", "Claude") or base in ("claude", "claude-desktop"):
         return "it is the claude application"
