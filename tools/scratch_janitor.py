@@ -49,7 +49,7 @@ def sweep_stale_scratch(directory, max_age_hours=DEFAULT_MAX_AGE_HOURS, texts=No
 
     `texts`: the process texts (default: `process_texts()`); `now`: the clock in seconds. A missing or relative `directory`,
     and a shared system directory such as /tmp, is ignored."""
-    if not directory or directory.rstrip("/") in SHARED_ROOTS or not os.path.isabs(directory) or not os.path.isdir(directory) or os.path.islink(directory):
+    if not directory or os.path.realpath(directory) in SHARED_ROOTS or not os.path.isabs(directory) or not os.path.isdir(directory) or os.path.islink(directory):
         return []
     now = time.time() if now is None else now
     if texts is None:
