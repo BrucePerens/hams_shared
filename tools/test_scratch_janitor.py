@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import scratch_janitor as sj  # noqa: E402
@@ -82,6 +83,10 @@ class SweepStaleScratchTests(unittest.TestCase):
         self.assertEqual(sj.sweep_stale_scratch(os.path.join(self.base, "nope"), texts=[]), [])
         self.assertEqual(sj.sweep_stale_scratch("relative", texts=[]), [])
         self.assertEqual(sj.sweep_stale_scratch("/tmp/", texts=[]), [])
+        # "/" (also written "//" or "/tmp/..") is a shared root too: it must never even be listed.
+        for root in ("/", "//", "/tmp/..", "/tmp/../tmp"):
+            with mock.patch.object(sj.os, "listdir", side_effect=AssertionError("listed " + root)):
+                self.assertEqual(sj.sweep_stale_scratch(root, texts=[]), [])
         link = os.path.join(self.tmp.name, "linkdir")
         os.symlink(self.base, link)
         old = self.make("bst-old", 20)
